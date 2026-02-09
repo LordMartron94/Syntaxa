@@ -162,7 +162,7 @@ func BuildRuleContextFromLexerSession[
 	)
 
 	ctx.Peek = func(n int) lexarch.Lexeme[TObservation, TToken] {
-		lex, err := lexarch.LexerPeek(lexer, session)
+		lex, err := lexarch.LexerPeek(lexer, session, n)
 		if err != nil {
 			panic(err)
 		}
@@ -178,7 +178,7 @@ func BuildRuleContextFromLexerSession[
 	}
 
 	ctx.Match = func(tokens ...TToken) bool {
-		lex, err := lexarch.LexerPeek(lexer, session)
+		lex, err := lexarch.LexerPeek(lexer, session, 0)
 		if err != nil {
 			panic(err)
 		}
@@ -236,7 +236,7 @@ func BuildRuleContextFromStreamingSession[
 	)
 
 	ctx.Peek = func(n int) lexarch.Lexeme[TObservation, TToken] {
-		lex, err := lexarch.LexerPeekStreaming(lexer, session)
+		lex, err := lexarch.LexerPeekStreaming(lexer, session, n)
 		if err != nil {
 			panic(err)
 		}
@@ -252,7 +252,7 @@ func BuildRuleContextFromStreamingSession[
 	}
 
 	ctx.Match = func(tokens ...TToken) bool {
-		lex, err := lexarch.LexerPeekStreaming(lexer, session)
+		lex, err := lexarch.LexerPeekStreaming(lexer, session, 0)
 		if err != nil {
 			panic(err)
 		}
