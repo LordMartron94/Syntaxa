@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"fmt"
 	"lexarch"
-	"reflect"
 )
 
 // =============================================================
@@ -80,6 +79,18 @@ type RuleContext[TObservation cmp.Ordered, TToken, TLexerState, TNodeKind compar
 		  - optionally override spans or attributes
 	*/
 	CreateASTNode func() *SyntaxaASTNode[TObservation, TToken, TNodeKind]
+
+	/* PushRecovery installs a new local synchronization set */
+	PushRecovery func(tokens ...TToken)
+
+	/* PopRecovery removes the most recent synchronization set */
+	PopRecovery func()
+
+	/* CurrentRecovery returns the active synchronization tokens */
+	CurrentRecovery func() []TToken
+
+	/* CreateErrorNode constructs a structured error AST node */
+	CreateErrorNode func(message string) *SyntaxaASTNode[TObservation, TToken, TNodeKind]
 }
 
 /*
@@ -598,7 +609,10 @@ func buildBaseContext[TObservation cmp.Ordered, TToken, TLexerState, TNodeKind c
 	createNode func() *SyntaxaASTNode[TObservation, TToken, TNodeKind],
 ) RuleContext[TObservation, TToken, TLexerState, TNodeKind] {
 
+	recoveryStack := make([][]TToken, 0)
+
 	return RuleContext[TObservation, TToken, TLexerState, TNodeKind]{
+
 		Report: func(line, column int, description string) {
 			errors.Errors = append(errors.Errors, SyntaxError{
 				Message: description,
@@ -606,23 +620,54 @@ func buildBaseContext[TObservation cmp.Ordered, TToken, TLexerState, TNodeKind c
 				Column:  column,
 			})
 		},
+
 		CreateASTNode: createNode,
+
+		CreateErrorNode: func(message string) *SyntaxaASTNode[TObservation, TToken, TNodeKind] {
+			n := createNode()
+			n.Attributes["error"] = message
+			return n
+		},
+
+		PushRecovery: func(tokens ...TToken) {
+			cp := make([]TToken, len(tokens))
+			copy(cp, tokens)
+			recoveryStack = append(recoveryStack, cp)
+		},
+
+		PopRecovery: func() {
+			if len(recoveryStack) > 0 {
+				recoveryStack = recoveryStack[:len(recoveryStack)-1]
+			}
+		},
+
+		CurrentRecovery: func() []TToken {
+			if len(recoveryStack) == 0 {
+				return nil
+			}
+			return recoveryStack[len(recoveryStack)-1]
+		},
 	}
 }
 
-func recoverUntilSync[TObservation cmp.Ordered, TToken, TLexerState, TNodeKind comparable](
+func recoverWithContext[TObservation cmp.Ordered, TToken, TLexerState, TNodeKind comparable](
 	ctx RuleContext[TObservation, TToken, TLexerState, TNodeKind],
 	current lexarch.Lexeme[TObservation, TToken],
-	syncTokens []TToken,
 	eofToken TToken,
 ) bool {
+
+	sync := ctx.CurrentRecovery()
+	if len(sync) == 0 {
+		ctx.Consume()
+		return current.Token != eofToken
+	}
 
 	for {
 		if current.Token == eofToken {
 			return false
 		}
 
-		for _, t := range syncTokens {
+		for _, t := range sync {
 			if current.Token == t {
 				return true
 			}
@@ -639,12 +684,10 @@ func parseWithContext[TObservation cmp.Ordered, TToken, TNodeKind, TLexerState c
 	root *SyntaxaASTNode[TObservation, TToken, TNodeKind],
 	eofToken TToken,
 ) {
-	var lastFailPos int = -1
-	var lastFailRule uintptr
-
-	inErrorMode := false
 
 	defer finalizeASTSpans(root)
+
+	lastCursor := -1
 
 	for {
 		current := ctx.Peek(0)
@@ -653,61 +696,57 @@ func parseWithContext[TObservation cmp.Ordered, TToken, TNodeKind, TLexerState c
 			return
 		}
 
+		start := ctx.Save().tokenIndex
+
 		rule := parser.selectRule(ctx)
 
 		if rule == nil {
-			if !inErrorMode {
-				ctx.Report(
-					current.StartLine,
-					current.StartColumn,
-					fmt.Sprintf("unexpected token %v", current.Token),
-				)
-				inErrorMode = true
+
+			ctx.Report(
+				current.StartLine,
+				current.StartColumn,
+				fmt.Sprintf("unexpected token %v", current.Token),
+			)
+
+			errNode := ctx.CreateErrorNode("unexpected token")
+			errNode.Tokens = append(errNode.Tokens, current)
+			errNode.Parent = root
+			root.Children = append(root.Children, errNode)
+
+			if !recoverWithContext(ctx, current, eofToken) {
+				return
 			}
 
-			if recoverUntilSync(
-				ctx,
-				current,
-				parser.syncTokens,
-				eofToken,
-			) {
-				inErrorMode = false
+			if start == lastCursor {
+				ctx.Consume()
 			}
 
+			lastCursor = start
 			continue
 		}
 
 		snapshot := ctx.Save()
 
 		node, ok := rule(ctx)
+
 		if !ok {
 			ctx.Restore(snapshot)
 
-			pos := snapshot.tokenIndex
-			ruleID := reflect.ValueOf(rule).Pointer()
-
-			if pos == lastFailPos && ruleID == lastFailRule {
-				ctx.Report(
-					current.StartLine,
-					current.StartColumn,
-					"parser made no progress; rule repeatedly failed without consuming input",
-				)
-
-				if !recoverUntilSync(ctx, current, parser.syncTokens, eofToken) {
-					return
-				}
-
-				lastFailPos = -1
-				continue
+			if !recoverWithContext(ctx, current, eofToken) {
+				return
 			}
 
-			lastFailPos = pos
-			lastFailRule = ruleID
+			if snapshot.tokenIndex == lastCursor {
+				ctx.Consume()
+			}
+
+			lastCursor = snapshot.tokenIndex
 			continue
 		}
 
 		node.Parent = root
 		root.Children = append(root.Children, node)
+		lastCursor = -1
 	}
 }
 
