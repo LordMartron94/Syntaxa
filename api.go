@@ -577,7 +577,15 @@ func newASTNodeFactory[TObservation cmp.Ordered, TToken, TNodeKind, TLexerState 
 			Tokens:     make([]lexarch.Lexeme[TObservation, TToken], 0),
 			Attributes: make(map[string]any),
 			Revision:   0,
+
+			Start:       -1,
+			End:         -1,
+			StartLine:   -1,
+			StartColumn: -1,
+			EndLine:     -1,
+			EndColumn:   -1,
 		}
+
 	}
 }
 
@@ -635,6 +643,8 @@ func parseWithContext[TObservation cmp.Ordered, TToken, TNodeKind, TLexerState c
 	var lastFailRule uintptr
 
 	inErrorMode := false
+
+	defer finalizeASTSpans(root)
 
 	for {
 		current := ctx.Peek(0)
@@ -697,12 +707,87 @@ func parseWithContext[TObservation cmp.Ordered, TToken, TNodeKind, TLexerState c
 		}
 
 		node.Parent = root
+		root.Children = append(root.Children, node)
+	}
+}
 
-		if node.Start == 0 && len(node.Tokens) > 0 {
-			node.Start = node.Tokens[0].Start
-			node.End = node.Tokens[len(node.Tokens)-1].End
+func finalizeASTSpans[TObservation cmp.Ordered, TToken, TNodeKind comparable](
+	node *SyntaxaASTNode[TObservation, TToken, TNodeKind],
+) {
+	if node == nil {
+		return
+	}
+
+	// First finalize children so their spans become available.
+	for _, c := range node.Children {
+		finalizeASTSpans(c)
+	}
+	for _, c := range node.Slots {
+		finalizeASTSpans(c)
+	}
+
+	// If already explicitly set, preserve.
+	if node.Start >= 0 && node.End >= 0 {
+		return
+	}
+
+	// Prefer direct tokens.
+	if len(node.Tokens) > 0 {
+		first := node.Tokens[0]
+		last := node.Tokens[len(node.Tokens)-1]
+
+		node.Start = first.Start
+		node.End = last.End
+
+		node.StartLine = first.StartLine
+		node.StartColumn = first.StartColumn
+		node.EndLine = last.EndLine
+		node.EndColumn = last.EndColumn
+
+		return
+	}
+
+	// Otherwise infer from children+slots.
+	minStart := -1
+	maxEnd := -1
+
+	minLine := -1
+	minCol := -1
+	maxLine := -1
+	maxCol := -1
+
+	consider := func(c *SyntaxaASTNode[TObservation, TToken, TNodeKind]) {
+		if c == nil || c.Start < 0 || c.End < 0 {
+			return
 		}
 
-		root.Children = append(root.Children, node)
+		if minStart < 0 || c.Start < minStart {
+			minStart = c.Start
+			minLine = c.StartLine
+			minCol = c.StartColumn
+		}
+
+		if maxEnd < 0 || c.End > maxEnd {
+			maxEnd = c.End
+			maxLine = c.EndLine
+			maxCol = c.EndColumn
+		}
+	}
+
+	for _, c := range node.Children {
+		consider(c)
+	}
+	for _, c := range node.Slots {
+		consider(c)
+	}
+
+	if minStart >= 0 && maxEnd >= 0 {
+		node.Start = minStart
+		node.End = maxEnd
+
+		node.StartLine = minLine
+		node.StartColumn = minCol
+		node.EndLine = maxLine
+		node.EndColumn = maxCol
 	}
 }
