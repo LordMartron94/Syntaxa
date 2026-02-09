@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"fmt"
 	"lexarch"
+	"reflect"
 )
 
 // =============================================================
@@ -630,6 +631,8 @@ func parseWithContext[TObservation cmp.Ordered, TToken, TNodeKind, TLexerState c
 	root *SyntaxaASTNode[TObservation, TToken, TNodeKind],
 	eofToken TToken,
 ) {
+	var lastFailPos int = -1
+	var lastFailRule uintptr
 
 	inErrorMode := false
 
@@ -669,6 +672,27 @@ func parseWithContext[TObservation cmp.Ordered, TToken, TNodeKind, TLexerState c
 		node, ok := rule(ctx)
 		if !ok {
 			ctx.Restore(snapshot)
+
+			pos := snapshot.tokenIndex
+			ruleID := reflect.ValueOf(rule).Pointer()
+
+			if pos == lastFailPos && ruleID == lastFailRule {
+				ctx.Report(
+					current.StartLine,
+					current.StartColumn,
+					"parser made no progress; rule repeatedly failed without consuming input",
+				)
+
+				if !recoverUntilSync(ctx, current, parser.syncTokens, eofToken) {
+					return
+				}
+
+				lastFailPos = -1
+				continue
+			}
+
+			lastFailPos = pos
+			lastFailRule = ruleID
 			continue
 		}
 
