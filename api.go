@@ -44,8 +44,14 @@ type RuleContext[TObservation cmp.Ordered, TToken, TLexerState, TNodeKind compar
 	/* Peek returns the lexeme at lookahead distance n (0 = current). */
 	Peek func(n int) lexarch.Lexeme[TObservation, TToken]
 
+	/* PeekRange returns up to `count` upcoming tokens without consuming input. */
+	PeekRange func(n int) []lexarch.Lexeme[TObservation, TToken]
+
 	/* Consume consumes and returns the current lexeme. */
 	Consume func() lexarch.Lexeme[TObservation, TToken]
+
+	/* ConsumeRange returns up to `count` upcoming tokens while consuming input. */
+	ConsumeRange func(n int) []lexarch.Lexeme[TObservation, TToken]
 
 	/* Match consumes the current token if it matches one of the provided tokens. */
 	Match func(tokens ...TToken) bool
@@ -105,9 +111,19 @@ func BuildRuleContextFromSlice[TObservation cmp.Ordered, TToken, TLexerState, TN
 		return lexemes[*cursor+n]
 	}
 
+	ctx.PeekRange = func(n int) []lexarch.Lexeme[TObservation, TToken] {
+		return lexemes[*cursor : *cursor+n]
+	}
+
 	ctx.Consume = func() lexarch.Lexeme[TObservation, TToken] {
 		l := lexemes[*cursor]
 		*cursor++
+		return l
+	}
+
+	ctx.ConsumeRange = func(n int) []lexarch.Lexeme[TObservation, TToken] {
+		l := lexemes[*cursor : *cursor+n]
+		*cursor += n
 		return l
 	}
 
@@ -169,8 +185,24 @@ func BuildRuleContextFromLexerSession[
 		return lex
 	}
 
+	ctx.PeekRange = func(n int) []lexarch.Lexeme[TObservation, TToken] {
+		lex, err := lexarch.LexerPeekRange(lexer, session, n)
+		if err != nil {
+			panic(err)
+		}
+		return lex
+	}
+
 	ctx.Consume = func() lexarch.Lexeme[TObservation, TToken] {
 		lex, err := lexarch.LexerConsume(lexer, session)
+		if err != nil {
+			panic(err)
+		}
+		return lex
+	}
+
+	ctx.ConsumeRange = func(n int) []lexarch.Lexeme[TObservation, TToken] {
+		lex, err := lexarch.LexerConsumeRange(lexer, session, n)
 		if err != nil {
 			panic(err)
 		}
@@ -243,8 +275,24 @@ func BuildRuleContextFromStreamingSession[
 		return lex
 	}
 
+	ctx.PeekRange = func(n int) []lexarch.Lexeme[TObservation, TToken] {
+		lex, err := lexarch.LexerPeekRangeStreaming(lexer, session, n)
+		if err != nil {
+			panic(err)
+		}
+		return lex
+	}
+
 	ctx.Consume = func() lexarch.Lexeme[TObservation, TToken] {
 		lex, err := lexarch.LexerConsumeStreaming(lexer, session)
+		if err != nil {
+			panic(err)
+		}
+		return lex
+	}
+
+	ctx.ConsumeRange = func(n int) []lexarch.Lexeme[TObservation, TToken] {
+		lex, err := lexarch.LexerConsumeRangeStreaming(lexer, session, n)
 		if err != nil {
 			panic(err)
 		}
