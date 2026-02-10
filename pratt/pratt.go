@@ -2,9 +2,10 @@ package pratt
 
 import (
 	"cmp"
-	"fmt"
 	"syntaxa"
 )
+
+type Ctx[TObs cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable] = syntaxa.RuleContext[TObs, TToken, TTokenRole, TLexerState, TNodeKind]
 
 // =============================================================
 // ASSOCIATIVITY
@@ -34,9 +35,9 @@ Examples:
   - prefix operators (-x, !x)
   - parenthesized expressions
 */
-type PrefixParselet[TObs cmp.Ordered, TToken, TNodeKind, TLexerState comparable] func(
-	ctx syntaxa.RuleContext[TObs, TToken, TLexerState, TNodeKind],
-) *syntaxa.SyntaxaASTNode[TObs, TToken, TNodeKind]
+type PrefixParselet[TObs cmp.Ordered, TToken, TTokenRole, TNodeKind, TLexerState comparable] func(
+	ctx Ctx[TObs, TToken, TTokenRole, TLexerState, TNodeKind],
+) *syntaxa.SyntaxaASTNode[TObs, TToken, TTokenRole, TNodeKind]
 
 /*
 InfixParselet parses infix operators.
@@ -45,11 +46,11 @@ The parselet must:
   - consume the operator token
   - parse the RHS using rbp
 */
-type InfixParselet[TObs cmp.Ordered, TToken, TNodeKind, TLexerState comparable] func(
-	ctx syntaxa.RuleContext[TObs, TToken, TLexerState, TNodeKind],
-	left *syntaxa.SyntaxaASTNode[TObs, TToken, TNodeKind],
+type InfixParselet[TObs cmp.Ordered, TToken, TTokenRole, TNodeKind, TLexerState comparable] func(
+	ctx Ctx[TObs, TToken, TTokenRole, TLexerState, TNodeKind],
+	left *syntaxa.SyntaxaASTNode[TObs, TToken, TTokenRole, TNodeKind],
 	rbp int,
-) *syntaxa.SyntaxaASTNode[TObs, TToken, TNodeKind]
+) *syntaxa.SyntaxaASTNode[TObs, TToken, TTokenRole, TNodeKind]
 
 /*
 PostfixParselet parses postfix operators.
@@ -60,25 +61,25 @@ Examples:
   - indexing
   - member access
 */
-type PostfixParselet[TObs cmp.Ordered, TToken, TNodeKind, TLexerState comparable] func(
-	ctx syntaxa.RuleContext[TObs, TToken, TLexerState, TNodeKind],
-	left *syntaxa.SyntaxaASTNode[TObs, TToken, TNodeKind],
-) *syntaxa.SyntaxaASTNode[TObs, TToken, TNodeKind]
+type PostfixParselet[TObs cmp.Ordered, TToken, TTokenRole, TNodeKind, TLexerState comparable] func(
+	ctx Ctx[TObs, TToken, TTokenRole, TLexerState, TNodeKind],
+	left *syntaxa.SyntaxaASTNode[TObs, TToken, TTokenRole, TNodeKind],
+) *syntaxa.SyntaxaASTNode[TObs, TToken, TTokenRole, TNodeKind]
 
 // =============================================================
 // INTERNAL ENTRIES
 // =============================================================
 
-type infixEntry[TObs cmp.Ordered, TToken, TNodeKind, TLexerState comparable] struct {
+type infixEntry[TObs cmp.Ordered, TToken, TTokenRole, TNodeKind, TLexerState comparable] struct {
 	lbp   int
 	rbp   int
 	assoc Associativity
-	parse InfixParselet[TObs, TToken, TNodeKind, TLexerState]
+	parse InfixParselet[TObs, TToken, TTokenRole, TNodeKind, TLexerState]
 }
 
-type postfixEntry[TObs cmp.Ordered, TToken, TNodeKind, TLexerState comparable] struct {
+type postfixEntry[TObs cmp.Ordered, TToken, TTokenRole, TNodeKind, TLexerState comparable] struct {
 	bp    int
-	parse PostfixParselet[TObs, TToken, TNodeKind, TLexerState]
+	parse PostfixParselet[TObs, TToken, TTokenRole, TNodeKind, TLexerState]
 }
 
 // =============================================================
@@ -96,21 +97,21 @@ Supported:
 It is expression-only and integrates directly into
 recursive descent grammars.
 */
-type PrattParser[TObs cmp.Ordered, TToken, TNodeKind, TLexerState comparable] struct {
-	prefix  map[TToken]PrefixParselet[TObs, TToken, TNodeKind, TLexerState]
-	infix   map[TToken]infixEntry[TObs, TToken, TNodeKind, TLexerState]
-	postfix map[TToken]postfixEntry[TObs, TToken, TNodeKind, TLexerState]
+type PrattParser[TObs cmp.Ordered, TToken, TTokenRole, TNodeKind, TLexerState comparable] struct {
+	prefix  map[TToken]PrefixParselet[TObs, TToken, TTokenRole, TNodeKind, TLexerState]
+	infix   map[TToken]infixEntry[TObs, TToken, TTokenRole, TNodeKind, TLexerState]
+	postfix map[TToken]postfixEntry[TObs, TToken, TTokenRole, TNodeKind, TLexerState]
 }
 
 // =============================================================
 // CONSTRUCTION
 // =============================================================
 
-func PrattParserCreate[TObs cmp.Ordered, TToken, TNodeKind, TLexerState comparable]() *PrattParser[TObs, TToken, TNodeKind, TLexerState] {
-	return &PrattParser[TObs, TToken, TNodeKind, TLexerState]{
-		prefix:  make(map[TToken]PrefixParselet[TObs, TToken, TNodeKind, TLexerState]),
-		infix:   make(map[TToken]infixEntry[TObs, TToken, TNodeKind, TLexerState]),
-		postfix: make(map[TToken]postfixEntry[TObs, TToken, TNodeKind, TLexerState]),
+func PrattParserCreate[TObs cmp.Ordered, TToken, TTokenRole, TNodeKind, TLexerState comparable]() *PrattParser[TObs, TToken, TTokenRole, TNodeKind, TLexerState] {
+	return &PrattParser[TObs, TToken, TTokenRole, TNodeKind, TLexerState]{
+		prefix:  make(map[TToken]PrefixParselet[TObs, TToken, TTokenRole, TNodeKind, TLexerState]),
+		infix:   make(map[TToken]infixEntry[TObs, TToken, TTokenRole, TNodeKind, TLexerState]),
+		postfix: make(map[TToken]postfixEntry[TObs, TToken, TTokenRole, TNodeKind, TLexerState]),
 	}
 }
 
@@ -121,9 +122,9 @@ func PrattParserCreate[TObs cmp.Ordered, TToken, TNodeKind, TLexerState comparab
 /*
 RegisterPrefix registers a prefix parselet.
 */
-func (p *PrattParser[TObs, TToken, TNodeKind, TLexerState]) RegisterPrefix(
+func (p *PrattParser[TObs, TToken, TTokenRole, TNodeKind, TLexerState]) RegisterPrefix(
 	token TToken,
-	fn PrefixParselet[TObs, TToken, TNodeKind, TLexerState],
+	fn PrefixParselet[TObs, TToken, TTokenRole, TNodeKind, TLexerState],
 ) {
 	p.prefix[token] = fn
 }
@@ -132,11 +133,11 @@ func (p *PrattParser[TObs, TToken, TNodeKind, TLexerState]) RegisterPrefix(
 RegisterInfix registers an infix operator with precedence
 and associativity.
 */
-func (p *PrattParser[TObs, TToken, TNodeKind, TLexerState]) RegisterInfix(
+func (p *PrattParser[TObs, TToken, TTokenRole, TNodeKind, TLexerState]) RegisterInfix(
 	token TToken,
 	precedence int,
 	assoc Associativity,
-	fn InfixParselet[TObs, TToken, TNodeKind, TLexerState],
+	fn InfixParselet[TObs, TToken, TTokenRole, TNodeKind, TLexerState],
 ) {
 
 	lbp := precedence
@@ -151,7 +152,7 @@ func (p *PrattParser[TObs, TToken, TNodeKind, TLexerState]) RegisterInfix(
 		rbp = precedence + 1
 	}
 
-	p.infix[token] = infixEntry[TObs, TToken, TNodeKind, TLexerState]{
+	p.infix[token] = infixEntry[TObs, TToken, TTokenRole, TNodeKind, TLexerState]{
 		lbp:   lbp,
 		rbp:   rbp,
 		assoc: assoc,
@@ -164,12 +165,12 @@ RegisterPostfix registers a postfix operator.
 
 Postfix operators bind with a single binding power.
 */
-func (p *PrattParser[TObs, TToken, TNodeKind, TLexerState]) RegisterPostfix(
+func (p *PrattParser[TObs, TToken, TTokenRole, TNodeKind, TLexerState]) RegisterPostfix(
 	token TToken,
 	precedence int,
-	fn PostfixParselet[TObs, TToken, TNodeKind, TLexerState],
+	fn PostfixParselet[TObs, TToken, TTokenRole, TNodeKind, TLexerState],
 ) {
-	p.postfix[token] = postfixEntry[TObs, TToken, TNodeKind, TLexerState]{
+	p.postfix[token] = postfixEntry[TObs, TToken, TTokenRole, TNodeKind, TLexerState]{
 		bp:    precedence,
 		parse: fn,
 	}
@@ -188,20 +189,15 @@ Correctly handles:
   - infix
   - associativity
 */
-func (p *PrattParser[TObs, TToken, TNodeKind, TLexerState]) ParseExpr(
-	ctx syntaxa.RuleContext[TObs, TToken, TLexerState, TNodeKind],
+func (p *PrattParser[TObs, TToken, TTokenRole, TNodeKind, TLexerState]) ParseExpr(
+	ctx Ctx[TObs, TToken, TTokenRole, TLexerState, TNodeKind],
 	minBP int,
-) *syntaxa.SyntaxaASTNode[TObs, TToken, TNodeKind] {
+) *syntaxa.SyntaxaASTNode[TObs, TToken, TTokenRole, TNodeKind] {
 
 	lex := ctx.Peek(0)
-	nud := p.prefix[lex.Token]
 
-	if nud == nil {
-		ctx.Report(
-			lex.StartLine,
-			lex.StartColumn,
-			fmt.Sprintf("unexpected token in expression: %v", lex.Token),
-		)
+	nud, ok := p.prefix[lex.Token]
+	if !ok {
 		return nil
 	}
 

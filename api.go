@@ -39,19 +39,25 @@ Transactional invariant:
 
 Rules MUST NOT manually restore state on failure.
 */
-type RuleContext[TObservation cmp.Ordered, TToken, TLexerState, TNodeKind comparable] struct {
+type RuleContext[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable] struct {
 
-	/* Peek returns the lexeme at lookahead distance n (0 = current). */
-	Peek func(n int) lexarch.Lexeme[TObservation, TToken]
+	/* Peek returns the lexeme at lookahead distance n (0 = current). It automatically skips set tokens. */
+	Peek func(n int) lexarch.Lexeme[TObservation, TToken, TTokenRole]
+
+	/* PeekRaw returns the lexeme at lookahead distance n (0 = current). */
+	PeekRaw func(n int) lexarch.Lexeme[TObservation, TToken, TTokenRole]
 
 	/* PeekRange returns up to `count` upcoming tokens without consuming input. */
-	PeekRange func(n int) []lexarch.Lexeme[TObservation, TToken]
+	PeekRange func(n int) []lexarch.Lexeme[TObservation, TToken, TTokenRole]
 
-	/* Consume consumes and returns the current lexeme. */
-	Consume func() lexarch.Lexeme[TObservation, TToken]
+	/* Consume consumes and returns the current lexeme. It automatically skips set tokens. */
+	Consume func() lexarch.Lexeme[TObservation, TToken, TTokenRole]
+
+	/* ConsumeRaw consumes and returns the current lexeme. */
+	ConsumeRaw func() lexarch.Lexeme[TObservation, TToken, TTokenRole]
 
 	/* ConsumeRange returns up to `count` upcoming tokens while consuming input. */
-	ConsumeRange func(n int) []lexarch.Lexeme[TObservation, TToken]
+	ConsumeRange func(n int) []lexarch.Lexeme[TObservation, TToken, TTokenRole]
 
 	/* Match consumes the current token if it matches one of the provided tokens. */
 	Match func(tokens ...TToken) bool
@@ -78,7 +84,7 @@ type RuleContext[TObservation cmp.Ordered, TToken, TLexerState, TNodeKind compar
 		  - attach tokens
 		  - optionally override spans or attributes
 	*/
-	CreateASTNode func() *SyntaxaASTNode[TObservation, TToken, TNodeKind]
+	CreateASTNode func() *SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind]
 
 	/* PushRecovery installs a new local synchronization set */
 	PushRecovery func(tokens ...TToken)
@@ -89,8 +95,17 @@ type RuleContext[TObservation cmp.Ordered, TToken, TLexerState, TNodeKind compar
 	/* CurrentRecovery returns the active synchronization tokens */
 	CurrentRecovery func() []TToken
 
+	/* PushSkipRoles installs a new local skip role set. */
+	PushSkipRoles func(roles ...TTokenRole)
+
+	/* PopSkipRoles removes the most recent skip role set. */
+	PopSkipRoles func()
+
+	/* CurrentSkips returns the active skippable set. */
+	CurrentSkips func() []TTokenRole
+
 	/* CreateErrorNode constructs a structured error AST node */
-	CreateErrorNode func(message string) *SyntaxaASTNode[TObservation, TToken, TNodeKind]
+	CreateErrorNode func(message string) *SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind]
 }
 
 /*
@@ -107,39 +122,91 @@ Use cases:
   - unit tests
   - small inputs fully resident in memory
 */
-func BuildRuleContextFromSlice[TObservation cmp.Ordered, TToken, TLexerState, TNodeKind comparable](
-	parser *SyntaxaParser[TObservation, TToken, TNodeKind, TLexerState],
-	lexemes []lexarch.Lexeme[TObservation, TToken],
+func BuildRuleContextFromSlice[
+	TObservation cmp.Ordered,
+	TToken,
+	TTokenRole,
+	TLexerState,
+	TNodeKind comparable,
+](
+	parser *SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
+	lexemes []lexarch.Lexeme[TObservation, TToken, TTokenRole],
 	errors *SyntaxErrors,
 	cursor *int,
-) RuleContext[TObservation, TToken, TLexerState, TNodeKind] {
+) RuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
 
-	ctx := buildBaseContext[TObservation, TToken, TLexerState](
+	ctx := buildBaseContext[TObservation, TToken, TTokenRole, TLexerState](
 		errors,
 		newASTNodeFactory(parser),
 	)
 
-	ctx.Peek = func(n int) lexarch.Lexeme[TObservation, TToken] {
+	// ---------------------------------------------------------
+	// RAW ACCESS
+	// ---------------------------------------------------------
+
+	ctx.PeekRaw = func(n int) lexarch.Lexeme[TObservation, TToken, TTokenRole] {
 		return lexemes[*cursor+n]
 	}
 
-	ctx.PeekRange = func(n int) []lexarch.Lexeme[TObservation, TToken] {
-		return lexemes[*cursor : *cursor+n]
-	}
-
-	ctx.Consume = func() lexarch.Lexeme[TObservation, TToken] {
+	ctx.ConsumeRaw = func() lexarch.Lexeme[TObservation, TToken, TTokenRole] {
 		l := lexemes[*cursor]
 		*cursor++
 		return l
 	}
 
-	ctx.ConsumeRange = func(n int) []lexarch.Lexeme[TObservation, TToken] {
+	ctx.PeekRange = func(n int) []lexarch.Lexeme[TObservation, TToken, TTokenRole] {
+		return lexemes[*cursor : *cursor+n]
+	}
+
+	ctx.ConsumeRange = func(n int) []lexarch.Lexeme[TObservation, TToken, TTokenRole] {
 		l := lexemes[*cursor : *cursor+n]
 		*cursor += n
 		return l
 	}
 
+	// ---------------------------------------------------------
+	// SKIP LOGIC
+	// ---------------------------------------------------------
+
+	isSkipped := func(role TTokenRole) bool {
+		skips := ctx.CurrentSkips()
+		for _, r := range skips {
+			if r == role {
+				return true
+			}
+		}
+		return false
+	}
+
+	skipForward := func() {
+		for {
+			if *cursor >= len(lexemes) {
+				return
+			}
+			if !isSkipped(lexemes[*cursor].Role) {
+				return
+			}
+			*cursor++
+		}
+	}
+
+	// ---------------------------------------------------------
+	// LOGICAL ACCESS (AUTO-SKIPPING)
+	// ---------------------------------------------------------
+
+	ctx.Peek = func(n int) lexarch.Lexeme[TObservation, TToken, TTokenRole] {
+		skipForward()
+		return ctx.PeekRaw(n)
+	}
+
+	ctx.Consume = func() lexarch.Lexeme[TObservation, TToken, TTokenRole] {
+		skipForward()
+		return ctx.ConsumeRaw()
+	}
+
 	ctx.Match = func(tokens ...TToken) bool {
+		skipForward()
+
 		for _, t := range tokens {
 			if lexemes[*cursor].Token == t {
 				*cursor++
@@ -148,6 +215,10 @@ func BuildRuleContextFromSlice[TObservation cmp.Ordered, TToken, TLexerState, TN
 		}
 		return false
 	}
+
+	// ---------------------------------------------------------
+	// CURSOR CONTROL
+	// ---------------------------------------------------------
 
 	ctx.Save = func() ParseCursor {
 		return ParseCursor{tokenIndex: *cursor}
@@ -176,20 +247,25 @@ func BuildRuleContextFromLexerSession[
 	TObservation cmp.Ordered,
 	TState comparable,
 	TToken comparable,
+	TTokenRole comparable,
 	TNodeKind comparable,
 ](
-	parser *SyntaxaParser[TObservation, TToken, TNodeKind, TState],
-	lexer *lexarch.Lexer[TObservation, TState, TToken],
+	parser *SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TState],
+	lexer *lexarch.Lexer[TObservation, TState, TToken, TTokenRole],
 	session *lexarch.LexerSession[TObservation, TState],
 	errors *SyntaxErrors,
-) RuleContext[TObservation, TToken, TState, TNodeKind] {
+) RuleContext[TObservation, TToken, TTokenRole, TState, TNodeKind] {
 
-	ctx := buildBaseContext[TObservation, TToken, TState](
+	ctx := buildBaseContext[TObservation, TToken, TTokenRole, TState](
 		errors,
 		newASTNodeFactory(parser),
 	)
 
-	ctx.Peek = func(n int) lexarch.Lexeme[TObservation, TToken] {
+	// ---------------------------------------------------------
+	// RAW ACCESS
+	// ---------------------------------------------------------
+
+	ctx.PeekRaw = func(n int) lexarch.Lexeme[TObservation, TToken, TTokenRole] {
 		lex, err := lexarch.LexerPeek(lexer, session, n)
 		if err != nil {
 			panic(err)
@@ -197,15 +273,7 @@ func BuildRuleContextFromLexerSession[
 		return lex
 	}
 
-	ctx.PeekRange = func(n int) []lexarch.Lexeme[TObservation, TToken] {
-		lex, err := lexarch.LexerPeekRange(lexer, session, n)
-		if err != nil {
-			panic(err)
-		}
-		return lex
-	}
-
-	ctx.Consume = func() lexarch.Lexeme[TObservation, TToken] {
+	ctx.ConsumeRaw = func() lexarch.Lexeme[TObservation, TToken, TTokenRole] {
 		lex, err := lexarch.LexerConsume(lexer, session)
 		if err != nil {
 			panic(err)
@@ -213,7 +281,15 @@ func BuildRuleContextFromLexerSession[
 		return lex
 	}
 
-	ctx.ConsumeRange = func(n int) []lexarch.Lexeme[TObservation, TToken] {
+	ctx.PeekRange = func(n int) []lexarch.Lexeme[TObservation, TToken, TTokenRole] {
+		lex, err := lexarch.LexerPeekRange(lexer, session, n)
+		if err != nil {
+			panic(err)
+		}
+		return lex
+	}
+
+	ctx.ConsumeRange = func(n int) []lexarch.Lexeme[TObservation, TToken, TTokenRole] {
 		lex, err := lexarch.LexerConsumeRange(lexer, session, n)
 		if err != nil {
 			panic(err)
@@ -221,20 +297,60 @@ func BuildRuleContextFromLexerSession[
 		return lex
 	}
 
-	ctx.Match = func(tokens ...TToken) bool {
-		lex, err := lexarch.LexerPeek(lexer, session, 0)
-		if err != nil {
-			panic(err)
-		}
+	// ---------------------------------------------------------
+	// SKIP LOGIC
+	// ---------------------------------------------------------
 
-		for _, t := range tokens {
-			if lex.Token == t {
-				_, _ = lexarch.LexerConsume(lexer, session)
+	isSkipped := func(role TTokenRole) bool {
+		skips := ctx.CurrentSkips()
+		for _, r := range skips {
+			if r == role {
 				return true
 			}
 		}
 		return false
 	}
+
+	skipForward := func() {
+		for {
+			lex := ctx.PeekRaw(0)
+			if !isSkipped(lex.Role) {
+				return
+			}
+			ctx.ConsumeRaw()
+		}
+	}
+
+	// ---------------------------------------------------------
+	// LOGICAL ACCESS
+	// ---------------------------------------------------------
+
+	ctx.Peek = func(n int) lexarch.Lexeme[TObservation, TToken, TTokenRole] {
+		skipForward()
+		return ctx.PeekRaw(n)
+	}
+
+	ctx.Consume = func() lexarch.Lexeme[TObservation, TToken, TTokenRole] {
+		skipForward()
+		return ctx.ConsumeRaw()
+	}
+
+	ctx.Match = func(tokens ...TToken) bool {
+		skipForward()
+
+		lex := ctx.PeekRaw(0)
+		for _, t := range tokens {
+			if lex.Token == t {
+				ctx.ConsumeRaw()
+				return true
+			}
+		}
+		return false
+	}
+
+	// ---------------------------------------------------------
+	// CURSOR CONTROL
+	// ---------------------------------------------------------
 
 	ctx.Save = func() ParseCursor {
 		return ParseCursor{tokenIndex: session.Position()}
@@ -266,20 +382,25 @@ func BuildRuleContextFromStreamingSession[
 	TObservation cmp.Ordered,
 	TState comparable,
 	TToken comparable,
+	TTokenRole comparable,
 	TNodeKind comparable,
 ](
-	parser *SyntaxaParser[TObservation, TToken, TNodeKind, TState],
-	lexer *lexarch.Lexer[TObservation, TState, TToken],
+	parser *SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TState],
+	lexer *lexarch.Lexer[TObservation, TState, TToken, TTokenRole],
 	session *lexarch.StreamingLexerSession[TObservation, TState],
 	errors *SyntaxErrors,
-) RuleContext[TObservation, TToken, TState, TNodeKind] {
+) RuleContext[TObservation, TToken, TTokenRole, TState, TNodeKind] {
 
-	ctx := buildBaseContext[TObservation, TToken, TState](
+	ctx := buildBaseContext[TObservation, TToken, TTokenRole, TState](
 		errors,
 		newASTNodeFactory(parser),
 	)
 
-	ctx.Peek = func(n int) lexarch.Lexeme[TObservation, TToken] {
+	// ---------------------------------------------------------
+	// RAW ACCESS
+	// ---------------------------------------------------------
+
+	ctx.PeekRaw = func(n int) lexarch.Lexeme[TObservation, TToken, TTokenRole] {
 		lex, err := lexarch.LexerPeekStreaming(lexer, session, n)
 		if err != nil {
 			panic(err)
@@ -287,15 +408,7 @@ func BuildRuleContextFromStreamingSession[
 		return lex
 	}
 
-	ctx.PeekRange = func(n int) []lexarch.Lexeme[TObservation, TToken] {
-		lex, err := lexarch.LexerPeekRangeStreaming(lexer, session, n)
-		if err != nil {
-			panic(err)
-		}
-		return lex
-	}
-
-	ctx.Consume = func() lexarch.Lexeme[TObservation, TToken] {
+	ctx.ConsumeRaw = func() lexarch.Lexeme[TObservation, TToken, TTokenRole] {
 		lex, err := lexarch.LexerConsumeStreaming(lexer, session)
 		if err != nil {
 			panic(err)
@@ -303,7 +416,15 @@ func BuildRuleContextFromStreamingSession[
 		return lex
 	}
 
-	ctx.ConsumeRange = func(n int) []lexarch.Lexeme[TObservation, TToken] {
+	ctx.PeekRange = func(n int) []lexarch.Lexeme[TObservation, TToken, TTokenRole] {
+		lex, err := lexarch.LexerPeekRangeStreaming(lexer, session, n)
+		if err != nil {
+			panic(err)
+		}
+		return lex
+	}
+
+	ctx.ConsumeRange = func(n int) []lexarch.Lexeme[TObservation, TToken, TTokenRole] {
 		lex, err := lexarch.LexerConsumeRangeStreaming(lexer, session, n)
 		if err != nil {
 			panic(err)
@@ -311,20 +432,60 @@ func BuildRuleContextFromStreamingSession[
 		return lex
 	}
 
-	ctx.Match = func(tokens ...TToken) bool {
-		lex, err := lexarch.LexerPeekStreaming(lexer, session, 0)
-		if err != nil {
-			panic(err)
-		}
+	// ---------------------------------------------------------
+	// SKIP LOGIC
+	// ---------------------------------------------------------
 
-		for _, t := range tokens {
-			if lex.Token == t {
-				_, _ = lexarch.LexerConsumeStreaming(lexer, session)
+	isSkipped := func(role TTokenRole) bool {
+		skips := ctx.CurrentSkips()
+		for _, r := range skips {
+			if r == role {
 				return true
 			}
 		}
 		return false
 	}
+
+	skipForward := func() {
+		for {
+			lex := ctx.PeekRaw(0)
+			if !isSkipped(lex.Role) {
+				return
+			}
+			ctx.ConsumeRaw()
+		}
+	}
+
+	// ---------------------------------------------------------
+	// LOGICAL ACCESS (AUTO-SKIPPING)
+	// ---------------------------------------------------------
+
+	ctx.Peek = func(n int) lexarch.Lexeme[TObservation, TToken, TTokenRole] {
+		skipForward()
+		return ctx.PeekRaw(n)
+	}
+
+	ctx.Consume = func() lexarch.Lexeme[TObservation, TToken, TTokenRole] {
+		skipForward()
+		return ctx.ConsumeRaw()
+	}
+
+	ctx.Match = func(tokens ...TToken) bool {
+		skipForward()
+
+		lex := ctx.PeekRaw(0)
+		for _, t := range tokens {
+			if lex.Token == t {
+				ctx.ConsumeRaw()
+				return true
+			}
+		}
+		return false
+	}
+
+	// ---------------------------------------------------------
+	// CURSOR CONTROL
+	// ---------------------------------------------------------
 
 	ctx.Save = func() ParseCursor {
 		return ParseCursor{tokenIndex: session.AbsPosition()}
@@ -359,7 +520,7 @@ The node is designed to support:
   - format-preserving transformations
   - efficient tree navigation
 */
-type SyntaxaASTNode[TObservation cmp.Ordered, TToken, TNodeKind comparable] struct {
+type SyntaxaASTNode[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind comparable] struct {
 
 	/* Stable unique identifier for this node instance. */
 	ID uint64
@@ -382,15 +543,15 @@ type SyntaxaASTNode[TObservation cmp.Ordered, TToken, TNodeKind comparable] stru
 	// STRUCTURAL RELATIONSHIPS
 	// ---------------------------------------------------------
 
-	Parent   *SyntaxaASTNode[TObservation, TToken, TNodeKind]
-	Children []*SyntaxaASTNode[TObservation, TToken, TNodeKind]
-	Slots    map[string]*SyntaxaASTNode[TObservation, TToken, TNodeKind]
+	Parent   *SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind]
+	Children []*SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind]
+	Slots    map[string]*SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind]
 
 	// ---------------------------------------------------------
 	// TOKEN PRESERVATION
 	// ---------------------------------------------------------
 
-	Tokens []lexarch.Lexeme[TObservation, TToken]
+	Tokens []lexarch.Lexeme[TObservation, TToken, TTokenRole]
 
 	// ---------------------------------------------------------
 	// METADATA
@@ -416,9 +577,15 @@ Contract:
   - On success: returns (node, true) and commits consumption
   - On failure: returns (nil, false); consumption is rolled back
 */
-type ParserRule[TObservation cmp.Ordered, TToken, TNodeKind, TLexerState comparable] func(
-	ctx RuleContext[TObservation, TToken, TLexerState, TNodeKind],
-) (*SyntaxaASTNode[TObservation, TToken, TNodeKind], bool)
+type ParserRule[
+	TObservation cmp.Ordered,
+	TToken,
+	TTokenRole,
+	TLexerState,
+	TNodeKind comparable,
+] func(
+	ctx RuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+) (*SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind], bool)
 
 /*
 RuleSelector is client-owned logic that determines which rule
@@ -426,9 +593,15 @@ should be attempted at the current position.
 
 Returning nil indicates that no rule applies and triggers recovery.
 */
-type RuleSelector[TObservation cmp.Ordered, TToken, TNodeKind, TLexerState comparable] func(
-	ctx RuleContext[TObservation, TToken, TLexerState, TNodeKind],
-) ParserRule[TObservation, TToken, TNodeKind, TLexerState]
+type RuleSelector[
+	TObservation cmp.Ordered,
+	TToken,
+	TTokenRole,
+	TLexerState,
+	TNodeKind comparable,
+] func(
+	ctx RuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+) ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 
 // =============================================================
 // ERRORS
@@ -472,8 +645,8 @@ Responsibilities:
   - centralized error recovery
   - AST assembly
 */
-type SyntaxaParser[TObservation cmp.Ordered, TToken, TNodeKind, TLexerState comparable] struct {
-	selectRule   RuleSelector[TObservation, TToken, TNodeKind, TLexerState]
+type SyntaxaParser[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind, TLexerState comparable] struct {
+	selectRule   RuleSelector[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 	syncTokens   []TToken
 	rootNodeKind TNodeKind
 
@@ -483,19 +656,19 @@ type SyntaxaParser[TObservation cmp.Ordered, TToken, TNodeKind, TLexerState comp
 /*
 SyntaxaParserCreate constructs a new parser instance.
 */
-func SyntaxaParserCreate[TObservation cmp.Ordered, TToken, TNodeKind, TLexerState comparable](
-	selectRule RuleSelector[TObservation, TToken, TNodeKind, TLexerState],
+func SyntaxaParserCreate[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind, TLexerState comparable](
+	selectRule RuleSelector[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	syncTokens []TToken,
 	rootNodeKind TNodeKind,
-) *SyntaxaParser[TObservation, TToken, TNodeKind, TLexerState] {
-	return &SyntaxaParser[TObservation, TToken, TNodeKind, TLexerState]{
+) *SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TLexerState] {
+	return &SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TLexerState]{
 		selectRule:   selectRule,
 		syncTokens:   syncTokens,
 		rootNodeKind: rootNodeKind,
 	}
 }
 
-func (p *SyntaxaParser[TObservation, TToken, TNodeKind, TLexerState]) nextNodeID() uint64 {
+func (p *SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TLexerState]) nextNodeID() uint64 {
 	p.nodeID++
 	return p.nodeID
 }
@@ -509,15 +682,15 @@ This is intended for non-streaming scenarios.
 Advanced integrations should build custom RuleContexts and call
 SyntaxaParserParseWithContext directly.
 */
-func SyntaxaParserParseASTSimple[TObservation cmp.Ordered, TToken, TNodeKind, TLexerState comparable](
-	parser *SyntaxaParser[TObservation, TToken, TNodeKind, TLexerState],
-	lexemes []lexarch.Lexeme[TObservation, TToken],
+func SyntaxaParserParseASTSimple[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind, TLexerState comparable](
+	parser *SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
+	lexemes []lexarch.Lexeme[TObservation, TToken, TTokenRole],
 	eofToken TToken,
-) (*SyntaxaASTNode[TObservation, TToken, TNodeKind], *SyntaxErrors) {
+) (*SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind], *SyntaxErrors) {
 
-	root := &SyntaxaASTNode[TObservation, TToken, TNodeKind]{
+	root := &SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind]{
 		NodeKind: parser.rootNodeKind,
-		Children: make([]*SyntaxaASTNode[TObservation, TToken, TNodeKind], 0),
+		Children: make([]*SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind], 0),
 	}
 
 	errors := &SyntaxErrors{Errors: make([]SyntaxError, 0)}
@@ -563,10 +736,10 @@ This function guarantees:
   - centralized error recovery
   - consistent AST assembly
 */
-func SyntaxaParserParseWithContext[TObservation cmp.Ordered, TToken, TNodeKind, TLexerState comparable](
-	parser *SyntaxaParser[TObservation, TToken, TNodeKind, TLexerState],
-	ctx RuleContext[TObservation, TToken, TLexerState, TNodeKind],
-	root *SyntaxaASTNode[TObservation, TToken, TNodeKind],
+func SyntaxaParserParseWithContext[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind, TLexerState comparable](
+	parser *SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
+	ctx RuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+	root *SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind],
 	eofToken TToken,
 ) {
 	parseWithContext(parser, ctx, root, eofToken)
@@ -576,16 +749,16 @@ func SyntaxaParserParseWithContext[TObservation cmp.Ordered, TToken, TNodeKind, 
 // AST NODE FACTORY (PRIVATE, SHARED)
 // =============================================================
 
-func newASTNodeFactory[TObservation cmp.Ordered, TToken, TNodeKind, TLexerState comparable](
-	parser *SyntaxaParser[TObservation, TToken, TNodeKind, TLexerState],
-) func() *SyntaxaASTNode[TObservation, TToken, TNodeKind] {
+func newASTNodeFactory[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind, TLexerState comparable](
+	parser *SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
+) func() *SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind] {
 
-	return func() *SyntaxaASTNode[TObservation, TToken, TNodeKind] {
-		return &SyntaxaASTNode[TObservation, TToken, TNodeKind]{
+	return func() *SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind] {
+		return &SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind]{
 			ID:         parser.nextNodeID(),
-			Children:   make([]*SyntaxaASTNode[TObservation, TToken, TNodeKind], 0),
-			Slots:      make(map[string]*SyntaxaASTNode[TObservation, TToken, TNodeKind]),
-			Tokens:     make([]lexarch.Lexeme[TObservation, TToken], 0),
+			Children:   make([]*SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind], 0),
+			Slots:      make(map[string]*SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind]),
+			Tokens:     make([]lexarch.Lexeme[TObservation, TToken, TTokenRole], 0),
 			Attributes: make(map[string]any),
 			Revision:   0,
 
@@ -604,14 +777,15 @@ func newASTNodeFactory[TObservation cmp.Ordered, TToken, TNodeKind, TLexerState 
 // CONTEXT BUILDERS (SHARED CORE)
 // =============================================================
 
-func buildBaseContext[TObservation cmp.Ordered, TToken, TLexerState, TNodeKind comparable](
+func buildBaseContext[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable](
 	errors *SyntaxErrors,
-	createNode func() *SyntaxaASTNode[TObservation, TToken, TNodeKind],
-) RuleContext[TObservation, TToken, TLexerState, TNodeKind] {
+	createNode func() *SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind],
+) RuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
 
 	recoveryStack := make([][]TToken, 0)
+	skipTokensStack := make([][]TTokenRole, 0)
 
-	return RuleContext[TObservation, TToken, TLexerState, TNodeKind]{
+	return RuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]{
 
 		Report: func(line, column int, description string) {
 			errors.Errors = append(errors.Errors, SyntaxError{
@@ -623,7 +797,7 @@ func buildBaseContext[TObservation cmp.Ordered, TToken, TLexerState, TNodeKind c
 
 		CreateASTNode: createNode,
 
-		CreateErrorNode: func(message string) *SyntaxaASTNode[TObservation, TToken, TNodeKind] {
+		CreateErrorNode: func(message string) *SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind] {
 			n := createNode()
 			n.Attributes["error"] = message
 			return n
@@ -647,12 +821,31 @@ func buildBaseContext[TObservation cmp.Ordered, TToken, TLexerState, TNodeKind c
 			}
 			return recoveryStack[len(recoveryStack)-1]
 		},
+
+		PushSkipRoles: func(roles ...TTokenRole) {
+			cp := make([]TTokenRole, len(roles))
+			copy(cp, roles)
+			skipTokensStack = append(skipTokensStack, cp)
+		},
+
+		PopSkipRoles: func() {
+			if len(skipTokensStack) > 0 {
+				skipTokensStack = skipTokensStack[:len(skipTokensStack)-1]
+			}
+		},
+
+		CurrentSkips: func() []TTokenRole {
+			if len(skipTokensStack) == 0 {
+				return nil
+			}
+			return skipTokensStack[len(skipTokensStack)-1]
+		},
 	}
 }
 
-func recoverWithContext[TObservation cmp.Ordered, TToken, TLexerState, TNodeKind comparable](
-	ctx RuleContext[TObservation, TToken, TLexerState, TNodeKind],
-	current lexarch.Lexeme[TObservation, TToken],
+func recoverWithContext[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable](
+	ctx RuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+	current lexarch.Lexeme[TObservation, TToken, TTokenRole],
 	eofToken TToken,
 ) bool {
 
@@ -678,10 +871,10 @@ func recoverWithContext[TObservation cmp.Ordered, TToken, TLexerState, TNodeKind
 	}
 }
 
-func parseWithContext[TObservation cmp.Ordered, TToken, TNodeKind, TLexerState comparable](
-	parser *SyntaxaParser[TObservation, TToken, TNodeKind, TLexerState],
-	ctx RuleContext[TObservation, TToken, TLexerState, TNodeKind],
-	root *SyntaxaASTNode[TObservation, TToken, TNodeKind],
+func parseWithContext[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable](
+	parser *SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
+	ctx RuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+	root *SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind],
 	eofToken TToken,
 ) {
 
@@ -750,8 +943,8 @@ func parseWithContext[TObservation cmp.Ordered, TToken, TNodeKind, TLexerState c
 	}
 }
 
-func finalizeASTSpans[TObservation cmp.Ordered, TToken, TNodeKind comparable](
-	node *SyntaxaASTNode[TObservation, TToken, TNodeKind],
+func finalizeASTSpans[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind comparable](
+	node *SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind],
 ) {
 	if node == nil {
 		return
@@ -795,7 +988,7 @@ func finalizeASTSpans[TObservation cmp.Ordered, TToken, TNodeKind comparable](
 	maxLine := -1
 	maxCol := -1
 
-	consider := func(c *SyntaxaASTNode[TObservation, TToken, TNodeKind]) {
+	consider := func(c *SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind]) {
 		if c == nil || c.Start < 0 || c.End < 0 {
 			return
 		}
