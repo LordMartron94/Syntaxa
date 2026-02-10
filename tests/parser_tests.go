@@ -247,7 +247,6 @@ func TestSyntaxaIntegration(t *testing.T) {
 
 	parser := syntaxa.SyntaxaParserCreate(
 		selector,
-		nil,
 		RootNode,
 	)
 

@@ -647,7 +647,6 @@ Responsibilities:
 */
 type SyntaxaParser[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind, TLexerState comparable] struct {
 	selectRule   RuleSelector[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
-	syncTokens   []TToken
 	rootNodeKind TNodeKind
 
 	nodeID uint64
@@ -658,12 +657,10 @@ SyntaxaParserCreate constructs a new parser instance.
 */
 func SyntaxaParserCreate[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind, TLexerState comparable](
 	selectRule RuleSelector[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
-	syncTokens []TToken,
 	rootNodeKind TNodeKind,
 ) *SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TLexerState] {
 	return &SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TLexerState]{
 		selectRule:   selectRule,
-		syncTokens:   syncTokens,
 		rootNodeKind: rootNodeKind,
 	}
 }
