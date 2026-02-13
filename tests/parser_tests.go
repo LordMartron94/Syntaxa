@@ -130,7 +130,7 @@ func buildPratt() *pratt.PrattParser[rune, TestToken, TokenRole, NodeKind, Lexer
 	p := pratt.PrattParserCreate[rune, TestToken, TokenRole, NodeKind, LexerState]()
 
 	p.RegisterPrefix(NumberTok, func(
-		ctx syntaxa.RuleContext[rune, TestToken, TokenRole, LexerState, NodeKind],
+		ctx syntaxa.ExecRuleContext[rune, TestToken, TokenRole, LexerState, NodeKind],
 	) *syntaxa.SyntaxaASTNode[rune, TestToken, TokenRole, NodeKind] {
 
 		lex := ctx.Consume()
@@ -141,7 +141,7 @@ func buildPratt() *pratt.PrattParser[rune, TestToken, TokenRole, NodeKind, Lexer
 	})
 
 	p.RegisterPrefix(IdentTok, func(
-		ctx syntaxa.RuleContext[rune, TestToken, TokenRole, LexerState, NodeKind],
+		ctx syntaxa.ExecRuleContext[rune, TestToken, TokenRole, LexerState, NodeKind],
 	) *syntaxa.SyntaxaASTNode[rune, TestToken, TokenRole, NodeKind] {
 
 		lex := ctx.Consume()
@@ -152,7 +152,7 @@ func buildPratt() *pratt.PrattParser[rune, TestToken, TokenRole, NodeKind, Lexer
 	})
 
 	p.RegisterPrefix(LParenTok, func(
-		ctx syntaxa.RuleContext[rune, TestToken, TokenRole, LexerState, NodeKind],
+		ctx syntaxa.ExecRuleContext[rune, TestToken, TokenRole, LexerState, NodeKind],
 	) *syntaxa.SyntaxaASTNode[rune, TestToken, TokenRole, NodeKind] {
 
 		ctx.Consume()
@@ -162,7 +162,7 @@ func buildPratt() *pratt.PrattParser[rune, TestToken, TokenRole, NodeKind, Lexer
 	})
 
 	parseBinary := func(
-		ctx syntaxa.RuleContext[rune, TestToken, TokenRole, LexerState, NodeKind],
+		ctx syntaxa.ExecRuleContext[rune, TestToken, TokenRole, LexerState, NodeKind],
 		left *syntaxa.SyntaxaASTNode[rune, TestToken, TokenRole, NodeKind],
 		rbp int,
 	) *syntaxa.SyntaxaASTNode[rune, TestToken, TokenRole, NodeKind] {
@@ -184,7 +184,7 @@ func buildPratt() *pratt.PrattParser[rune, TestToken, TokenRole, NodeKind, Lexer
 	p.RegisterInfix(StarTok, 20, pratt.Left, parseBinary)
 
 	p.RegisterPostfix(LParenTok, 30, func(
-		ctx syntaxa.RuleContext[rune, TestToken, TokenRole, LexerState, NodeKind],
+		ctx syntaxa.ExecRuleContext[rune, TestToken, TokenRole, LexerState, NodeKind],
 		left *syntaxa.SyntaxaASTNode[rune, TestToken, TokenRole, NodeKind],
 	) *syntaxa.SyntaxaASTNode[rune, TestToken, TokenRole, NodeKind] {
 
@@ -210,7 +210,7 @@ func buildGrammar(
 ) syntaxa.RuleSelector[rune, TestToken, TokenRole, LexerState, NodeKind] {
 
 	expr := func(
-		ctx syntaxa.RuleContext[rune, TestToken, TokenRole, LexerState, NodeKind],
+		ctx syntaxa.ExecRuleContext[rune, TestToken, TokenRole, LexerState, NodeKind],
 	) (*syntaxa.SyntaxaASTNode[rune, TestToken, TokenRole, NodeKind], bool) {
 
 		n := p.ParseExpr(ctx, 0)
@@ -222,10 +222,7 @@ func buildGrammar(
 		rd.TokenMatch[rune, TestToken, TokenRole, LexerState, NodeKind](SemicolonTok, StmtNode),
 	)
 
-	return func(
-		ctx syntaxa.RuleContext[rune, TestToken, TokenRole, LexerState, NodeKind],
-	) syntaxa.ParserRule[rune, TestToken, TokenRole, LexerState, NodeKind] {
-
+	return func(ctx syntaxa.SelectRuleContext[rune, TestToken, TokenRole]) syntaxa.ParserRule[rune, TestToken, TokenRole, LexerState, NodeKind] {
 		return stmt
 	}
 }
@@ -260,7 +257,7 @@ func TestSyntaxaIntegration(t *testing.T) {
 
 	errors := &syntaxa.SyntaxErrors{}
 
-	ctx := syntaxa.BuildRuleContextFromLexerSession(
+	ctx := syntaxa.BuildExecRuleContextFromLexerSession(
 		parser,
 		lexer,
 		session,
@@ -308,7 +305,7 @@ func TestSyntaxaIntegration(t *testing.T) {
 
 	errors2 := &syntaxa.SyntaxErrors{}
 
-	ctx2 := syntaxa.BuildRuleContextFromStreamingSession(
+	ctx2 := syntaxa.BuildExecRuleContextFromStreamingSession(
 		parser,
 		lexer,
 		stream,

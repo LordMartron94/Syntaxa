@@ -5,7 +5,7 @@ import (
 	"syntaxa"
 )
 
-type Ctx[TObs cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable] = syntaxa.RuleContext[TObs, TToken, TTokenRole, TLexerState, TNodeKind]
+type Ctx[TObs cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable] = syntaxa.ExecRuleContext[TObs, TToken, TTokenRole, TLexerState, TNodeKind]
 
 // =============================================================
 // ASSOCIATIVITY

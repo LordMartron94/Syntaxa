@@ -24,7 +24,7 @@ Canonical order (must match syntaxa.RuleContext):
 	TLexerState — lexer internal state snapshot
 	TNodeKind   — AST node kind (stored in node.NodeKind)
 */
-type Ctx[TObs cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable] = syntaxa.RuleContext[TObs, TToken, TTokenRole, TLexerState, TNodeKind]
+type Ctx[TObs cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable] = syntaxa.ExecRuleContext[TObs, TToken, TTokenRole, TLexerState, TNodeKind]
 
 /*
 Rule is a package-local alias for syntaxa.ParserRule.
