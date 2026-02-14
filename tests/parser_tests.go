@@ -220,20 +220,32 @@ func buildGrammar(
 	p *pratt.PrattParser[rune, TestToken, TokenRole, NodeKind, LexerState],
 ) syntaxa.RuleSelector[rune, TestToken, TokenRole, LexerState, NodeKind] {
 
+	// ---------------- Expression (inner production) ----------------
+
 	expr := func(
 		ctx syntaxa.ExecRuleContext[rune, TestToken, TokenRole, LexerState, NodeKind],
-	) (*syntaxa.SyntaxaASTNode[rune, TestToken, TokenRole, NodeKind], bool) {
+	) (syntaxa.RuleResult[rune, TestToken, TokenRole, NodeKind], bool) {
 
 		n := p.ParseExpr(ctx, 0)
-		return n, n != nil
+		if n == nil {
+			return rd.NoNode[rune, TestToken, TokenRole, NodeKind](), false
+		}
+		return rd.NodeResult(n), true
 	}
 
-	stmt := rd.Sequence(
-		expr,
-		rd.TokenMatch[rune, TestToken, TokenRole, LexerState, NodeKind](SemicolonTok, StmtNode),
+	// ---------------- Statement (grammar root production) ----------------
+
+	stmt := rd.TopLevel(
+		rd.SequenceAs(
+			StmtNode,
+			expr,
+			rd.Tok[rune, TestToken, TokenRole, LexerState, NodeKind](SemicolonTok),
+		),
 	)
 
-	return func(ctx syntaxa.SelectRuleContext[rune, TestToken, TokenRole]) syntaxa.ParserRule[rune, TestToken, TokenRole, LexerState, NodeKind] {
+	return func(
+		ctx syntaxa.SelectRuleContext[rune, TestToken, TokenRole],
+	) syntaxa.ParserRule[rune, TestToken, TokenRole, LexerState, NodeKind] {
 		return stmt
 	}
 }
@@ -284,6 +296,63 @@ func TestSyntaxaIntegration(t *testing.T) {
 		root,
 		EOFToken,
 	)
+
+	dump := root.DebugDump(syntaxa.ASTDebugFormatter[
+		rune, TestToken, TokenRole, NodeKind,
+	]{
+		FormatKind: func(k NodeKind) string {
+			switch k {
+			case RootNode:
+				return "Root"
+			case StmtNode:
+				return "Stmt"
+			case BinaryExpr:
+				return "BinaryExpr"
+			case NumberExpr:
+				return "Number"
+			case IdentExpr:
+				return "Ident"
+			case CallExpr:
+				return "Call"
+			case ErrorNode:
+				return "Error"
+			default:
+				return fmt.Sprintf("Kind(%d)", k)
+			}
+		},
+
+		FormatToken: func(l lexarch.Lexeme[rune, TestToken, TokenRole]) string {
+			return string(l.Raw)
+		},
+
+		FormatAttribute: func(k string, v any) string {
+			return fmt.Sprintf("%s=%v", k, v)
+		},
+
+		/* ───── visual options ───── */
+
+		ShowTokens:     true,
+		ShowAttributes: true,
+
+		ShowByteSpan: true,
+		ShowLineSpan: true,
+
+		ShowNodeID:   true,
+		ShowRevision: false,
+
+		SlotPrefix: "@",
+
+		/* ───── color hooks (disabled in tests) ───── */
+
+		ColorKind:      nil,
+		ColorToken:     nil,
+		ColorSpan:      nil,
+		ColorAttribute: nil,
+	})
+
+	fmt.Println("\n===== AST DEBUG DUMP =====")
+	fmt.Println(dump)
+	fmt.Println("=========================")
 
 	validateAST(t, root, errors)
 }

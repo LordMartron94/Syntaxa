@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"fmt"
 	"lexarch"
+	"strings"
 	"structarch"
 )
 
@@ -918,6 +919,297 @@ func (n *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) walkChildren() []*Synt
 	return out
 }
 
+type ASTDebugFormatter[TObs cmp.Ordered, TToken, TTokenRole, TKind comparable] struct {
+
+	/* REQUIRED */
+
+	FormatKind func(TKind) string
+
+	/* Optional render hooks */
+
+	FormatToken     func(lexarch.Lexeme[TObs, TToken, TTokenRole]) string
+	FormatAttribute func(key string, value any) string
+
+	/* Coloring layer (nil = no color) */
+
+	ColorKind      func(string) string
+	ColorToken     func(string) string
+	ColorAttribute func(string) string
+	ColorSpan      func(string) string
+
+	/* Position rendering */
+
+	ShowByteSpan bool
+	ShowLineSpan bool
+
+	/* Structural extras */
+
+	ShowTokens     bool
+	ShowAttributes bool
+	ShowNodeID     bool
+	ShowRevision   bool
+
+	/* Slot styling */
+
+	SlotPrefix string // e.g. "@", "#", "slot:"
+}
+
+/*
+DebugDump returns a human-readable structural representation of the AST.
+
+All semantic formatting is injected through ASTDebugFormatter to keep
+Syntaxa independent of user enum meanings.
+
+Output example:
+
+Root
+├─ Stmt
+│  └─ BinaryExpr
+│     ├─ CallExpr
+│     │  └─ Ident(foo)
+│     └─ BinaryExpr
+│        ├─ Number(2)
+│        └─ Number(3)
+*/
+func (n *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) DebugDump(
+	formatter ASTDebugFormatter[TObs, TToken, TTokenRole, TKind],
+) string {
+
+	var out strings.Builder
+
+	applyColor := func(s string, f func(string) string) string {
+		if f != nil {
+			return f(s)
+		}
+		return s
+	}
+
+	formatLine := func(node *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) {
+
+		kind := formatter.FormatKind(node.kind)
+		kind = applyColor(kind, formatter.ColorKind)
+		out.WriteString(kind)
+
+		if formatter.ShowNodeID {
+			out.WriteString(fmt.Sprintf(" #%d", node.id))
+		}
+
+		if formatter.ShowRevision {
+			out.WriteString(fmt.Sprintf(" r%d", node.revision))
+		}
+
+		if formatter.ShowByteSpan {
+			s, e := node.Span()
+			txt := fmt.Sprintf("[%d:%d]", s, e)
+			txt = applyColor(txt, formatter.ColorSpan)
+			out.WriteString(" " + txt)
+		}
+
+		if formatter.ShowLineSpan {
+			sl, sc, el, ec := node.LineSpan()
+			txt := fmt.Sprintf("(%d:%d → %d:%d)", sl, sc, el, ec)
+			txt = applyColor(txt, formatter.ColorSpan)
+			out.WriteString(" " + txt)
+		}
+
+		if formatter.ShowTokens && formatter.FormatToken != nil && len(node.tokens) > 0 {
+			out.WriteString(" {")
+			for i, t := range node.tokens {
+				if i > 0 {
+					out.WriteString(", ")
+				}
+				txt := formatter.FormatToken(t)
+				txt = applyColor(txt, formatter.ColorToken)
+				out.WriteString(txt)
+			}
+			out.WriteString("}")
+		}
+
+		if formatter.ShowAttributes && formatter.FormatAttribute != nil && len(node.attributes) > 0 {
+			out.WriteString(" <")
+			first := true
+			for k, v := range node.attributes {
+				if !first {
+					out.WriteString(", ")
+				}
+				first = false
+				txt := formatter.FormatAttribute(k, v)
+				txt = applyColor(txt, formatter.ColorAttribute)
+				out.WriteString(txt)
+			}
+			out.WriteString(">")
+		}
+
+		out.WriteByte('\n')
+	}
+
+	// ------------------------------------------------------------
+	// Prefix helpers
+	// ------------------------------------------------------------
+
+	writePrefix := func(prefix string, isLast bool, depth int) {
+		// Root itself is printed without tree glyphs.
+		if depth == 0 {
+			return
+		}
+		if isLast {
+			out.WriteString(prefix + "└─ ")
+		} else {
+			out.WriteString(prefix + "├─ ")
+		}
+	}
+
+	nextPrefix := func(prefix string, isLast bool, depth int) string {
+		// After the root level, we maintain the vertical guides.
+		// For the immediate children of root (depth==1), prefix is "".
+		if depth == 0 {
+			return ""
+		}
+		if isLast {
+			return prefix + "   "
+		}
+		return prefix + "│  "
+	}
+
+	// ------------------------------------------------------------
+	// Unified child enumeration (children + slots)
+	// ------------------------------------------------------------
+
+	type edge struct {
+		isSlot bool
+		name   string
+		node   *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]
+	}
+
+	collectEdges := func(cur *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) []edge {
+		total := len(cur.children)
+		if cur.slots != nil {
+			total += len(cur.slots)
+		}
+		if total == 0 {
+			return nil
+		}
+
+		edges := make([]edge, 0, total)
+
+		for _, ch := range cur.children {
+			edges = append(edges, edge{node: ch})
+		}
+
+		if cur.slots != nil {
+			for name, ch := range cur.slots {
+				if ch == nil {
+					continue
+				}
+				edges = append(edges, edge{isSlot: true, name: name, node: ch})
+			}
+		}
+
+		return edges
+	}
+
+	// ------------------------------------------------------------
+	// Recursive walker
+	// ------------------------------------------------------------
+
+	var walk func(
+		node *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind],
+		prefix string,
+		isLast bool,
+		depth int,
+	)
+
+	walk = func(
+		node *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind],
+		prefix string,
+		isLast bool,
+		depth int,
+	) {
+		writePrefix(prefix, isLast, depth)
+		formatLine(node)
+
+		edges := collectEdges(node)
+		if len(edges) == 0 {
+			return
+		}
+
+		childPrefix := nextPrefix(prefix, isLast, depth)
+
+		for i, e := range edges {
+			last := i == len(edges)-1
+
+			if !e.isSlot {
+				walk(e.node, childPrefix, last, depth+1)
+				continue
+			}
+
+			// Slot edge: render label + node line, then recurse into slot node's children.
+			writePrefix(childPrefix, last, depth+1)
+
+			label := formatter.SlotPrefix + e.name
+			label = applyColor(label, formatter.ColorAttribute)
+			out.WriteString(label + " → ")
+
+			// Slot target printed on same line (no extra prefix)
+			formatLine(e.node)
+
+			// Recurse into the slot node's children with appropriate prefix.
+			grand := collectEdges(e.node)
+			if len(grand) == 0 {
+				continue
+			}
+
+			grandPrefix := childPrefix
+			if last {
+				grandPrefix += "   "
+			} else {
+				grandPrefix += "│  "
+			}
+
+			for j, g := range grand {
+				gLast := j == len(grand)-1
+				if !g.isSlot {
+					walk(g.node, grandPrefix, gLast, depth+2)
+				} else {
+					// nested slot-of-slot
+					writePrefix(grandPrefix, gLast, depth+2)
+					lbl := formatter.SlotPrefix + g.name
+					lbl = applyColor(lbl, formatter.ColorAttribute)
+					out.WriteString(lbl + " → ")
+					formatLine(g.node)
+				}
+			}
+		}
+	}
+
+	// ------------------------------------------------------------
+	// Emit root + children
+	// ------------------------------------------------------------
+
+	formatLine(n)
+
+	rootEdges := collectEdges(n)
+	for i, e := range rootEdges {
+		last := i == len(rootEdges)-1
+
+		if !e.isSlot {
+			// Root's children are depth==1 so they get connectors.
+			walk(e.node, "", last, 1)
+			continue
+		}
+
+		// Root slot
+		writePrefix("", last, 1)
+
+		label := formatter.SlotPrefix + e.name
+		label = applyColor(label, formatter.ColorAttribute)
+		out.WriteString(label + " → ")
+		formatLine(e.node)
+	}
+
+	return out.String()
+}
+
 /*
 ASTEditor is the exclusive authority for creating and mutating
 AST structure.
@@ -1073,10 +1365,46 @@ func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) DeleteAttribute(node *Synta
 	e.markDirtyCascade(node)
 }
 
-func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) AddToken(node *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind], tok lexarch.Lexeme[TObs, TToken, TTokenRole]) {
+func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) AddToken(
+	node *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind],
+	tok lexarch.Lexeme[TObs, TToken, TTokenRole],
+) {
 	e.ensureMutable()
+
 	node.tokens = append(node.tokens, tok)
+
+	// ─────────────────────────────────────────────
+	// Establish or widen span from token
+	// ─────────────────────────────────────────────
+
+	if len(node.tokens) == 1 {
+		node.start = tok.Start
+		node.end = tok.End
+
+		node.startLine = tok.StartLine
+		node.startColumn = tok.StartColumn
+		node.endLine = tok.EndLine
+		node.endColumn = tok.EndColumn
+	} else {
+		if tok.Start < node.start {
+			node.start = tok.Start
+			node.startLine = tok.StartLine
+			node.startColumn = tok.StartColumn
+		}
+
+		if tok.End > node.end {
+			node.end = tok.End
+			node.endLine = tok.EndLine
+			node.endColumn = tok.EndColumn
+		}
+	}
+
+	// ─────────────────────────────────────────────
+	// Propagate structural invariants upward
+	// ─────────────────────────────────────────────
+
 	e.markDirtyCascade(node)
+	e.recomputeSpanUp(node)
 }
 
 func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) SetTokens(node *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind], toks []lexarch.Lexeme[TObs, TToken, TTokenRole]) {
@@ -1126,38 +1454,87 @@ func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) recomputeSpanUp(n *SyntaxaA
 	}
 }
 
-func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) recomputeSpan(n *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) {
+func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) recomputeSpan(
+	n *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind],
+) {
 	first := true
-	var minS, maxE int
+
+	var (
+		minStart int
+		maxEnd   int
+
+		startLine   int
+		startColumn int
+		endLine     int
+		endColumn   int
+	)
 
 	apply := func(ch *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) {
 		if ch == nil {
 			return
 		}
+
 		if first {
 			first = false
-			minS, maxE = ch.start, ch.end
+
+			minStart = ch.start
+			maxEnd = ch.end
+
+			startLine = ch.startLine
+			startColumn = ch.startColumn
+			endLine = ch.endLine
+			endColumn = ch.endColumn
+
 			return
 		}
-		if ch.start < minS {
-			minS = ch.start
+
+		// ───── byte span ─────
+
+		if ch.start < minStart {
+			minStart = ch.start
 		}
-		if ch.end > maxE {
-			maxE = ch.end
+		if ch.end > maxEnd {
+			maxEnd = ch.end
+		}
+
+		// ───── start position ─────
+
+		if ch.startLine < startLine ||
+			(ch.startLine == startLine && ch.startColumn < startColumn) {
+
+			startLine = ch.startLine
+			startColumn = ch.startColumn
+		}
+
+		// ───── end position ─────
+
+		if ch.endLine > endLine ||
+			(ch.endLine == endLine && ch.endColumn > endColumn) {
+
+			endLine = ch.endLine
+			endColumn = ch.endColumn
 		}
 	}
 
 	for _, ch := range n.children {
 		apply(ch)
 	}
-	for _, v := range n.slots {
-		apply(v)
+
+	for _, ch := range n.slots {
+		apply(ch)
 	}
 
-	if !first {
-		n.start = minS
-		n.end = maxE
+	if first {
+		return
 	}
+
+	n.start = minStart
+	n.end = maxEnd
+
+	n.startLine = startLine
+	n.startColumn = startColumn
+	n.endLine = endLine
+	n.endColumn = endColumn
 }
 
 func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) Freeze() {
@@ -1174,6 +1551,12 @@ func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) ensureMutable() {
 // RULES
 // =============================================================
 
+/* RuleResult encapsulates the return value of a parser rule. */
+type RuleResult[TObs cmp.Ordered, TToken, TTokenRole, TKind comparable] struct {
+	Node     *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]
+	TopLevel bool
+}
+
 /*
 ParserRule attempts to parse input at the current cursor position.
 
@@ -1189,7 +1572,7 @@ type ParserRule[
 	TNodeKind comparable,
 ] func(
 	ctx ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
-) (*SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind], bool)
+) (RuleResult[TObservation, TToken, TTokenRole, TNodeKind], bool)
 
 /*
 RuleSelector is client-owned logic that determines which rule
@@ -1526,7 +1909,7 @@ func parseWithContext[
 
 		snapshot := execCtx.Save()
 
-		node, ok := rule(execCtx)
+		result, ok := rule(execCtx)
 
 		if !ok {
 			execCtx.Restore(snapshot)
@@ -1547,7 +1930,10 @@ func parseWithContext[
 		// Successful production
 		// ====================================================
 
-		editor.AttachChild(root, node)
+		if result.TopLevel {
+			editor.AttachChild(root, result.Node)
+		}
+
 		lastCursor = -1
 	}
 }
