@@ -10,74 +10,106 @@ import (
 // =============================================================
 
 /*
-Ctx is a package-local alias for syntaxa.RuleContext.
+Ctx is a package-local alias for syntaxa.ExecRuleContext.
 
-It fixes the canonical generic ordering used by all recursive
-descent combinators in this package and prevents accidental
-permutation of type parameters across files.
+Canonical generic order:
 
-Canonical order (must match syntaxa.RuleContext):
-
-	TObs        — observation type (e.g. rune, byte)
-	TToken      — token type
-	TTokenRole  — lexer-assigned token role/category
-	TLexerState — lexer internal state snapshot
-	TNodeKind   — AST node kind (stored in node.NodeKind)
+	TObs        — observation type (rune, byte, etc.)
+	TToken      — token enum/type
+	TTokenRole  — lexer role/category
+	TLexerState — lexer internal state
+	TNodeKind   — AST node kind
 */
-type Ctx[TObs cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable] = syntaxa.ExecRuleContext[TObs, TToken, TTokenRole, TLexerState, TNodeKind]
+type Ctx[
+	TObs cmp.Ordered,
+	TToken,
+	TTokenRole,
+	TLexerState,
+	TNodeKind comparable,
+] = syntaxa.ExecRuleContext[TObs, TToken, TTokenRole, TLexerState, TNodeKind]
 
 /*
 Rule is a package-local alias for syntaxa.ParserRule.
 
-All recursive descent combinators operate exclusively on this alias
-to ensure consistent generic ordering and long-term API stability.
+A rule executes transactionally and returns:
 
-A Rule consumes from the provided context transactionally (via the
-context’s Save/Restore discipline) and returns:
-
-	(node, true)  — on success
-	(nil, false)  — on failure
+	(node, true)  on success
+	(nil, false)  on failure
 */
-type Rule[TObs cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable] = syntaxa.ParserRule[TObs, TToken, TTokenRole, TLexerState, TNodeKind]
+type Rule[
+	TObs cmp.Ordered,
+	TToken,
+	TTokenRole,
+	TLexerState,
+	TNodeKind comparable,
+] = syntaxa.ParserRule[TObs, TToken, TTokenRole, TLexerState, TNodeKind]
+
+// =============================================================
+// INTERNAL HELPERS
+// =============================================================
+
+/*
+newAnonymousNode creates a structural container node with
+the zero value of TNodeKind.
+
+Used by combinators such as Sequence, Many, Many1 which exist
+purely for structure and are typically wrapped by higher-level
+grammar rules that assign semantic kinds.
+*/
+func newAnonymousNode[
+	TObs cmp.Ordered,
+	TToken,
+	TTokenRole,
+	TLexerState,
+	TNodeKind comparable,
+](ctx Ctx[TObs, TToken, TTokenRole, TLexerState, TNodeKind]) *syntaxa.SyntaxaASTNode[TObs, TToken, TTokenRole, TNodeKind] {
+	var zeroKind TNodeKind
+	return ctx.Editor.NewNode(zeroKind)
+}
 
 // =============================================================
 // COMBINATORS
 // =============================================================
 
 /*
-Sequence composes multiple rules in sequence.
+Sequence composes multiple rules in order.
 
-All rules must succeed in order for Sequence to succeed.
+All rules must succeed for Sequence to succeed.
 
 On failure:
   - all consumption is rolled back
-  - no partial AST nodes are returned
+  - no AST nodes are produced
 
 On success:
-  - a new AST node is created
+  - a new container node is created
   - all child nodes are attached in order
 
 Typical use:
 
 	Sequence(term, Tok(Plus), term)
 */
-func Sequence[TObs cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable](
+func Sequence[
+	TObs cmp.Ordered,
+	TToken,
+	TTokenRole,
+	TLexerState,
+	TNodeKind comparable,
+](
 	rules ...Rule[TObs, TToken, TTokenRole, TLexerState, TNodeKind],
 ) Rule[TObs, TToken, TTokenRole, TLexerState, TNodeKind] {
-
 	return func(ctx Ctx[TObs, TToken, TTokenRole, TLexerState, TNodeKind]) (*syntaxa.SyntaxaASTNode[TObs, TToken, TTokenRole, TNodeKind], bool) {
-
 		snap := ctx.Save()
-		node := ctx.CreateASTNode()
+		node := newAnonymousNode(ctx)
 
 		for _, rule := range rules {
+
 			child, ok := rule(ctx)
 			if !ok {
 				ctx.Restore(snap)
 				return nil, false
 			}
-			child.Parent = node
-			node.Children = append(node.Children, child)
+
+			ctx.Editor.AttachChild(node, child)
 		}
 
 		return node, true
@@ -85,26 +117,35 @@ func Sequence[TObs cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind compa
 }
 
 /*
-Choice tries rules in order and returns the first successful match.
+Choice attempts each rule in order and returns the first success.
 
-Each rule is attempted transactionally.
+Each rule executes transactionally.
+
 If all rules fail, Choice fails without consuming input.
 
 Typical use:
 
 	Choice(ifStmt, whileStmt, exprStmt)
 */
-func Choice[TObs cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable](
+func Choice[
+	TObs cmp.Ordered,
+	TToken,
+	TTokenRole,
+	TLexerState,
+	TNodeKind comparable,
+](
 	rules ...Rule[TObs, TToken, TTokenRole, TLexerState, TNodeKind],
 ) Rule[TObs, TToken, TTokenRole, TLexerState, TNodeKind] {
-
 	return func(ctx Ctx[TObs, TToken, TTokenRole, TLexerState, TNodeKind]) (*syntaxa.SyntaxaASTNode[TObs, TToken, TTokenRole, TNodeKind], bool) {
 
 		for _, rule := range rules {
+
 			snap := ctx.Save()
+
 			if node, ok := rule(ctx); ok {
 				return node, true
 			}
+
 			ctx.Restore(snap)
 		}
 
@@ -113,28 +154,32 @@ func Choice[TObs cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind compara
 }
 
 /*
-Optional attempts a rule and succeeds regardless.
+Optional attempts a rule and always succeeds.
 
 If the rule matches:
   - its node is returned
 
-If it does not:
+If it fails:
   - no input is consumed
   - (nil, true) is returned
-
-This allows optional grammar elements without backtracking noise.
 
 Typical use:
 
 	Sequence(typeName, Optional(initializer))
 */
-func Optional[TObs cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable](
+func Optional[
+	TObs cmp.Ordered,
+	TToken,
+	TTokenRole,
+	TLexerState,
+	TNodeKind comparable,
+](
 	rule Rule[TObs, TToken, TTokenRole, TLexerState, TNodeKind],
 ) Rule[TObs, TToken, TTokenRole, TLexerState, TNodeKind] {
-
 	return func(ctx Ctx[TObs, TToken, TTokenRole, TLexerState, TNodeKind]) (*syntaxa.SyntaxaASTNode[TObs, TToken, TTokenRole, TNodeKind], bool) {
 
 		snap := ctx.Save()
+
 		if node, ok := rule(ctx); ok {
 			return node, true
 		}
@@ -148,29 +193,37 @@ func Optional[TObs cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind compa
 Many applies a rule zero or more times.
 
 It never fails.
-All successful matches are collected as children of a new node.
+
+All successful matches are attached as children of a new container node.
 
 Typical use:
 
 	Many(statement)
 */
-func Many[TObs cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable](
+func Many[
+	TObs cmp.Ordered,
+	TToken,
+	TTokenRole,
+	TLexerState,
+	TNodeKind comparable,
+](
 	rule Rule[TObs, TToken, TTokenRole, TLexerState, TNodeKind],
 ) Rule[TObs, TToken, TTokenRole, TLexerState, TNodeKind] {
-
 	return func(ctx Ctx[TObs, TToken, TTokenRole, TLexerState, TNodeKind]) (*syntaxa.SyntaxaASTNode[TObs, TToken, TTokenRole, TNodeKind], bool) {
 
-		node := ctx.CreateASTNode()
+		node := newAnonymousNode(ctx)
 
 		for {
+
 			snap := ctx.Save()
+
 			child, ok := rule(ctx)
 			if !ok {
 				ctx.Restore(snap)
 				break
 			}
-			child.Parent = node
-			node.Children = append(node.Children, child)
+
+			ctx.Editor.AttachChild(node, child)
 		}
 
 		return node, true
@@ -186,31 +239,37 @@ Typical use:
 
 	Many1(parameter)
 */
-func Many1[TObs cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable](
+func Many1[
+	TObs cmp.Ordered,
+	TToken,
+	TTokenRole,
+	TLexerState,
+	TNodeKind comparable,
+](
 	rule Rule[TObs, TToken, TTokenRole, TLexerState, TNodeKind],
 ) Rule[TObs, TToken, TTokenRole, TLexerState, TNodeKind] {
-
 	return func(ctx Ctx[TObs, TToken, TTokenRole, TLexerState, TNodeKind]) (*syntaxa.SyntaxaASTNode[TObs, TToken, TTokenRole, TNodeKind], bool) {
 
-		node := ctx.CreateASTNode()
+		node := newAnonymousNode(ctx)
 
 		first, ok := rule(ctx)
 		if !ok {
 			return nil, false
 		}
 
-		first.Parent = node
-		node.Children = append(node.Children, first)
+		ctx.Editor.AttachChild(node, first)
 
 		for {
+
 			snap := ctx.Save()
+
 			child, ok := rule(ctx)
 			if !ok {
 				ctx.Restore(snap)
 				break
 			}
-			child.Parent = node
-			node.Children = append(node.Children, child)
+
+			ctx.Editor.AttachChild(node, child)
 		}
 
 		return node, true
@@ -223,6 +282,7 @@ TokenMatch matches a single token and produces a leaf AST node.
 If the current token does not match, TokenMatch fails without consuming.
 
 The resulting node:
+  - has the specified node kind
   - contains the consumed token
   - has no children
 
@@ -230,13 +290,17 @@ Typical use:
 
 	TokenMatch(Identifier, IdentNode)
 */
-func TokenMatch[TObs cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable](
+func TokenMatch[
+	TObs cmp.Ordered,
+	TToken,
+	TTokenRole,
+	TLexerState,
+	TNodeKind comparable,
+](
 	token TToken,
 	kind TNodeKind,
 ) Rule[TObs, TToken, TTokenRole, TLexerState, TNodeKind] {
-
 	return func(ctx Ctx[TObs, TToken, TTokenRole, TLexerState, TNodeKind]) (*syntaxa.SyntaxaASTNode[TObs, TToken, TTokenRole, TNodeKind], bool) {
-
 		lex := ctx.Peek(0)
 		if lex.Token != token {
 			return nil, false
@@ -244,9 +308,8 @@ func TokenMatch[TObs cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind com
 
 		ctx.Consume()
 
-		node := ctx.CreateASTNode()
-		node.NodeKind = kind
-		node.Tokens = append(node.Tokens, lex)
+		node := ctx.Editor.NewNode(kind)
+		ctx.Editor.AddToken(node, lex)
 
 		return node, true
 	}

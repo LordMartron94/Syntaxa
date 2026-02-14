@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"fmt"
 	"lexarch"
+	"structarch"
 )
 
 // =============================================================
@@ -139,18 +140,9 @@ type ExecRuleContext[
 	   ============================================================ */
 
 	/*
-		CreateASTNode constructs a new AST node with all parser-owned
-		defaults initialized.
-
-		Rules are expected to:
-		  - set NodeKind
-		  - attach children or slots
-		  - attach tokens
-		  - optionally override spans or attributes
+		Editor provides invariant-safe AST mutation and creation.
 	*/
-	CreateASTNode func() *SyntaxaASTNode[
-		TObservation, TToken, TTokenRole, TNodeKind,
-	]
+	Editor *ASTEditor[TObservation, TToken, TTokenRole, TNodeKind]
 
 	/* ============================================================
 	   Recovery management
@@ -225,7 +217,7 @@ func BuildExecRuleContextFromSlice[
 
 	ctx := buildBaseContext[TObservation, TToken, TTokenRole, TLexerState](
 		errors,
-		newASTNodeFactory(parser),
+		parser.errorNodeKind,
 	)
 
 	// ---------------------------------------------------------
@@ -346,7 +338,7 @@ func BuildExecRuleContextFromLexerSession[
 
 	ctx := buildBaseContext[TObservation, TToken, TTokenRole, TState](
 		errors,
-		newASTNodeFactory(parser),
+		parser.errorNodeKind,
 	)
 
 	// ---------------------------------------------------------
@@ -481,7 +473,7 @@ func BuildExecRuleContextFromStreamingSession[
 
 	ctx := buildBaseContext[TObservation, TToken, TTokenRole, TState](
 		errors,
-		newASTNodeFactory(parser),
+		parser.errorNodeKind,
 	)
 
 	// ---------------------------------------------------------
@@ -611,47 +603,571 @@ The node is designed to support:
 type SyntaxaASTNode[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind comparable] struct {
 
 	/* Stable unique identifier for this node instance. */
-	ID uint64
+	id uint64
 
 	/* Client-defined syntactic category of the node. */
-	NodeKind TNodeKind
+	kind TNodeKind
 
 	// ---------------------------------------------------------
 	// SOURCE MAPPING
 	// ---------------------------------------------------------
 
-	Start       int
-	End         int
-	StartLine   int
-	StartColumn int
-	EndLine     int
-	EndColumn   int
+	start       int
+	end         int
+	startLine   int
+	startColumn int
+	endLine     int
+	endColumn   int
 
 	// ---------------------------------------------------------
 	// STRUCTURAL RELATIONSHIPS
 	// ---------------------------------------------------------
 
-	Parent   *SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind]
-	Children []*SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind]
-	Slots    map[string]*SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind]
+	parent   *SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind]
+	children []*SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind]
+	slots    map[string]*SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind]
 
 	// ---------------------------------------------------------
 	// TOKEN PRESERVATION
 	// ---------------------------------------------------------
 
-	Tokens []lexarch.Lexeme[TObservation, TToken, TTokenRole]
+	tokens []lexarch.Lexeme[TObservation, TToken, TTokenRole]
 
 	// ---------------------------------------------------------
 	// METADATA
 	// ---------------------------------------------------------
 
-	Attributes map[string]any
+	attributes map[string]any
 
 	// ---------------------------------------------------------
 	// INCREMENTAL SYSTEMS
 	// ---------------------------------------------------------
 
-	Revision uint64
+	revision uint64
+}
+
+func (n *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) ID() uint64 {
+	return n.id
+}
+
+func (n *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) Kind() TKind {
+	return n.kind
+}
+
+func (n *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) Parent() *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind] {
+	return n.parent
+}
+
+/* Children returns a defensive copy of child nodes. */
+func (n *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) Children() []*SyntaxaASTNode[TObs, TToken, TTokenRole, TKind] {
+	out := make([]*SyntaxaASTNode[TObs, TToken, TTokenRole, TKind], len(n.children))
+	copy(out, n.children)
+	return out
+}
+
+/* Slot retrieves a node assigned to a named slot or nil. */
+func (n *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) Slot(name string) *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind] {
+	if n.slots == nil {
+		return nil
+	}
+	return n.slots[name]
+}
+
+/* SlotNames returns all defined slot keys. */
+func (n *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) SlotNames() []string {
+	if n.slots == nil {
+		return nil
+	}
+	out := make([]string, 0, len(n.slots))
+	for k := range n.slots {
+		out = append(out, k)
+	}
+	return out
+}
+
+/* Tokens returns a defensive copy of attached tokens. */
+func (n *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) Tokens() []lexarch.Lexeme[TObs, TToken, TTokenRole] {
+	out := make([]lexarch.Lexeme[TObs, TToken, TTokenRole], len(n.tokens))
+	copy(out, n.tokens)
+	return out
+}
+
+func (n *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) Span() (int, int) {
+	return n.start, n.end
+}
+
+func (n *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) LineSpan() (int, int, int, int) {
+	return n.startLine, n.startColumn, n.endLine, n.endColumn
+}
+
+func (n *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) Revision() uint64 {
+	return n.revision
+}
+
+/* Attribute returns an attribute value and presence flag. */
+func (n *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) Attribute(key string) (any, bool) {
+	if n.attributes == nil {
+		return nil, false
+	}
+	v, ok := n.attributes[key]
+	return v, ok
+}
+
+/* AttributeKeys returns all attribute keys. */
+func (n *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) AttributeKeys() []string {
+	if n.attributes == nil {
+		return nil
+	}
+	out := make([]string, 0, len(n.attributes))
+	for k := range n.attributes {
+		out = append(out, k)
+	}
+	return out
+}
+
+/*
+Walk traverses the AST starting at this node using the selected strategy.
+
+Traversal is:
+
+  - cycle-safe
+  - supports subtree pruning
+  - supports early termination
+  - read-only
+
+It delegates internally to structarch.StructArchWalk.
+
+Callback return values:
+
+	skipSubtree:
+	  when true, this node's children are not visited
+
+	stopWalk:
+	  when true, traversal stops immediately
+*/
+func (n *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) Walk(
+	strategy structarch.StructArchWalkStrategy,
+	callback func(
+		node *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind],
+	) (skipSubtree, stopWalk bool),
+) error {
+	return structarch.StructArchWalk(
+		structarch.WalkConfig[
+			*SyntaxaASTNode[TObs, TToken, TTokenRole, TKind],
+			uint64,
+		]{
+			Strategy: strategy,
+
+			ID: func(n *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) uint64 {
+				return n.id
+			},
+
+			Children: func(n *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) []*SyntaxaASTNode[TObs, TToken, TTokenRole, TKind] {
+				return n.walkChildren()
+			},
+
+			Parent: func(n *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind] {
+				return n.parent
+			},
+
+			Callback: callback,
+		},
+		n,
+	)
+}
+
+func (n *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) WalkPre(
+	callback func(*SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) (skip, stop bool),
+) error {
+	return n.Walk(structarch.WALK_STRATEGY_PRE, callback)
+}
+
+func (n *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) WalkPost(
+	callback func(*SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) (skip, stop bool),
+) error {
+	return n.Walk(structarch.WALK_STRATEGY_POST, callback)
+}
+
+func (n *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) WalkBreadth(
+	callback func(*SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) (skip, stop bool),
+) error {
+	return n.Walk(structarch.WALK_STRATEGY_BREADTH, callback)
+}
+
+/*
+FindFirst traverses the subtree and returns the first node
+satisfying the predicate.
+
+Traversal order: pre-order (top-down).
+
+Returns nil if no match exists.
+*/
+func (n *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) FindFirst(
+	predicate func(*SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) bool,
+) *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind] {
+
+	var found *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]
+
+	_ = n.WalkPre(func(cur *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) (bool, bool) {
+		if predicate(cur) {
+			found = cur
+			return false, true
+		}
+		return false, false
+	})
+
+	return found
+}
+
+/*
+FindAll returns all nodes in the subtree satisfying the predicate.
+
+Traversal order: pre-order.
+*/
+func (n *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) FindAll(
+	predicate func(*SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) bool,
+) []*SyntaxaASTNode[TObs, TToken, TTokenRole, TKind] {
+
+	out := make([]*SyntaxaASTNode[TObs, TToken, TTokenRole, TKind], 0)
+
+	_ = n.WalkPre(func(cur *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) (bool, bool) {
+		if predicate(cur) {
+			out = append(out, cur)
+		}
+		return false, false
+	})
+
+	return out
+}
+
+/*
+FindFirstKind returns the first node of the given kind in the subtree.
+
+Returns nil if absent.
+*/
+func (n *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) FindFirstKind(
+	kind TKind,
+) *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind] {
+
+	return n.FindFirst(func(cur *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) bool {
+		return cur.kind == kind
+	})
+}
+
+/*
+FindAllKind returns all nodes of the given kind in the subtree.
+*/
+func (n *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) FindAllKind(
+	kind TKind,
+) []*SyntaxaASTNode[TObs, TToken, TTokenRole, TKind] {
+
+	return n.FindAll(func(cur *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) bool {
+		return cur.kind == kind
+	})
+}
+
+/*
+Exists reports whether any node in the subtree satisfies the predicate.
+*/
+func (n *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) Exists(
+	predicate func(*SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) bool,
+) bool {
+	return n.FindFirst(predicate) != nil
+}
+
+/*
+Count returns the number of nodes satisfying the predicate.
+*/
+func (n *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) Count(
+	predicate func(*SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) bool,
+) int {
+
+	count := 0
+
+	_ = n.WalkPre(func(cur *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) (bool, bool) {
+		if predicate(cur) {
+			count++
+		}
+		return false, false
+	})
+
+	return count
+}
+
+func (n *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) walkChildren() []*SyntaxaASTNode[TObs, TToken, TTokenRole, TKind] {
+
+	total := len(n.children)
+
+	if n.slots != nil {
+		total += len(n.slots)
+	}
+
+	if total == 0 {
+		return nil
+	}
+
+	out := make([]*SyntaxaASTNode[TObs, TToken, TTokenRole, TKind], 0, total)
+	out = append(out, n.children...)
+
+	for _, ch := range n.slots {
+		if ch != nil {
+			out = append(out, ch)
+		}
+	}
+
+	return out
+}
+
+/*
+ASTEditor is the exclusive authority for creating and mutating
+AST structure.
+
+All topology changes are invariant-checked and automatically
+propagate span and incremental revision updates.
+
+Once frozen, the AST becomes immutable.
+*/
+type ASTEditor[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind comparable] struct {
+	nextID uint64
+	root   *SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind]
+	frozen bool
+}
+
+/*
+NewNode creates a detached AST node of the specified kind.
+*/
+func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) NewNode(kind TKind) *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind] {
+	e.ensureMutable()
+
+	e.nextID++
+
+	return &SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]{
+		id:   e.nextID,
+		kind: kind,
+	}
+}
+
+func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) AttachChild(parent, child *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) {
+	e.ensureMutable()
+
+	if child.parent != nil {
+		panic("AST invariant: node already has parent")
+	}
+
+	for p := parent; p != nil; p = p.parent {
+		if p == child {
+			panic("AST invariant: cycle detected")
+		}
+	}
+
+	child.parent = parent
+	parent.children = append(parent.children, child)
+
+	e.markDirtyCascade(parent)
+	e.recomputeSpanUp(parent)
+}
+
+func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) SetSlot(parent *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind], name string, child *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) {
+	e.ensureMutable()
+
+	if child.parent != nil {
+		panic("AST invariant: node already has parent")
+	}
+
+	if parent.slots == nil {
+		parent.slots = make(map[string]*SyntaxaASTNode[TObs, TToken, TTokenRole, TKind])
+	}
+
+	if old := parent.slots[name]; old != nil {
+		old.parent = nil
+	}
+
+	parent.slots[name] = child
+	child.parent = parent
+
+	e.markDirtyCascade(parent)
+	e.recomputeSpanUp(parent)
+}
+
+func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) Replace(oldNode, newNode *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) {
+	e.ensureMutable()
+
+	parent := oldNode.parent
+	if parent == nil {
+		panic("cannot replace root")
+	}
+
+	if newNode.parent != nil {
+		panic("replacement already has parent")
+	}
+
+	for i, ch := range parent.children {
+		if ch == oldNode {
+			parent.children[i] = newNode
+			newNode.parent = parent
+			oldNode.parent = nil
+			e.markDirtyCascade(parent)
+			e.recomputeSpanUp(parent)
+			return
+		}
+	}
+
+	for k, v := range parent.slots {
+		if v == oldNode {
+			parent.slots[k] = newNode
+			newNode.parent = parent
+			oldNode.parent = nil
+			e.markDirtyCascade(parent)
+			e.recomputeSpanUp(parent)
+			return
+		}
+	}
+
+	panic("node not owned by parent")
+}
+
+func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) Detach(node *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) {
+	e.ensureMutable()
+
+	parent := node.parent
+	if parent == nil {
+		return
+	}
+
+	for i, ch := range parent.children {
+		if ch == node {
+			parent.children = append(parent.children[:i], parent.children[i+1:]...)
+			node.parent = nil
+			e.markDirtyCascade(parent)
+			return
+		}
+	}
+
+	for k, v := range parent.slots {
+		if v == node {
+			delete(parent.slots, k)
+			node.parent = nil
+			e.markDirtyCascade(parent)
+			return
+		}
+	}
+}
+
+func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) SetAttribute(node *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind], key string, value any) {
+	e.ensureMutable()
+
+	if node.attributes == nil {
+		node.attributes = make(map[string]any)
+	}
+	node.attributes[key] = value
+	e.markDirtyCascade(node)
+}
+
+func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) DeleteAttribute(node *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind], key string) {
+	e.ensureMutable()
+
+	if node.attributes == nil {
+		return
+	}
+	delete(node.attributes, key)
+	e.markDirtyCascade(node)
+}
+
+func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) AddToken(node *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind], tok lexarch.Lexeme[TObs, TToken, TTokenRole]) {
+	e.ensureMutable()
+	node.tokens = append(node.tokens, tok)
+	e.markDirtyCascade(node)
+}
+
+func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) SetTokens(node *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind], toks []lexarch.Lexeme[TObs, TToken, TTokenRole]) {
+	e.ensureMutable()
+
+	node.tokens = make([]lexarch.Lexeme[TObs, TToken, TTokenRole], len(toks))
+	copy(node.tokens, toks)
+
+	e.markDirtyCascade(node)
+}
+
+func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) SetSpan(
+	node *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind],
+	start, end int,
+) {
+	e.ensureMutable()
+
+	node.start = start
+	node.end = end
+
+	e.markDirtyCascade(node)
+}
+
+func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) SetLineSpan(
+	node *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind],
+	sl, sc, el, ec int,
+) {
+	e.ensureMutable()
+
+	node.startLine = sl
+	node.startColumn = sc
+	node.endLine = el
+	node.endColumn = ec
+
+	e.markDirtyCascade(node)
+}
+
+func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) markDirtyCascade(n *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) {
+	for cur := n; cur != nil; cur = cur.parent {
+		cur.revision++
+	}
+}
+
+func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) recomputeSpanUp(n *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) {
+	for cur := n; cur != nil; cur = cur.parent {
+		e.recomputeSpan(cur)
+	}
+}
+
+func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) recomputeSpan(n *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) {
+	first := true
+	var minS, maxE int
+
+	apply := func(ch *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) {
+		if ch == nil {
+			return
+		}
+		if first {
+			first = false
+			minS, maxE = ch.start, ch.end
+			return
+		}
+		if ch.start < minS {
+			minS = ch.start
+		}
+		if ch.end > maxE {
+			maxE = ch.end
+		}
+	}
+
+	for _, ch := range n.children {
+		apply(ch)
+	}
+	for _, v := range n.slots {
+		apply(v)
+	}
+
+	if !first {
+		n.start = minS
+		n.end = maxE
+	}
+}
+
+func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) Freeze() {
+	e.frozen = true
+}
+
+func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) ensureMutable() {
+	if e.frozen {
+		panic("AST is frozen and immutable")
+	}
 }
 
 // =============================================================
@@ -734,8 +1250,9 @@ Responsibilities:
   - AST assembly
 */
 type SyntaxaParser[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind, TLexerState comparable] struct {
-	selectRule   RuleSelector[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
-	rootNodeKind TNodeKind
+	selectRule    RuleSelector[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
+	rootNodeKind  TNodeKind
+	errorNodeKind TNodeKind
 
 	nodeID uint64
 }
@@ -745,17 +1262,13 @@ SyntaxaParserCreate constructs a new parser instance.
 */
 func SyntaxaParserCreate[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind, TLexerState comparable](
 	selectRule RuleSelector[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
-	rootNodeKind TNodeKind,
+	rootNodeKind, errorNodeKind TNodeKind,
 ) *SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TLexerState] {
 	return &SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TLexerState]{
-		selectRule:   selectRule,
-		rootNodeKind: rootNodeKind,
+		selectRule:    selectRule,
+		rootNodeKind:  rootNodeKind,
+		errorNodeKind: errorNodeKind,
 	}
-}
-
-func (p *SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TLexerState]) nextNodeID() uint64 {
-	p.nodeID++
-	return p.nodeID
 }
 
 /*
@@ -772,10 +1285,9 @@ func SyntaxaParserParseASTSimple[TObservation cmp.Ordered, TToken, TTokenRole, T
 	lexemes []lexarch.Lexeme[TObservation, TToken, TTokenRole],
 	eofToken TToken,
 ) (*SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind], *SyntaxErrors) {
-
 	root := &SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind]{
-		NodeKind: parser.rootNodeKind,
-		Children: make([]*SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind], 0),
+		kind:     parser.rootNodeKind,
+		children: make([]*SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind], 0),
 	}
 
 	errors := &SyntaxErrors{Errors: make([]SyntaxError, 0)}
@@ -831,46 +1343,29 @@ func SyntaxaParserParseWithContext[TObservation cmp.Ordered, TToken, TTokenRole,
 }
 
 // =============================================================
-// AST NODE FACTORY (PRIVATE, SHARED)
-// =============================================================
-
-func newASTNodeFactory[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind, TLexerState comparable](
-	parser *SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
-) func() *SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind] {
-
-	return func() *SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind] {
-		return &SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind]{
-			ID:         parser.nextNodeID(),
-			Children:   make([]*SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind], 0),
-			Slots:      make(map[string]*SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind]),
-			Tokens:     make([]lexarch.Lexeme[TObservation, TToken, TTokenRole], 0),
-			Attributes: make(map[string]any),
-			Revision:   0,
-
-			Start:       -1,
-			End:         -1,
-			StartLine:   -1,
-			StartColumn: -1,
-			EndLine:     -1,
-			EndColumn:   -1,
-		}
-
-	}
-}
-
-// =============================================================
 // CONTEXT BUILDERS (SHARED CORE)
 // =============================================================
 
-func buildBaseContext[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable](
+func buildBaseContext[
+	TObservation cmp.Ordered,
+	TToken,
+	TTokenRole,
+	TLexerState,
+	TNodeKind comparable,
+](
 	errors *SyntaxErrors,
-	createNode func() *SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind],
+	errorNodeKind TNodeKind,
 ) ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
-
 	recoveryStack := make([][]TToken, 0)
 	skipTokensStack := make([][]TTokenRole, 0)
 
+	editor := &ASTEditor[TObservation, TToken, TTokenRole, TNodeKind]{}
+
 	return ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]{
+
+		// ====================================================
+		// Error reporting
+		// ====================================================
 
 		Report: func(line, column int, description string) {
 			errors.Errors = append(errors.Errors, SyntaxError{
@@ -880,13 +1375,23 @@ func buildBaseContext[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState,
 			})
 		},
 
-		CreateASTNode: createNode,
+		// ====================================================
+		// AST system
+		// ====================================================
 
-		CreateErrorNode: func(message string) *SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind] {
-			n := createNode()
-			n.Attributes["error"] = message
+		Editor: editor,
+
+		CreateErrorNode: func(message string) *SyntaxaASTNode[
+			TObservation, TToken, TTokenRole, TNodeKind,
+		] {
+			n := editor.NewNode(errorNodeKind)
+			editor.SetAttribute(n, "error", message)
 			return n
 		},
+
+		// ====================================================
+		// Recovery stack
+		// ====================================================
 
 		PushRecovery: func(tokens ...TToken) {
 			cp := make([]TToken, len(tokens))
@@ -906,6 +1411,10 @@ func buildBaseContext[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState,
 			}
 			return recoveryStack[len(recoveryStack)-1]
 		},
+
+		// ====================================================
+		// Skip-role stack
+		// ====================================================
 
 		PushSkipRoles: func(roles ...TTokenRole) {
 			cp := make([]TTokenRole, len(roles))
@@ -956,14 +1465,19 @@ func recoverWithContext[TObservation cmp.Ordered, TToken, TTokenRole, TLexerStat
 	}
 }
 
-func parseWithContext[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable](
+func parseWithContext[
+	TObservation cmp.Ordered,
+	TToken,
+	TTokenRole,
+	TLexerState,
+	TNodeKind comparable,
+](
 	parser *SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
 	execCtx ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	root *SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind],
 	eofToken TToken,
 ) {
-	selectCtx := execCtx.selectCTX()
-	defer finalizeASTSpans(root)
+	editor := execCtx.Editor
 
 	lastCursor := -1
 
@@ -976,10 +1490,13 @@ func parseWithContext[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState,
 
 		start := execCtx.Save().tokenIndex
 
-		rule := parser.selectRule(selectCtx)
+		rule := parser.selectRule(execCtx.selectCTX())
+
+		// ====================================================
+		// No rule matched → structured error node
+		// ====================================================
 
 		if rule == nil {
-
 			execCtx.Report(
 				current.StartLine,
 				current.StartColumn,
@@ -987,9 +1504,9 @@ func parseWithContext[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState,
 			)
 
 			errNode := execCtx.CreateErrorNode("unexpected token")
-			errNode.Tokens = append(errNode.Tokens, current)
-			errNode.Parent = root
-			root.Children = append(root.Children, errNode)
+			errNode.tokens = append(errNode.tokens, current)
+
+			execCtx.Editor.AttachChild(root, errNode)
 
 			if !recoverWithContext(execCtx, current, eofToken) {
 				return
@@ -1002,6 +1519,10 @@ func parseWithContext[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState,
 			lastCursor = start
 			continue
 		}
+
+		// ====================================================
+		// Try rule transactionally
+		// ====================================================
 
 		snapshot := execCtx.Save()
 
@@ -1022,89 +1543,11 @@ func parseWithContext[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState,
 			continue
 		}
 
-		node.Parent = root
-		root.Children = append(root.Children, node)
+		// ====================================================
+		// Successful production
+		// ====================================================
+
+		editor.AttachChild(root, node)
 		lastCursor = -1
-	}
-}
-
-func finalizeASTSpans[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind comparable](
-	node *SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind],
-) {
-	if node == nil {
-		return
-	}
-
-	// First finalize children so their spans become available.
-	for _, c := range node.Children {
-		finalizeASTSpans(c)
-	}
-	for _, c := range node.Slots {
-		finalizeASTSpans(c)
-	}
-
-	// If already explicitly set, preserve.
-	if node.Start >= 0 && node.End >= 0 {
-		return
-	}
-
-	// Prefer direct tokens.
-	if len(node.Tokens) > 0 {
-		first := node.Tokens[0]
-		last := node.Tokens[len(node.Tokens)-1]
-
-		node.Start = first.Start
-		node.End = last.End
-
-		node.StartLine = first.StartLine
-		node.StartColumn = first.StartColumn
-		node.EndLine = last.EndLine
-		node.EndColumn = last.EndColumn
-
-		return
-	}
-
-	// Otherwise infer from children+slots.
-	minStart := -1
-	maxEnd := -1
-
-	minLine := -1
-	minCol := -1
-	maxLine := -1
-	maxCol := -1
-
-	consider := func(c *SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind]) {
-		if c == nil || c.Start < 0 || c.End < 0 {
-			return
-		}
-
-		if minStart < 0 || c.Start < minStart {
-			minStart = c.Start
-			minLine = c.StartLine
-			minCol = c.StartColumn
-		}
-
-		if maxEnd < 0 || c.End > maxEnd {
-			maxEnd = c.End
-			maxLine = c.EndLine
-			maxCol = c.EndColumn
-		}
-	}
-
-	for _, c := range node.Children {
-		consider(c)
-	}
-	for _, c := range node.Slots {
-		consider(c)
-	}
-
-	if minStart >= 0 && maxEnd >= 0 {
-		node.Start = minStart
-		node.End = maxEnd
-
-		node.StartLine = minLine
-		node.StartColumn = minCol
-		node.EndLine = maxLine
-		node.EndColumn = maxCol
 	}
 }

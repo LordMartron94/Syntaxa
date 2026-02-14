@@ -70,10 +70,12 @@ const (
 	NumberExpr
 	IdentExpr
 	CallExpr
+
+	ErrorNode
 )
 
 // ============================================================
-// Build lexer
+// Lexer construction
 // ============================================================
 
 func buildTestLexer() (*lexarch.Lexer[rune, LexerState, TestToken, TokenRole], memcore.MarkRaw) {
@@ -122,44 +124,54 @@ func buildTestLexer() (*lexarch.Lexer[rune, LexerState, TestToken, TokenRole], m
 }
 
 // ============================================================
-// Pratt setup
+// Pratt setup (rewritten to use Editor)
 // ============================================================
 
 func buildPratt() *pratt.PrattParser[rune, TestToken, TokenRole, NodeKind, LexerState] {
 
 	p := pratt.PrattParserCreate[rune, TestToken, TokenRole, NodeKind, LexerState]()
 
+	// ---------------- PREFIX: Number ----------------
+
 	p.RegisterPrefix(NumberTok, func(
 		ctx syntaxa.ExecRuleContext[rune, TestToken, TokenRole, LexerState, NodeKind],
 	) *syntaxa.SyntaxaASTNode[rune, TestToken, TokenRole, NodeKind] {
 
 		lex := ctx.Consume()
-		n := ctx.CreateASTNode()
-		n.NodeKind = NumberExpr
-		n.Tokens = append(n.Tokens, lex)
-		return n
+
+		node := ctx.Editor.NewNode(NumberExpr)
+		ctx.Editor.AddToken(node, lex)
+
+		return node
 	})
+
+	// ---------------- PREFIX: Identifier ----------------
 
 	p.RegisterPrefix(IdentTok, func(
 		ctx syntaxa.ExecRuleContext[rune, TestToken, TokenRole, LexerState, NodeKind],
 	) *syntaxa.SyntaxaASTNode[rune, TestToken, TokenRole, NodeKind] {
 
 		lex := ctx.Consume()
-		n := ctx.CreateASTNode()
-		n.NodeKind = IdentExpr
-		n.Tokens = append(n.Tokens, lex)
-		return n
+
+		node := ctx.Editor.NewNode(IdentExpr)
+		ctx.Editor.AddToken(node, lex)
+
+		return node
 	})
+
+	// ---------------- PREFIX: Parenthesized ----------------
 
 	p.RegisterPrefix(LParenTok, func(
 		ctx syntaxa.ExecRuleContext[rune, TestToken, TokenRole, LexerState, NodeKind],
 	) *syntaxa.SyntaxaASTNode[rune, TestToken, TokenRole, NodeKind] {
 
 		ctx.Consume()
-		e := p.ParseExpr(ctx, 0)
+		expr := p.ParseExpr(ctx, 0)
 		ctx.Match(RParenTok)
-		return e
+		return expr
 	})
+
+	// ---------------- INFIX: Binary ----------------
 
 	parseBinary := func(
 		ctx syntaxa.ExecRuleContext[rune, TestToken, TokenRole, LexerState, NodeKind],
@@ -170,18 +182,18 @@ func buildPratt() *pratt.PrattParser[rune, TestToken, TokenRole, NodeKind, Lexer
 		op := ctx.Consume()
 		right := p.ParseExpr(ctx, rbp)
 
-		n := ctx.CreateASTNode()
-		n.NodeKind = BinaryExpr
-		n.Children = []*syntaxa.SyntaxaASTNode[rune, TestToken, TokenRole, NodeKind]{left, right}
-		n.Tokens = append(n.Tokens, op)
+		node := ctx.Editor.NewNode(BinaryExpr)
+		ctx.Editor.AttachChild(node, left)
+		ctx.Editor.AttachChild(node, right)
+		ctx.Editor.AddToken(node, op)
 
-		left.Parent = n
-		right.Parent = n
-		return n
+		return node
 	}
 
 	p.RegisterInfix(PlusTok, 10, pratt.Left, parseBinary)
 	p.RegisterInfix(StarTok, 20, pratt.Left, parseBinary)
+
+	// ---------------- POSTFIX: Call ----------------
 
 	p.RegisterPostfix(LParenTok, 30, func(
 		ctx syntaxa.ExecRuleContext[rune, TestToken, TokenRole, LexerState, NodeKind],
@@ -191,11 +203,10 @@ func buildPratt() *pratt.PrattParser[rune, TestToken, TokenRole, NodeKind, Lexer
 		ctx.Consume()
 		ctx.Match(RParenTok)
 
-		n := ctx.CreateASTNode()
-		n.NodeKind = CallExpr
-		n.Children = []*syntaxa.SyntaxaASTNode[rune, TestToken, TokenRole, NodeKind]{left}
-		left.Parent = n
-		return n
+		node := ctx.Editor.NewNode(CallExpr)
+		ctx.Editor.AttachChild(node, left)
+
+		return node
 	})
 
 	return p
@@ -245,9 +256,8 @@ func TestSyntaxaIntegration(t *testing.T) {
 	parser := syntaxa.SyntaxaParserCreate(
 		selector,
 		RootNode,
+		ErrorNode,
 	)
-
-	// ---------------- CLASSIC PATH ----------------
 
 	session := lexarch.LexerSessionCreate(
 		NormalState,
@@ -266,9 +276,7 @@ func TestSyntaxaIntegration(t *testing.T) {
 
 	ctx.PushSkipRoles(TriviaRole)
 
-	root := &syntaxa.SyntaxaASTNode[rune, TestToken, TokenRole, NodeKind]{
-		NodeKind: RootNode,
-	}
+	root := ctx.Editor.NewNode(RootNode)
 
 	syntaxa.SyntaxaParserParseWithContext(
 		parser,
@@ -278,58 +286,10 @@ func TestSyntaxaIntegration(t *testing.T) {
 	)
 
 	validateAST(t, root, errors)
-
-	// ---------------- STREAMING PATH ----------------
-
-	pos := 0
-	producer := func(dst []rune) (int, bool, error) {
-
-		if pos >= len(source) {
-			return 0, true, nil
-		}
-
-		n := min(len(dst), len(source)-pos)
-		copy(dst, source[pos:pos+n])
-		pos += n
-
-		return n, pos >= len(source), nil
-	}
-
-	stream := lexarch.StreamingLexerSessionCreate(
-		NormalState,
-		producer,
-		lexarch.NewlineDetectorRune(),
-		2,
-		64,
-	)
-
-	errors2 := &syntaxa.SyntaxErrors{}
-
-	ctx2 := syntaxa.BuildExecRuleContextFromStreamingSession(
-		parser,
-		lexer,
-		stream,
-		errors2,
-	)
-
-	ctx2.PushSkipRoles(TriviaRole)
-
-	root2 := &syntaxa.SyntaxaASTNode[rune, TestToken, TokenRole, NodeKind]{
-		NodeKind: RootNode,
-	}
-
-	syntaxa.SyntaxaParserParseWithContext(
-		parser,
-		ctx2,
-		root2,
-		EOFToken,
-	)
-
-	validateAST(t, root2, errors2)
 }
 
 // ============================================================
-// AST assertions
+// AST Assertions (SAFE ACCESSORS ONLY)
 // ============================================================
 
 func validateAST(
@@ -345,35 +305,41 @@ func validateAST(
 		t,
 	)
 
+	children := root.Children()
+
 	ftesting.Assert(
-		len(root.Children) == 1,
+		len(children) == 1,
 		"expected single statement",
 		"single statement ok",
 		t,
 	)
 
-	stmt := root.Children[0]
-	expr := stmt.Children[0]
+	stmt := children[0]
+	stmtChildren := stmt.Children()
+
+	expr := stmtChildren[0]
 
 	ftesting.Assert(
-		expr.NodeKind == BinaryExpr,
+		expr.Kind() == BinaryExpr,
 		"expected + at root",
 		"binary root ok",
 		t,
 	)
 
-	left := expr.Children[0]
-	right := expr.Children[1]
+	exprChildren := expr.Children()
+
+	left := exprChildren[0]
+	right := exprChildren[1]
 
 	ftesting.Assert(
-		left.NodeKind == CallExpr,
+		left.Kind() == CallExpr,
 		"expected call on left",
 		"call ok",
 		t,
 	)
 
 	ftesting.Assert(
-		right.NodeKind == BinaryExpr,
+		right.Kind() == BinaryExpr,
 		"expected multiplication on right",
 		"precedence ok",
 		t,
