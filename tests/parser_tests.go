@@ -269,6 +269,7 @@ func TestSyntaxaIntegration(t *testing.T) {
 		selector,
 		RootNode,
 		ErrorNode,
+		true,
 	)
 
 	session := lexarch.LexerSessionCreate(

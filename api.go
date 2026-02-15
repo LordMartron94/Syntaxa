@@ -3,6 +3,7 @@ package syntaxa
 import (
 	"cmp"
 	"fmt"
+	"foundation/extensions"
 	"lexarch"
 	"strings"
 	"structarch"
@@ -1028,12 +1029,17 @@ func (n *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) DebugDump(
 		if formatter.ShowAttributes && formatter.FormatAttribute != nil && len(node.attributes) > 0 {
 			out.WriteString(" <")
 			first := true
-			for k, v := range node.attributes {
+
+			attributes := extensions.MapSortFunc(node.attributes, func(pairA, pairB extensions.KeyValuePair[string, any]) int {
+				return cmp.Compare(pairA.Key, pairB.Key)
+			})
+
+			for _, attribute := range attributes {
 				if !first {
 					out.WriteString(", ")
 				}
 				first = false
-				txt := formatter.FormatAttribute(k, v)
+				txt := formatter.FormatAttribute(attribute.Key, attribute.Value)
 				txt = applyColor(txt, formatter.ColorAttribute)
 				out.WriteString(txt)
 			}
@@ -1097,11 +1103,15 @@ func (n *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) DebugDump(
 		}
 
 		if cur.slots != nil {
-			for name, ch := range cur.slots {
-				if ch == nil {
+			slots := extensions.MapSortFunc(cur.slots, func(pairA, pairB extensions.KeyValuePair[string, *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]]) int {
+				return cmp.Compare(pairA.Key, pairB.Key)
+			})
+
+			for _, slot := range slots {
+				if slot.Value == nil {
 					continue
 				}
-				edges = append(edges, edge{isSlot: true, name: name, node: ch})
+				edges = append(edges, edge{isSlot: true, name: slot.Key, node: slot.Value})
 			}
 		}
 
@@ -1343,6 +1353,8 @@ func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) Detach(node *SyntaxaASTNode
 			return
 		}
 	}
+
+	e.recomputeSpanUp(parent)
 }
 
 func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) SetAttribute(node *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind], key string, value any) {
@@ -1469,7 +1481,7 @@ func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) recomputeSpan(
 		endColumn   int
 	)
 
-	apply := func(ch *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) {
+	applyNode := func(ch *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) {
 		if ch == nil {
 			return
 		}
@@ -1484,11 +1496,10 @@ func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) recomputeSpan(
 			startColumn = ch.startColumn
 			endLine = ch.endLine
 			endColumn = ch.endColumn
-
 			return
 		}
 
-		// ───── byte span ─────
+		// ---- byte span ----
 
 		if ch.start < minStart {
 			minStart = ch.start
@@ -1497,7 +1508,7 @@ func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) recomputeSpan(
 			maxEnd = ch.end
 		}
 
-		// ───── start position ─────
+		// ---- start position ----
 
 		if ch.startLine < startLine ||
 			(ch.startLine == startLine && ch.startColumn < startColumn) {
@@ -1506,7 +1517,7 @@ func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) recomputeSpan(
 			startColumn = ch.startColumn
 		}
 
-		// ───── end position ─────
+		// ---- end position ----
 
 		if ch.endLine > endLine ||
 			(ch.endLine == endLine && ch.endColumn > endColumn) {
@@ -1516,16 +1527,66 @@ func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) recomputeSpan(
 		}
 	}
 
+	applyToken := func(tok lexarch.Lexeme[TObs, TToken, TTokenRole]) {
+		if first {
+			first = false
+
+			minStart = tok.Start
+			maxEnd = tok.End
+
+			startLine = tok.StartLine
+			startColumn = tok.StartColumn
+			endLine = tok.EndLine
+			endColumn = tok.EndColumn
+			return
+		}
+
+		// ---- byte span ----
+
+		if tok.Start < minStart {
+			minStart = tok.Start
+		}
+		if tok.End > maxEnd {
+			maxEnd = tok.End
+		}
+
+		// ---- start position ----
+
+		if tok.StartLine < startLine ||
+			(tok.StartLine == startLine && tok.StartColumn < startColumn) {
+
+			startLine = tok.StartLine
+			startColumn = tok.StartColumn
+		}
+
+		// ---- end position ----
+
+		if tok.EndLine > endLine ||
+			(tok.EndLine == endLine && tok.EndColumn > endColumn) {
+
+			endLine = tok.EndLine
+			endColumn = tok.EndColumn
+		}
+	}
+
+	// ─────────────────────────────────────
+	// Union all span contributors
+	// ─────────────────────────────────────
+
+	for _, tok := range n.tokens {
+		applyToken(tok)
+	}
+
 	for _, ch := range n.children {
-		apply(ch)
+		applyNode(ch)
 	}
 
 	for _, ch := range n.slots {
-		apply(ch)
+		applyNode(ch)
 	}
 
 	if first {
-		return
+		return // no span contributors
 	}
 
 	n.start = minStart
@@ -1637,7 +1698,7 @@ type SyntaxaParser[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind, TLex
 	rootNodeKind  TNodeKind
 	errorNodeKind TNodeKind
 
-	nodeID uint64
+	freezeAfterParse bool
 }
 
 /*
@@ -1646,11 +1707,13 @@ SyntaxaParserCreate constructs a new parser instance.
 func SyntaxaParserCreate[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind, TLexerState comparable](
 	selectRule RuleSelector[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	rootNodeKind, errorNodeKind TNodeKind,
+	freezeAfterParse bool,
 ) *SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TLexerState] {
 	return &SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TLexerState]{
-		selectRule:    selectRule,
-		rootNodeKind:  rootNodeKind,
-		errorNodeKind: errorNodeKind,
+		selectRule:       selectRule,
+		rootNodeKind:     rootNodeKind,
+		errorNodeKind:    errorNodeKind,
+		freezeAfterParse: freezeAfterParse,
 	}
 }
 
@@ -1861,6 +1924,10 @@ func parseWithContext[
 	eofToken TToken,
 ) {
 	editor := execCtx.Editor
+
+	if parser.freezeAfterParse {
+		defer editor.Freeze()
+	}
 
 	lastCursor := -1
 
