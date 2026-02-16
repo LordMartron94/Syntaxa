@@ -118,6 +118,7 @@ func buildTestLexer() (*lexarch.Lexer[rune, LexerState, TestToken, TokenRole], m
 			return memforge.DynamicLinearAllocatorMallocUnsafe(alloc, sz, align)
 		},
 		memcore.MegaByte,
+		lexarch.RuneFormatterDefault(),
 	)
 
 	return lexer, alloc
