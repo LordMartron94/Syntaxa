@@ -22,6 +22,7 @@ implementation that created it.
 */
 type ParseCursor struct {
 	tokenIndex int
+	aux        any
 }
 
 // =============================================================
@@ -273,6 +274,13 @@ func BuildExecRuleContextFromSlice[
 
 	ctx.ConsumeRaw = func() lexarch.Lexeme[TObservation, TToken, TTokenRole] {
 		l := lexemes[*cursor]
+
+		// fmt.Println(l.DebugString(
+		// 	parser.observationFormatter,
+		// 	parser.tokenFormatter,
+		// 	nil,
+		// ))
+
 		*cursor++
 		return l
 	}
@@ -343,6 +351,13 @@ func BuildExecRuleContextFromLexerSession[
 		if err != nil {
 			panic(err)
 		}
+
+		// fmt.Println(lex.DebugString(
+		// 	parser.observationFormatter,
+		// 	parser.tokenFormatter,
+		// 	nil,
+		// ))
+
 		return lex
 	}
 
@@ -363,11 +378,19 @@ func BuildExecRuleContextFromLexerSession[
 	}
 
 	ctx.Save = func() ParseCursor {
-		return ParseCursor{tokenIndex: session.Position()}
+		snap := session.Snapshot()
+		return ParseCursor{
+			tokenIndex: snap.Position,
+			aux:        snap,
+		}
 	}
 
 	ctx.Restore = func(c ParseCursor) {
-		session.SetPosition(c.tokenIndex)
+		snap, ok := c.aux.(lexarch.LexerSessionSnapshot[TState])
+		if !ok {
+			panic("ParseCursor.aux: unexpected snapshot type")
+		}
+		session.RestoreSnapshot(snap)
 	}
 
 	ctx.SetLexerState = func(state TState) {
@@ -421,6 +444,13 @@ func BuildExecRuleContextFromStreamingSession[
 		if err != nil {
 			panic(err)
 		}
+
+		// fmt.Println(lex.DebugString(
+		// 	parser.observationFormatter,
+		// 	parser.tokenFormatter,
+		// 	nil,
+		// ))
+
 		return lex
 	}
 
@@ -441,11 +471,20 @@ func BuildExecRuleContextFromStreamingSession[
 	}
 
 	ctx.Save = func() ParseCursor {
-		return ParseCursor{tokenIndex: session.AbsPosition()}
+		snap := session.Snapshot()
+		return ParseCursor{
+			tokenIndex: snap.AbsPos,
+			aux:        snap,
+		}
 	}
 
 	ctx.Restore = func(c ParseCursor) {
-		session.RestoreAbsolute(c.tokenIndex)
+		snap, ok := c.aux.(lexarch.StreamingLexerSessionSnapshot[TObservation, TState])
+		if !ok {
+			panic("ParseCursor.aux: invalid streaming snapshot")
+		}
+
+		session.RestoreSnapshot(snap)
 	}
 
 	ctx.SetLexerState = func(state TState) {
@@ -1547,10 +1586,6 @@ type SyntaxError struct {
 	Column  int
 }
 
-func (e SyntaxError) Format() string {
-	return fmt.Sprintf("syntax error at %d:%d: %s", e.Line, e.Column, e.Message)
-}
-
 /*
 SyntaxErrors aggregates syntax errors produced during parsing.
 */
@@ -2024,7 +2059,7 @@ func recoverWithContext[TObservation cmp.Ordered, TToken, TTokenRole, TLexerStat
 		}
 
 		ctx.Consume()
-		current = ctx.Peek(0)
+		current = ctx.PeekRaw(0)
 	}
 }
 
@@ -2048,6 +2083,7 @@ func parseWithContext[
 	lastCursor := -1
 
 	for {
+		rawCurrent := execCtx.PeekRaw(0)
 		current := execCtx.Peek(0)
 
 		if current.Token == parser.eofToken {
@@ -2070,15 +2106,13 @@ func parseWithContext[
 				tokenStr = fmt.Sprintf("%v", current.Token)
 			}
 
-			rawStr := current.FormatRaw(parser.observationFormatter)
-
 			execCtx.Report(
-				current.StartLine,
-				current.StartColumn,
+				rawCurrent.StartLine,
+				rawCurrent.StartColumn,
 				fmt.Sprintf(
 					"unexpected token %s (input: %q)",
 					tokenStr,
-					rawStr,
+					rawCurrent.FormatRaw(parser.observationFormatter),
 				),
 			)
 
