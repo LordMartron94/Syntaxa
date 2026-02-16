@@ -50,6 +50,9 @@ type SelectRuleContext[TObservation cmp.Ordered, TToken, TTokenRole comparable] 
 	/* PeekRange returns upcoming lexemes without consuming input. */
 	PeekRange func(n int) []lexarch.Lexeme[TObservation, TToken, TTokenRole]
 
+	/* PeekRangeRaw returns upcoming lexemes without consuming input. Skips roles. */
+	PeekRangeRaw func(n int) []lexarch.Lexeme[TObservation, TToken, TTokenRole]
+
 	/* Match reports whether current token matches any provided token. */
 	Match func(tokens ...TToken) bool
 }
@@ -87,6 +90,12 @@ type ExecRuleContext[
 	*/
 	Consume func() lexarch.Lexeme[TObservation, TToken, TTokenRole]
 
+	/* ConsumeIf consumes current token iff it matches any provided token. */
+	ConsumeIf func(tokens ...TToken) bool
+
+	/* Expect consumes token or reports+fails (or reports+returns false). */
+	Expect func(token TToken, message string) bool
+
 	/*
 		ConsumeRaw consumes and returns the current lexeme without
 		skipping any token roles.
@@ -96,8 +105,16 @@ type ExecRuleContext[
 	/*
 		ConsumeRange returns up to `n` upcoming lexemes while
 		consuming input.
+
+		Skips roles.
 	*/
 	ConsumeRange func(n int) []lexarch.Lexeme[TObservation, TToken, TTokenRole]
+
+	/*
+		ConsumeRangeRaw returns up to `n` upcoming lexemes while
+		consuming input.
+	*/
+	ConsumeRangeRaw func(n int) []lexarch.Lexeme[TObservation, TToken, TTokenRole]
 
 	/* ============================================================
 	   Transaction control
@@ -184,10 +201,11 @@ type ExecRuleContext[
 
 func (ctx *ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) selectCTX() SelectRuleContext[TObservation, TToken, TTokenRole] {
 	return SelectRuleContext[TObservation, TToken, TTokenRole]{
-		Peek:      ctx.Peek,
-		PeekRaw:   ctx.PeekRaw,
-		PeekRange: ctx.PeekRange,
-		Match:     ctx.Match,
+		Peek:         ctx.Peek,
+		PeekRaw:      ctx.PeekRaw,
+		PeekRange:    ctx.PeekRange,
+		PeekRangeRaw: ctx.PeekRangeRaw,
+		Match:        ctx.Match,
 	}
 }
 
@@ -217,15 +235,10 @@ func BuildExecRuleContextFromSlice[
 	errors *SyntaxErrors,
 	cursor *int,
 ) ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
-
 	ctx := buildBaseContext[TObservation, TToken, TTokenRole, TLexerState](
 		errors,
 		parser.errorNodeKind,
 	)
-
-	// ---------------------------------------------------------
-	// RAW ACCESS
-	// ---------------------------------------------------------
 
 	ctx.PeekRaw = func(n int) lexarch.Lexeme[TObservation, TToken, TTokenRole] {
 		return lexemes[*cursor+n]
@@ -237,76 +250,15 @@ func BuildExecRuleContextFromSlice[
 		return l
 	}
 
-	ctx.PeekRange = func(n int) []lexarch.Lexeme[TObservation, TToken, TTokenRole] {
+	ctx.PeekRangeRaw = func(n int) []lexarch.Lexeme[TObservation, TToken, TTokenRole] {
 		return lexemes[*cursor : *cursor+n]
 	}
 
-	ctx.ConsumeRange = func(n int) []lexarch.Lexeme[TObservation, TToken, TTokenRole] {
+	ctx.ConsumeRangeRaw = func(n int) []lexarch.Lexeme[TObservation, TToken, TTokenRole] {
 		l := lexemes[*cursor : *cursor+n]
 		*cursor += n
 		return l
 	}
-
-	// ---------------------------------------------------------
-	// SKIP LOGIC
-	// ---------------------------------------------------------
-
-	isSkipped := func(role TTokenRole) bool {
-		skips := ctx.CurrentSkips()
-		for _, r := range skips {
-			if r == role {
-				return true
-			}
-		}
-		return false
-	}
-
-	skipForward := func() {
-		for {
-			if *cursor >= len(lexemes) {
-				return
-			}
-			if !isSkipped(lexemes[*cursor].Role) {
-				return
-			}
-			*cursor++
-		}
-	}
-
-	// ---------------------------------------------------------
-	// LOGICAL ACCESS (AUTO-SKIPPING)
-	// ---------------------------------------------------------
-
-	ctx.Peek = func(n int) lexarch.Lexeme[TObservation, TToken, TTokenRole] {
-		skipForward()
-		return ctx.PeekRaw(n)
-	}
-
-	ctx.Consume = func() lexarch.Lexeme[TObservation, TToken, TTokenRole] {
-		skipForward()
-		return ctx.ConsumeRaw()
-	}
-
-	ctx.Match = func(tokens ...TToken) bool {
-		skipForward()
-
-		if *cursor >= len(lexemes) {
-			return false
-		}
-
-		cur := lexemes[*cursor].Token
-
-		for _, t := range tokens {
-			if cur == t {
-				return true
-			}
-		}
-		return false
-	}
-
-	// ---------------------------------------------------------
-	// CURSOR CONTROL
-	// ---------------------------------------------------------
 
 	ctx.Save = func() ParseCursor {
 		return ParseCursor{tokenIndex: *cursor}
@@ -315,6 +267,8 @@ func BuildExecRuleContextFromSlice[
 	ctx.Restore = func(c ParseCursor) {
 		*cursor = c.tokenIndex
 	}
+
+	finalizeExecContext(&ctx)
 
 	return ctx
 }
@@ -349,10 +303,6 @@ func BuildExecRuleContextFromLexerSession[
 		parser.errorNodeKind,
 	)
 
-	// ---------------------------------------------------------
-	// RAW ACCESS
-	// ---------------------------------------------------------
-
 	ctx.PeekRaw = func(n int) lexarch.Lexeme[TObservation, TToken, TTokenRole] {
 		lex, err := lexarch.LexerPeek(lexer, session, n)
 		if err != nil {
@@ -369,7 +319,7 @@ func BuildExecRuleContextFromLexerSession[
 		return lex
 	}
 
-	ctx.PeekRange = func(n int) []lexarch.Lexeme[TObservation, TToken, TTokenRole] {
+	ctx.PeekRangeRaw = func(n int) []lexarch.Lexeme[TObservation, TToken, TTokenRole] {
 		lex, err := lexarch.LexerPeekRange(lexer, session, n)
 		if err != nil {
 			panic(err)
@@ -377,74 +327,13 @@ func BuildExecRuleContextFromLexerSession[
 		return lex
 	}
 
-	ctx.ConsumeRange = func(n int) []lexarch.Lexeme[TObservation, TToken, TTokenRole] {
+	ctx.ConsumeRangeRaw = func(n int) []lexarch.Lexeme[TObservation, TToken, TTokenRole] {
 		lex, err := lexarch.LexerConsumeRange(lexer, session, n)
 		if err != nil {
 			panic(err)
 		}
 		return lex
 	}
-
-	// ---------------------------------------------------------
-	// SKIP LOGIC
-	// ---------------------------------------------------------
-
-	isSkipped := func(role TTokenRole) bool {
-		skips := ctx.CurrentSkips()
-		for _, r := range skips {
-			if r == role {
-				return true
-			}
-		}
-		return false
-	}
-
-	skipForward := func() {
-		for {
-			lex := ctx.PeekRaw(0)
-
-			if lex.Token == parser.eofToken {
-				return
-			}
-
-			if !isSkipped(lex.Role) {
-				return
-			}
-
-			ctx.ConsumeRaw()
-		}
-	}
-
-	// ---------------------------------------------------------
-	// LOGICAL ACCESS
-	// ---------------------------------------------------------
-
-	ctx.Peek = func(n int) lexarch.Lexeme[TObservation, TToken, TTokenRole] {
-		skipForward()
-		return ctx.PeekRaw(n)
-	}
-
-	ctx.Consume = func() lexarch.Lexeme[TObservation, TToken, TTokenRole] {
-		skipForward()
-		return ctx.ConsumeRaw()
-	}
-
-	ctx.Match = func(tokens ...TToken) bool {
-		skipForward()
-
-		lex := ctx.PeekRaw(0)
-
-		for _, t := range tokens {
-			if lex.Token == t {
-				return true
-			}
-		}
-		return false
-	}
-
-	// ---------------------------------------------------------
-	// CURSOR CONTROL
-	// ---------------------------------------------------------
 
 	ctx.Save = func() ParseCursor {
 		return ParseCursor{tokenIndex: session.Position()}
@@ -457,6 +346,8 @@ func BuildExecRuleContextFromLexerSession[
 	ctx.SetLexerState = func(state TState) {
 		lexarch.LexerSessionSetState(session, state)
 	}
+
+	finalizeExecContext(&ctx)
 
 	return ctx
 }
@@ -490,10 +381,6 @@ func BuildExecRuleContextFromStreamingSession[
 		parser.errorNodeKind,
 	)
 
-	// ---------------------------------------------------------
-	// RAW ACCESS
-	// ---------------------------------------------------------
-
 	ctx.PeekRaw = func(n int) lexarch.Lexeme[TObservation, TToken, TTokenRole] {
 		lex, err := lexarch.LexerPeekStreaming(lexer, session, n)
 		if err != nil {
@@ -510,7 +397,7 @@ func BuildExecRuleContextFromStreamingSession[
 		return lex
 	}
 
-	ctx.PeekRange = func(n int) []lexarch.Lexeme[TObservation, TToken, TTokenRole] {
+	ctx.PeekRangeRaw = func(n int) []lexarch.Lexeme[TObservation, TToken, TTokenRole] {
 		lex, err := lexarch.LexerPeekRangeStreaming(lexer, session, n)
 		if err != nil {
 			panic(err)
@@ -518,74 +405,13 @@ func BuildExecRuleContextFromStreamingSession[
 		return lex
 	}
 
-	ctx.ConsumeRange = func(n int) []lexarch.Lexeme[TObservation, TToken, TTokenRole] {
+	ctx.ConsumeRangeRaw = func(n int) []lexarch.Lexeme[TObservation, TToken, TTokenRole] {
 		lex, err := lexarch.LexerConsumeRangeStreaming(lexer, session, n)
 		if err != nil {
 			panic(err)
 		}
 		return lex
 	}
-
-	// ---------------------------------------------------------
-	// SKIP LOGIC
-	// ---------------------------------------------------------
-
-	isSkipped := func(role TTokenRole) bool {
-		skips := ctx.CurrentSkips()
-		for _, r := range skips {
-			if r == role {
-				return true
-			}
-		}
-		return false
-	}
-
-	skipForward := func() {
-		for {
-			lex := ctx.PeekRaw(0)
-
-			if lex.Token == parser.eofToken {
-				return
-			}
-
-			if !isSkipped(lex.Role) {
-				return
-			}
-
-			ctx.ConsumeRaw()
-		}
-	}
-
-	// ---------------------------------------------------------
-	// LOGICAL ACCESS (AUTO-SKIPPING)
-	// ---------------------------------------------------------
-
-	ctx.Peek = func(n int) lexarch.Lexeme[TObservation, TToken, TTokenRole] {
-		skipForward()
-		return ctx.PeekRaw(n)
-	}
-
-	ctx.Consume = func() lexarch.Lexeme[TObservation, TToken, TTokenRole] {
-		skipForward()
-		return ctx.ConsumeRaw()
-	}
-
-	ctx.Match = func(tokens ...TToken) bool {
-		skipForward()
-
-		lex := ctx.PeekRaw(0)
-
-		for _, t := range tokens {
-			if lex.Token == t {
-				return true
-			}
-		}
-		return false
-	}
-
-	// ---------------------------------------------------------
-	// CURSOR CONTROL
-	// ---------------------------------------------------------
 
 	ctx.Save = func() ParseCursor {
 		return ParseCursor{tokenIndex: session.AbsPosition()}
@@ -598,6 +424,8 @@ func BuildExecRuleContextFromStreamingSession[
 	ctx.SetLexerState = func(state TState) {
 		lexarch.StreamingLexerSessionSetState(session, state)
 	}
+
+	finalizeExecContext(&ctx)
 
 	return ctx
 }
@@ -1911,6 +1739,93 @@ func buildBaseContext[
 			}
 			return skipTokensStack[len(skipTokensStack)-1]
 		},
+	}
+}
+
+func finalizeExecContext[
+	TObservation cmp.Ordered,
+	TToken,
+	TTokenRole,
+	TLexerState,
+	TNodeKind comparable,
+](ctx *ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) {
+
+	isSkipped := func(role TTokenRole) bool {
+		skips := ctx.CurrentSkips()
+		for _, r := range skips {
+			if r == role {
+				return true
+			}
+		}
+		return false
+	}
+
+	skipForward := func() {
+		for {
+			lex := ctx.PeekRaw(0)
+			if !isSkipped(lex.Role) {
+				return
+			}
+			ctx.ConsumeRaw()
+		}
+	}
+
+	ctx.Peek = func(n int) lexarch.Lexeme[TObservation, TToken, TTokenRole] {
+		skipForward()
+		return ctx.PeekRaw(n)
+	}
+
+	ctx.Consume = func() lexarch.Lexeme[TObservation, TToken, TTokenRole] {
+		skipForward()
+		return ctx.ConsumeRaw()
+	}
+
+	ctx.PeekRange = func(n int) []lexarch.Lexeme[TObservation, TToken, TTokenRole] {
+		skipForward()
+		return ctx.PeekRangeRaw(n)
+	}
+
+	ctx.ConsumeRange = func(n int) []lexarch.Lexeme[TObservation, TToken, TTokenRole] {
+		skipForward()
+		return ctx.ConsumeRangeRaw(n)
+	}
+
+	ctx.ConsumeIf = func(tokens ...TToken) bool {
+		skipForward()
+		cur := ctx.PeekRaw(0)
+
+		for _, t := range tokens {
+			if cur.Token == t {
+				ctx.ConsumeRaw()
+				return true
+			}
+		}
+		return false
+	}
+
+	ctx.Expect = func(token TToken, message string) bool {
+		skipForward()
+		cur := ctx.PeekRaw(0)
+
+		if cur.Token == token {
+			ctx.ConsumeRaw()
+			return true
+		}
+
+		ctx.Report(cur.StartLine, cur.StartColumn, message)
+		return false
+	}
+
+	ctx.Match = func(tokens ...TToken) bool {
+		skipForward()
+		cur := ctx.PeekRaw(0)
+
+		for _, t := range tokens {
+			if cur.Token == t {
+				return true
+			}
+		}
+		return false
 	}
 }
 

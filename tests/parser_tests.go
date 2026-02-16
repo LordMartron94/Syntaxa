@@ -168,7 +168,7 @@ func buildPratt() *pratt.PrattParser[rune, TestToken, TokenRole, NodeKind, Lexer
 
 		ctx.Consume()
 		expr := p.ParseExpr(ctx, 0)
-		ctx.Match(RParenTok)
+		ctx.ConsumeIf(RParenTok)
 		return expr
 	})
 
@@ -202,7 +202,7 @@ func buildPratt() *pratt.PrattParser[rune, TestToken, TokenRole, NodeKind, Lexer
 	) *syntaxa.SyntaxaASTNode[rune, TestToken, TokenRole, NodeKind] {
 
 		ctx.Consume()
-		ctx.Match(RParenTok)
+		ctx.ConsumeIf(RParenTok)
 
 		node := ctx.Editor.NewNode(CallExpr)
 		ctx.Editor.AttachChild(node, left)
