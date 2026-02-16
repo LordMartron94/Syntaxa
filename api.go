@@ -290,9 +290,14 @@ func BuildExecRuleContextFromSlice[
 	ctx.Match = func(tokens ...TToken) bool {
 		skipForward()
 
+		if *cursor >= len(lexemes) {
+			return false
+		}
+
+		cur := lexemes[*cursor].Token
+
 		for _, t := range tokens {
-			if lexemes[*cursor].Token == t {
-				*cursor++
+			if cur == t {
 				return true
 			}
 		}
@@ -428,9 +433,9 @@ func BuildExecRuleContextFromLexerSession[
 		skipForward()
 
 		lex := ctx.PeekRaw(0)
+
 		for _, t := range tokens {
 			if lex.Token == t {
-				ctx.ConsumeRaw()
 				return true
 			}
 		}
@@ -569,9 +574,9 @@ func BuildExecRuleContextFromStreamingSession[
 		skipForward()
 
 		lex := ctx.PeekRaw(0)
+
 		for _, t := range tokens {
 			if lex.Token == t {
-				ctx.ConsumeRaw()
 				return true
 			}
 		}
