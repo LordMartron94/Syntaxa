@@ -1579,6 +1579,9 @@ Responsibilities:
 type SyntaxaParser[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind, TLexerState comparable] struct {
 	selectRule RuleSelector[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 
+	tokenFormatter       func(token TToken) string
+	observationFormatter lexarch.ObservationFormatter[TObservation]
+
 	eofToken TToken
 
 	rootNodeKind  TNodeKind
@@ -1592,16 +1595,20 @@ SyntaxaParserCreate constructs a new parser instance.
 */
 func SyntaxaParserCreate[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind, TLexerState comparable](
 	selectRule RuleSelector[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+	tokenFormatter func(token TToken) string,
+	observationFormatter lexarch.ObservationFormatter[TObservation],
 	eofToken TToken,
 	rootNodeKind, errorNodeKind TNodeKind,
 	freezeAfterParse bool,
 ) *SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TLexerState] {
 	return &SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TLexerState]{
-		selectRule:       selectRule,
-		eofToken:         eofToken,
-		rootNodeKind:     rootNodeKind,
-		errorNodeKind:    errorNodeKind,
-		freezeAfterParse: freezeAfterParse,
+		selectRule:           selectRule,
+		tokenFormatter:       tokenFormatter,
+		observationFormatter: observationFormatter,
+		eofToken:             eofToken,
+		rootNodeKind:         rootNodeKind,
+		errorNodeKind:        errorNodeKind,
+		freezeAfterParse:     freezeAfterParse,
 	}
 }
 
@@ -1983,13 +1990,29 @@ func parseWithContext[
 		// ====================================================
 
 		if rule == nil {
+			var tokenStr string
+			if parser.tokenFormatter != nil {
+				tokenStr = parser.tokenFormatter(current.Token)
+			} else {
+				tokenStr = fmt.Sprintf("%v", current.Token)
+			}
+
+			rawStr := current.FormatRaw(parser.observationFormatter)
+
 			execCtx.Report(
 				current.StartLine,
 				current.StartColumn,
-				fmt.Sprintf("unexpected token %v", current.Token),
+				fmt.Sprintf(
+					"unexpected token %s (input: %q)",
+					tokenStr,
+					rawStr,
+				),
 			)
 
-			errNode := execCtx.CreateErrorNode("unexpected token")
+			errNode := execCtx.CreateErrorNode(
+				fmt.Sprintf("unexpected token %s", tokenStr),
+			)
+
 			errNode.tokens = append(errNode.tokens, current)
 
 			execCtx.Editor.AttachChild(root, errNode)
