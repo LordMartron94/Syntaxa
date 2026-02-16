@@ -116,6 +116,33 @@ type ExecRuleContext[
 	*/
 	ConsumeRangeRaw func(n int) []lexarch.Lexeme[TObservation, TToken, TTokenRole]
 
+	/*
+	   Try executes fn transactionally.
+
+	   On failure:
+	     - cursor is restored automatically
+	     - returns false
+
+	   On success:
+	     - state is committed
+	     - returns true
+	*/
+	Try func(fn func() bool) bool
+
+	/* Optional attempts fn once, never fails */
+	Optional func(fn func() bool) bool
+
+	/* ZeroOrMore repeats while fn succeeds */
+	ZeroOrMore func(fn func() bool)
+
+	/* OneOrMore repeats at least once */
+	OneOrMore func(fn func() bool) bool
+
+	/*
+		ExpectOneOf consumes one of provided tokens or reports error.
+	*/
+	ExpectOneOf func(tokens []TToken, message string) bool
+
 	/* ============================================================
 	   Transaction control
 	   ============================================================ */
@@ -1827,6 +1854,70 @@ func finalizeExecContext[
 		}
 		return false
 	}
+
+	// ====================================================
+	// Transactional helpers
+	// ====================================================
+
+	ctx.Try = func(fn func() bool) bool {
+		snap := ctx.Save()
+
+		if fn() {
+			return true
+		}
+
+		ctx.Restore(snap)
+		return false
+	}
+
+	ctx.Optional = func(fn func() bool) bool {
+		ctx.Try(fn)
+		return true
+	}
+
+	ctx.ZeroOrMore = func(fn func() bool) {
+		for {
+			snap := ctx.Save()
+			if !fn() {
+				ctx.Restore(snap)
+				return
+			}
+			if ctx.Save().tokenIndex == snap.tokenIndex {
+				panic("ZeroOrMore: rule succeeded without consuming input")
+			}
+		}
+	}
+
+	ctx.OneOrMore = func(fn func() bool) bool {
+		if !ctx.Try(fn) {
+			return false
+		}
+
+		for ctx.Try(fn) {
+		}
+
+		return true
+	}
+
+	// ====================================================
+	// Multi-token helpers
+	// ====================================================
+
+	ctx.ExpectOneOf = func(tokens []TToken, message string) bool {
+		skipForward()
+		cur := ctx.PeekRaw(0)
+
+		for _, t := range tokens {
+			if cur.Token == t {
+				ctx.ConsumeRaw()
+				return true
+			}
+		}
+
+		ctx.Report(cur.StartLine, cur.StartColumn, message)
+		return false
+	}
+
 }
 
 func recoverWithContext[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable](
