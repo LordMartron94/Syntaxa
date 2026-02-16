@@ -303,7 +303,7 @@ func BuildExecRuleContextFromSlice[
 		*cursor = c.tokenIndex
 	}
 
-	finalizeExecContext(&ctx, parser.eofToken)
+	finalizeExecContext(&ctx, parser.eofToken, parser.defaultSkipRoles)
 
 	return ctx
 }
@@ -397,7 +397,7 @@ func BuildExecRuleContextFromLexerSession[
 		lexarch.LexerSessionSetState(session, state)
 	}
 
-	finalizeExecContext(&ctx, parser.eofToken)
+	finalizeExecContext(&ctx, parser.eofToken, parser.defaultSkipRoles)
 
 	return ctx
 }
@@ -491,7 +491,7 @@ func BuildExecRuleContextFromStreamingSession[
 		lexarch.StreamingLexerSessionSetState(session, state)
 	}
 
-	finalizeExecContext(&ctx, parser.eofToken)
+	finalizeExecContext(&ctx, parser.eofToken, parser.defaultSkipRoles)
 
 	return ctx
 }
@@ -1614,6 +1614,8 @@ Responsibilities:
 type SyntaxaParser[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind, TLexerState comparable] struct {
 	selectRule RuleSelector[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 
+	defaultSkipRoles []TTokenRole
+
 	tokenFormatter       func(token TToken) string
 	observationFormatter lexarch.ObservationFormatter[TObservation]
 
@@ -1644,7 +1646,12 @@ func SyntaxaParserCreate[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind
 		rootNodeKind:         rootNodeKind,
 		errorNodeKind:        errorNodeKind,
 		freezeAfterParse:     freezeAfterParse,
+		defaultSkipRoles:     nil,
 	}
+}
+
+func (p *SyntaxaParser[_, _, TTokenRole, _, _]) SetDefaultSkips(roles ...TTokenRole) {
+	p.defaultSkipRoles = append([]TTokenRole(nil), roles...)
 }
 
 /*
@@ -1730,7 +1737,8 @@ func buildBaseContext[
 	errorNodeKind TNodeKind,
 ) ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
 	recoveryStack := make([][]TToken, 0)
-	skipTokensStack := make([][]TTokenRole, 0)
+	skipTokensStack := make([][]TTokenRole, 1)
+	skipTokensStack[0] = make([]TTokenRole, 0)
 
 	editor := &ASTEditor[TObservation, TToken, TTokenRole, TNodeKind]{}
 	editor.begin()
@@ -1820,6 +1828,7 @@ func finalizeExecContext[
 ](
 	ctx *ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	eofToken TToken,
+	defaultSkipRoles []TTokenRole,
 ) {
 	isEOF := func(l lexarch.Lexeme[TObservation, TToken, TTokenRole]) bool {
 		return l.Token == eofToken
@@ -2033,6 +2042,9 @@ func finalizeExecContext[
 		return false
 	}
 
+	if len(defaultSkipRoles) > 0 {
+		ctx.PushSkipRoles(defaultSkipRoles...)
+	}
 }
 
 func recoverWithContext[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable](
