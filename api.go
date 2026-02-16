@@ -7,6 +7,7 @@ import (
 	"lexarch"
 	"strings"
 	"structarch"
+	"sync/atomic"
 )
 
 // =============================================================
@@ -1233,6 +1234,16 @@ type ASTEditor[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind comparabl
 	nextID uint64
 	root   *SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind]
 	frozen bool
+
+	inUse atomic.Bool
+}
+
+func (e *ASTEditor[TObservation, TToken, TTokenRole, TNodeKind]) begin() {
+	if e.inUse.Load() {
+		panic("ASTEditor reused concurrently or across parses")
+	}
+
+	e.inUse.Store(true)
 }
 
 /*
@@ -1806,6 +1817,7 @@ func buildBaseContext[
 	skipTokensStack := make([][]TTokenRole, 0)
 
 	editor := &ASTEditor[TObservation, TToken, TTokenRole, TNodeKind]{}
+	editor.begin()
 
 	return ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]{
 
