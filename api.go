@@ -397,9 +397,15 @@ func BuildExecRuleContextFromLexerSession[
 	skipForward := func() {
 		for {
 			lex := ctx.PeekRaw(0)
+
+			if lex.Token == parser.eofToken {
+				return
+			}
+
 			if !isSkipped(lex.Role) {
 				return
 			}
+
 			ctx.ConsumeRaw()
 		}
 	}
@@ -532,9 +538,15 @@ func BuildExecRuleContextFromStreamingSession[
 	skipForward := func() {
 		for {
 			lex := ctx.PeekRaw(0)
+
+			if lex.Token == parser.eofToken {
+				return
+			}
+
 			if !isSkipped(lex.Role) {
 				return
 			}
+
 			ctx.ConsumeRaw()
 		}
 	}
@@ -1705,7 +1717,10 @@ Responsibilities:
   - AST assembly
 */
 type SyntaxaParser[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind, TLexerState comparable] struct {
-	selectRule    RuleSelector[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
+	selectRule RuleSelector[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
+
+	eofToken TToken
+
 	rootNodeKind  TNodeKind
 	errorNodeKind TNodeKind
 
@@ -1717,11 +1732,13 @@ SyntaxaParserCreate constructs a new parser instance.
 */
 func SyntaxaParserCreate[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind, TLexerState comparable](
 	selectRule RuleSelector[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+	eofToken TToken,
 	rootNodeKind, errorNodeKind TNodeKind,
 	freezeAfterParse bool,
 ) *SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TLexerState] {
 	return &SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TLexerState]{
 		selectRule:       selectRule,
+		eofToken:         eofToken,
 		rootNodeKind:     rootNodeKind,
 		errorNodeKind:    errorNodeKind,
 		freezeAfterParse: freezeAfterParse,
@@ -1740,7 +1757,6 @@ SyntaxaParserParseWithContext directly.
 func SyntaxaParserParseASTSimple[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind, TLexerState comparable](
 	parser *SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
 	lexemes []lexarch.Lexeme[TObservation, TToken, TTokenRole],
-	eofToken TToken,
 ) (*SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind], *SyntaxErrors) {
 	root := &SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind]{
 		kind:     parser.rootNodeKind,
@@ -1762,7 +1778,6 @@ func SyntaxaParserParseASTSimple[TObservation cmp.Ordered, TToken, TTokenRole, T
 		parser,
 		ctx,
 		root,
-		eofToken,
 	)
 
 	return root, errors
@@ -1794,9 +1809,8 @@ func SyntaxaParserParseWithContext[TObservation cmp.Ordered, TToken, TTokenRole,
 	parser *SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
 	ctx ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	root *SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind],
-	eofToken TToken,
 ) {
-	parseWithContext(parser, ctx, root, eofToken)
+	parseWithContext(parser, ctx, root)
 }
 
 // =============================================================
@@ -1933,7 +1947,6 @@ func parseWithContext[
 	parser *SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
 	execCtx ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	root *SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind],
-	eofToken TToken,
 ) {
 	editor := execCtx.Editor
 
@@ -1946,7 +1959,7 @@ func parseWithContext[
 	for {
 		current := execCtx.Peek(0)
 
-		if current.Token == eofToken {
+		if current.Token == parser.eofToken {
 			return
 		}
 
@@ -1970,7 +1983,7 @@ func parseWithContext[
 
 			execCtx.Editor.AttachChild(root, errNode)
 
-			if !recoverWithContext(execCtx, current, eofToken) {
+			if !recoverWithContext(execCtx, current, parser.eofToken) {
 				return
 			}
 
@@ -1993,7 +2006,7 @@ func parseWithContext[
 		if !ok {
 			execCtx.Restore(snapshot)
 
-			if !recoverWithContext(execCtx, current, eofToken) {
+			if !recoverWithContext(execCtx, current, parser.eofToken) {
 				return
 			}
 

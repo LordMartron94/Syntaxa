@@ -268,6 +268,7 @@ func TestSyntaxaIntegration(t *testing.T) {
 
 	parser := syntaxa.SyntaxaParserCreate(
 		selector,
+		EOFToken,
 		RootNode,
 		ErrorNode,
 		true,
@@ -296,7 +297,6 @@ func TestSyntaxaIntegration(t *testing.T) {
 		parser,
 		ctx,
 		root,
-		EOFToken,
 	)
 
 	dump := root.DebugDump(syntaxa.ASTDebugFormatter[
