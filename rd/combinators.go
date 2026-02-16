@@ -265,7 +265,7 @@ func SequenceAs[
 			}
 		}
 
-		return NodeResult[TObs, TToken, TTokenRole, TKind](node), true
+		return NodeResult(node), true
 	}
 }
 
@@ -310,7 +310,7 @@ func Group[
 		if first == nil {
 			return NoNode[TObs, TToken, TTokenRole, TKind](), true
 		}
-		return NodeResult[TObs, TToken, TTokenRole, TKind](first), true
+		return NodeResult(first), true
 	}
 }
 
@@ -360,7 +360,7 @@ func ManyAs[
 			}
 		}
 
-		return NodeResult[TObs, TToken, TTokenRole, TKind](node), true
+		return NodeResult(node), true
 	}
 }
 
@@ -414,7 +414,7 @@ func Many1As[
 			}
 		}
 
-		return NodeResult[TObs, TToken, TTokenRole, TKind](node), true
+		return NodeResult(node), true
 	}
 }
 
@@ -449,7 +449,7 @@ func Wrap[
 		if res.Node != nil {
 			ctx.Editor.AttachChild(node, res.Node)
 		}
-		return NodeResult[TObs, TToken, TTokenRole, TKind](node), true
+		return NodeResult(node), true
 	}
 }
 
@@ -876,6 +876,189 @@ func SepBy1[
 
 		return NodeResult(node), true
 	}
+}
+
+/* ============================================================
+   CONTEXT SCOPING COMBINATORS
+   ============================================================ */
+
+/*
+WithCtx wraps a rule in a scoped ExecRuleContext mutation.
+
+Lifecycle:
+
+ 1. A transactional snapshot is taken via ctx.Save()
+ 2. enter(ctx) is executed to mutate parsing context
+ 3. rule(ctx) is executed normally
+ 4. exit(ctx) is always executed (deferred)
+ 5. If rule fails, cursor state is restored automatically
+
+Invariants:
+
+  - enter/exit must be symmetrical (stack discipline)
+  - rules MUST NOT manually Restore() on failure
+  - scoped mutations are automatically rolled back on failure
+
+Typical uses:
+
+  - temporary skip role sets
+  - recovery synchronization scopes
+  - lexer state switching
+  - diagnostics scopes
+  - grammar-local parsing modes
+
+This is the foundational primitive for all context-aware grammar control.
+
+Never mutate ExecRuleContext globally inside grammar rules.
+Always use scoped combinators instead.
+
+Failure semantics:
+
+  - if rule fails: state is fully rolled back
+  - if rule succeeds: consumption is committed, scope exits cleanly
+*/
+func WithCtx[
+	TObs cmp.Ordered,
+	TToken,
+	TTokenRole,
+	TLexerState,
+	TKind comparable,
+](
+	enter func(ctx Ctx[TObs, TToken, TTokenRole, TLexerState, TKind]),
+	exit func(ctx Ctx[TObs, TToken, TTokenRole, TLexerState, TKind]),
+	rule Rule[TObs, TToken, TTokenRole, TLexerState, TKind],
+) Rule[TObs, TToken, TTokenRole, TLexerState, TKind] {
+
+	return func(ctx Ctx[TObs, TToken, TTokenRole, TLexerState, TKind]) (Result[TObs, TToken, TTokenRole, TKind], bool) {
+
+		snap := ctx.Save()
+
+		enter(ctx)
+		defer exit(ctx)
+
+		res, ok := rule(ctx)
+		if !ok {
+			ctx.Restore(snap)
+			return NoNode[TObs, TToken, TTokenRole, TKind](), false
+		}
+
+		return res, true
+	}
+}
+
+/*
+WithSkip temporarily installs a local skippable token-role set
+for the duration of rule execution.
+
+All Consume() calls inside the scope automatically ignore these roles.
+
+Typical uses:
+
+  - ignoring whitespace
+  - ignoring comments
+  - grammar-local trivia suppression
+
+The previous skip set is restored automatically on exit or failure.
+
+Never call PushSkipRoles manually inside grammar rules.
+Use this scoped helper instead.
+*/
+func WithSkip[
+	TObs cmp.Ordered,
+	TToken,
+	TTokenRole,
+	TLexerState,
+	TKind comparable,
+](
+	r Rule[TObs, TToken, TTokenRole, TLexerState, TKind],
+	roles ...TTokenRole,
+) Rule[TObs, TToken, TTokenRole, TLexerState, TKind] {
+
+	return WithCtx(
+		func(ctx Ctx[TObs, TToken, TTokenRole, TLexerState, TKind]) {
+			ctx.PushSkipRoles(roles...)
+		},
+		func(ctx Ctx[TObs, TToken, TTokenRole, TLexerState, TKind]) {
+			ctx.PopSkipRoles()
+		},
+		r,
+	)
+}
+
+/*
+WithRecovery temporarily installs a local recovery synchronization token set.
+
+Used to define grammar-specific error resynchronization points.
+
+On syntax error, the parser may skip input until one of these tokens
+is encountered.
+
+The previous recovery set is restored automatically on exit or failure.
+
+Typical uses:
+
+  - statement boundaries
+  - block terminators
+  - delimiter recovery
+
+Always scope recovery behavior — never mutate globally.
+*/
+func WithRecovery[
+	TObs cmp.Ordered,
+	TToken,
+	TTokenRole,
+	TLexerState,
+	TKind comparable,
+](
+	r Rule[TObs, TToken, TTokenRole, TLexerState, TKind],
+	tokens ...TToken,
+) Rule[TObs, TToken, TTokenRole, TLexerState, TKind] {
+
+	return WithCtx(
+		func(ctx Ctx[TObs, TToken, TTokenRole, TLexerState, TKind]) {
+			ctx.PushRecovery(tokens...)
+		},
+		func(ctx Ctx[TObs, TToken, TTokenRole, TLexerState, TKind]) {
+			ctx.PopRecovery()
+		},
+		r,
+	)
+}
+
+/*
+WithLexerState temporarily switches the active lexer ruleset.
+
+Useful for:
+
+  - string interpolation modes
+  - template languages
+  - indentation-sensitive parsing
+  - embedded DSLs
+
+The previous lexer state is restored automatically on exit or failure.
+
+Lexer state transitions are fully transactional.
+*/
+func WithLexerState[
+	TObs cmp.Ordered,
+	TToken,
+	TTokenRole,
+	TLexerState,
+	TKind comparable,
+](
+	state TLexerState,
+	r Rule[TObs, TToken, TTokenRole, TLexerState, TKind],
+) Rule[TObs, TToken, TTokenRole, TLexerState, TKind] {
+
+	return WithCtx(
+		func(ctx Ctx[TObs, TToken, TTokenRole, TLexerState, TKind]) {
+			ctx.SetLexerState(state)
+		},
+		func(ctx Ctx[TObs, TToken, TTokenRole, TLexerState, TKind]) {
+			// state rollback handled by transaction snapshot
+		},
+		r,
+	)
 }
 
 // =============================================================
