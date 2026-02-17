@@ -112,7 +112,6 @@ func buildTestLexer() (*lexarch.Lexer[rune, LexerState, TestToken, TokenRole], m
 		map[LexerState]lexarch.LexingRuleset[rune, TestToken, TokenRole]{
 			NormalState: *rules,
 		},
-		ErrorTok,
 		EOFToken,
 		func(sz, align uint64) memcore.MarkRaw {
 			return memforge.DynamicLinearAllocatorMallocUnsafe(alloc, sz, align)
@@ -276,7 +275,7 @@ func TestSyntaxaIntegration(t *testing.T) {
 		true,
 	)
 
-	session := lexarch.LexerSessionCreate(
+	session := lexarch.LexerSessionCreate[rune, LexerState, TestToken](
 		NormalState,
 		source,
 		lexarch.NewlineDetectorRune(),

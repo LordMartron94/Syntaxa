@@ -229,6 +229,8 @@ type ExecRuleContext[
 		CurrentSkips returns the active skippable role set.
 	*/
 	CurrentSkips func() []TTokenRole
+
+	LastLexingError func() *lexarch.LexingError[TObservation, TToken]
 }
 
 func (ctx *ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) selectCTX() SelectRuleContext[TObservation, TToken, TTokenRole] {
@@ -330,6 +332,10 @@ func BuildExecRuleContextFromSlice[
 		*cursor = c.tokenIndex
 	}
 
+	ctx.LastLexingError = func() *lexarch.LexingError[TObservation, TToken] {
+		return nil
+	}
+
 	finalizeExecContext(&ctx, parser.eofToken, parser.defaultSkipRoles)
 
 	return ctx
@@ -356,7 +362,7 @@ func BuildExecRuleContextFromLexerSession[
 ](
 	parser *SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TState],
 	lexer *lexarch.Lexer[TObservation, TState, TToken, TTokenRole],
-	session *lexarch.LexerSession[TObservation, TState],
+	session *lexarch.LexerSession[TObservation, TState, TToken],
 	errors *SyntaxErrors,
 ) ExecRuleContext[TObservation, TToken, TTokenRole, TState, TNodeKind] {
 
@@ -366,41 +372,22 @@ func BuildExecRuleContextFromLexerSession[
 	)
 
 	ctx.PeekRaw = func(n int) lexarch.Lexeme[TObservation, TToken, TTokenRole] {
-		lex, err := lexarch.LexerPeek(lexer, session, n)
-		if err != nil {
-			panic(err)
-		}
+		lex := lexarch.LexerPeek(lexer, session, n)
 		return lex
 	}
 
 	ctx.ConsumeRaw = func() lexarch.Lexeme[TObservation, TToken, TTokenRole] {
-		lex, err := lexarch.LexerConsume(lexer, session)
-		if err != nil {
-			panic(err)
-		}
-
-		// fmt.Println(lex.DebugString(
-		// 	parser.observationFormatter,
-		// 	parser.tokenFormatter,
-		// 	nil,
-		// ))
-
+		lex := lexarch.LexerConsume(lexer, session)
 		return lex
 	}
 
 	ctx.PeekRangeRaw = func(n int) []lexarch.Lexeme[TObservation, TToken, TTokenRole] {
-		lex, err := lexarch.LexerPeekRange(lexer, session, n)
-		if err != nil {
-			panic(err)
-		}
+		lex := lexarch.LexerPeekRange(lexer, session, n)
 		return lex
 	}
 
 	ctx.ConsumeRangeRaw = func(n int) []lexarch.Lexeme[TObservation, TToken, TTokenRole] {
-		lex, err := lexarch.LexerConsumeRange(lexer, session, n)
-		if err != nil {
-			panic(err)
-		}
+		lex := lexarch.LexerConsumeRange(lexer, session, n)
 		return lex
 	}
 
@@ -422,6 +409,10 @@ func BuildExecRuleContextFromLexerSession[
 
 	ctx.SetLexerState = func(state TState) {
 		lexarch.LexerSessionSetState(session, state)
+	}
+
+	ctx.LastLexingError = func() *lexarch.LexingError[TObservation, TToken] {
+		return session.GetLastError()
 	}
 
 	finalizeExecContext(&ctx, parser.eofToken, parser.defaultSkipRoles)
@@ -449,7 +440,7 @@ func BuildExecRuleContextFromStreamingSession[
 ](
 	parser *SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TState],
 	lexer *lexarch.Lexer[TObservation, TState, TToken, TTokenRole],
-	session *lexarch.StreamingLexerSession[TObservation, TState],
+	session *lexarch.StreamingLexerSession[TObservation, TState, TToken],
 	errors *SyntaxErrors,
 ) ExecRuleContext[TObservation, TToken, TTokenRole, TState, TNodeKind] {
 
@@ -459,41 +450,22 @@ func BuildExecRuleContextFromStreamingSession[
 	)
 
 	ctx.PeekRaw = func(n int) lexarch.Lexeme[TObservation, TToken, TTokenRole] {
-		lex, err := lexarch.LexerPeekStreaming(lexer, session, n)
-		if err != nil {
-			panic(err)
-		}
+		lex := lexarch.LexerPeekStreaming(lexer, session, n)
 		return lex
 	}
 
 	ctx.ConsumeRaw = func() lexarch.Lexeme[TObservation, TToken, TTokenRole] {
-		lex, err := lexarch.LexerConsumeStreaming(lexer, session)
-		if err != nil {
-			panic(err)
-		}
-
-		// fmt.Println(lex.DebugString(
-		// 	parser.observationFormatter,
-		// 	parser.tokenFormatter,
-		// 	nil,
-		// ))
-
+		lex := lexarch.LexerConsumeStreaming(lexer, session)
 		return lex
 	}
 
 	ctx.PeekRangeRaw = func(n int) []lexarch.Lexeme[TObservation, TToken, TTokenRole] {
-		lex, err := lexarch.LexerPeekRangeStreaming(lexer, session, n)
-		if err != nil {
-			panic(err)
-		}
+		lex := lexarch.LexerPeekRangeStreaming(lexer, session, n)
 		return lex
 	}
 
 	ctx.ConsumeRangeRaw = func(n int) []lexarch.Lexeme[TObservation, TToken, TTokenRole] {
-		lex, err := lexarch.LexerConsumeRangeStreaming(lexer, session, n)
-		if err != nil {
-			panic(err)
-		}
+		lex := lexarch.LexerConsumeRangeStreaming(lexer, session, n)
 		return lex
 	}
 
@@ -516,6 +488,10 @@ func BuildExecRuleContextFromStreamingSession[
 
 	ctx.SetLexerState = func(state TState) {
 		lexarch.StreamingLexerSessionSetState(session, state)
+	}
+
+	ctx.LastLexingError = func() *lexarch.LexingError[TObservation, TToken] {
+		return session.GetLastError()
 	}
 
 	finalizeExecContext(&ctx, parser.eofToken, parser.defaultSkipRoles)
@@ -2146,6 +2122,15 @@ func parseWithContext[
 
 		if rawCurrent.Token != parser.eofToken {
 			sawNonEOFRaw = true
+		}
+
+		if lexErr := execCtx.LastLexingError(); lexErr != nil {
+			execCtx.Report(
+				lexErr.StartLine,
+				lexErr.StartColumn,
+				lexErr.Error(),
+			)
+			break
 		}
 
 		if current.Token == parser.eofToken {
