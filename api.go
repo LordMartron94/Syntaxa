@@ -171,6 +171,8 @@ type ExecRuleContext[
 	*/
 	Report func(line, column int, description string)
 
+	reportLexerError func(line, column int, description string)
+
 	/*
 		CreateErrorNode constructs a structured error AST node.
 	*/
@@ -1588,9 +1590,10 @@ type RuleSelector[
 SyntaxError represents a single syntax error.
 */
 type SyntaxError struct {
-	Message string
-	Line    int
-	Column  int
+	ProducedByLexer bool
+	Message         string
+	Line            int
+	Column          int
 }
 
 /*
@@ -1772,6 +1775,15 @@ func buildBaseContext[
 				Message: description,
 				Line:    line,
 				Column:  column,
+			})
+		},
+
+		reportLexerError: func(line, column int, description string) {
+			errors.Errors = append(errors.Errors, SyntaxError{
+				Message:         description,
+				Line:            line,
+				Column:          column,
+				ProducedByLexer: true,
 			})
 		},
 
@@ -2125,7 +2137,7 @@ func parseWithContext[
 		}
 
 		if lexErr := execCtx.LastLexingError(); lexErr != nil {
-			execCtx.Report(
+			execCtx.reportLexerError(
 				lexErr.StartLine,
 				lexErr.StartColumn,
 				lexErr.Error(),
