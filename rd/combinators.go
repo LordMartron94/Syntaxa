@@ -110,8 +110,9 @@ func TopLevel[
 	return func(ctx Ctx[TObs, TToken, TTokenRole, TLexerState, TKind]) (Result[TObs, TToken, TTokenRole, TKind], bool) {
 		res, ok := rule(ctx)
 		if !ok {
-			return NoNode[TObs, TToken, TTokenRole, TKind](), false
+			return res, false
 		}
+
 		res.TopLevel = true
 		return res, true
 	}
@@ -150,7 +151,9 @@ func Choice[
 			ctx.Restore(snap)
 		}
 
-		return NoNode[TObs, TToken, TTokenRole, TKind](), false
+		var zero Result[TObs, TToken, TTokenRole, TKind]
+		return zero, false
+
 	}
 }
 
@@ -215,7 +218,10 @@ func Guard[
 		if pred(ctx) {
 			return NoNode[TObs, TToken, TTokenRole, TKind](), true
 		}
-		return NoNode[TObs, TToken, TTokenRole, TKind](), false
+
+		var zero Result[TObs, TToken, TTokenRole, TKind]
+		return zero, false
+
 	}
 }
 
@@ -249,21 +255,97 @@ func SequenceAs[
 	rules ...Rule[TObs, TToken, TTokenRole, TLexerState, TKind],
 ) Rule[TObs, TToken, TTokenRole, TLexerState, TKind] {
 
+	short := func(raw []TObs) string {
+		const max = 40
+		if len(raw) == 0 {
+			return "∅"
+		}
+		s := fmt.Sprintf("%v", raw)
+		if len(s) > max {
+			return s[:max] + "…"
+		}
+		return s
+	}
+
 	return func(ctx Ctx[TObs, TToken, TTokenRole, TLexerState, TKind]) (Result[TObs, TToken, TTokenRole, TKind], bool) {
 
 		snap := ctx.Save()
 		node := ctx.Editor.NewNode(kind)
 
-		for _, r := range rules {
+		fmt.Printf(
+			"\n▶ SequenceAs %v BEGIN\n",
+			kind,
+		)
+
+		for i, r := range rules {
+
+			before := ctx.Save()
+
+			rawBefore := ctx.PeekRaw(0)
+			logBefore := ctx.Peek(0)
+
 			res, ok := r(ctx)
+
+			after := ctx.Save()
+			rawAfter := ctx.PeekRaw(0)
+			logAfter := ctx.Peek(0)
+
+			moved := after.Index() - before.Index()
+			consumed := moved != 0
+			produced := res.Node != nil
+
 			if !ok {
+				fmt.Printf(
+					"✖ rule #%d FAILED\n"+
+						"    raw:     %v @ %d:%d\n"+
+						"    logical: %v @ %d:%d\n"+
+						"    text:    %s\n",
+					i,
+					rawBefore.Token,
+					rawBefore.StartLine, rawBefore.StartColumn,
+					logBefore.Token,
+					logBefore.StartLine, logBefore.StartColumn,
+					short(rawBefore.Raw),
+				)
+
 				ctx.Restore(snap)
-				return NoNode[TObs, TToken, TTokenRole, TKind](), false
+				return res, false
 			}
-			if res.Node != nil {
+
+			fmt.Printf(
+				"✔ rule #%d OK\n"+
+					"    raw:     %v → %v\n"+
+					"    logical: %v → %v\n"+
+					"    moved:   %d tokens\n"+
+					"    span:    %d:%d → %d:%d\n"+
+					"    text:    %s\n"+
+					"    node:    %v\n",
+				i,
+				rawBefore.Token, rawAfter.Token,
+				logBefore.Token, logAfter.Token,
+				moved,
+				rawBefore.StartLine, rawBefore.StartColumn,
+				rawAfter.EndLine, rawAfter.EndColumn,
+				short(rawBefore.Raw),
+				produced,
+			)
+
+			if !consumed {
+				panic(
+					fmt.Sprintf(
+						"SequenceAs %v rule #%d succeeded without consuming input",
+						kind,
+						i,
+					),
+				)
+			}
+
+			if produced {
 				ctx.Editor.AttachChild(node, res.Node)
 			}
 		}
+
+		fmt.Printf("✔ SequenceAs %v COMPLETE\n\n", kind)
 
 		return NodeResult(node), true
 	}
@@ -300,8 +382,9 @@ func Group[
 			res, ok := r(ctx)
 			if !ok {
 				ctx.Restore(snap)
-				return NoNode[TObs, TToken, TTokenRole, TKind](), false
+				return res, false
 			}
+
 			if first == nil && res.Node != nil {
 				first = res.Node
 			}
@@ -442,7 +525,7 @@ func Wrap[
 		res, ok := rule(ctx)
 		if !ok {
 			ctx.Restore(snap)
-			return NoNode[TObs, TToken, TTokenRole, TKind](), false
+			return res, false
 		}
 
 		node := ctx.Editor.NewNode(kind)
@@ -481,7 +564,8 @@ func TokenMatch[
 
 		lex := ctx.Peek(0)
 		if lex.Token != token {
-			return NoNode[TObs, TToken, TTokenRole, TKind](), false
+			var zero Result[TObs, TToken, TTokenRole, TKind]
+			return zero, false
 		}
 
 		lex = ctx.Consume()
@@ -489,7 +573,58 @@ func TokenMatch[
 		node := ctx.Editor.NewNode(kind)
 		ctx.Editor.AddToken(node, lex)
 
-		return NodeResult[TObs, TToken, TTokenRole, TKind](node), true
+		return NodeResult(node), true
+	}
+}
+
+/*
+TokenExpect matches a single token and produces a leaf AST node(kind).
+
+If current token does not match:
+  - emits a syntax error
+  - fails without consuming
+
+The resulting node:
+  - has the specified node kind
+  - contains the consumed token
+*/
+func TokenExpect[
+	TObs cmp.Ordered,
+	TToken comparable,
+	TTokenRole,
+	TLexerState,
+	TKind comparable,
+](
+	token TToken,
+	kind TKind,
+	message string,
+) Rule[TObs, TToken, TTokenRole, TLexerState, TKind] {
+
+	return func(ctx Ctx[TObs, TToken, TTokenRole, TLexerState, TKind]) (Result[TObs, TToken, TTokenRole, TKind], bool) {
+
+		lex := ctx.Peek(0)
+		if lex.Token != token {
+
+			if message == "" {
+				message = fmt.Sprintf("expected token %v", token)
+			}
+
+			ctx.Report(
+				lex.StartLine,
+				lex.StartColumn,
+				message,
+			)
+
+			var zero Result[TObs, TToken, TTokenRole, TKind]
+			return zero, false
+		}
+
+		lex = ctx.Consume()
+
+		node := ctx.Editor.NewNode(kind)
+		ctx.Editor.AddToken(node, lex)
+
+		return NodeResult(node), true
 	}
 }
 
@@ -513,7 +648,8 @@ func Tok[
 
 		lex := ctx.Peek(0)
 		if lex.Token != token {
-			return NoNode[TObs, TToken, TTokenRole, TKind](), false
+			var zero Result[TObs, TToken, TTokenRole, TKind]
+			return zero, false
 		}
 
 		_ = ctx.Consume()
@@ -546,7 +682,9 @@ func Expect[
 				message = fmt.Sprintf("expected token %v", token)
 			}
 			ctx.Report(lex.StartLine, lex.StartColumn, message)
-			return NoNode[TObs, TToken, TTokenRole, TKind](), false
+			var zero Result[TObs, TToken, TTokenRole, TKind]
+
+			return zero, false
 		}
 
 		_ = ctx.Consume()
@@ -939,7 +1077,7 @@ func WithCtx[
 		res, ok := rule(ctx)
 		if !ok {
 			ctx.Restore(snap)
-			return NoNode[TObs, TToken, TTokenRole, TKind](), false
+			return res, false
 		}
 
 		return res, true
