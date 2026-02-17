@@ -254,81 +254,26 @@ func SequenceAs[
 	kind TKind,
 	rules ...Rule[TObs, TToken, TTokenRole, TLexerState, TKind],
 ) Rule[TObs, TToken, TTokenRole, TLexerState, TKind] {
-
-	short := func(raw []TObs) string {
-		const max = 40
-		if len(raw) == 0 {
-			return "∅"
-		}
-		s := fmt.Sprintf("%v", raw)
-		if len(s) > max {
-			return s[:max] + "…"
-		}
-		return s
-	}
-
 	return func(ctx Ctx[TObs, TToken, TTokenRole, TLexerState, TKind]) (Result[TObs, TToken, TTokenRole, TKind], bool) {
 
 		snap := ctx.Save()
 		node := ctx.Editor.NewNode(kind)
 
-		fmt.Printf(
-			"\n▶ SequenceAs %v BEGIN\n",
-			kind,
-		)
-
 		for i, r := range rules {
 
 			before := ctx.Save()
-
-			rawBefore := ctx.PeekRaw(0)
-			logBefore := ctx.Peek(0)
-
 			res, ok := r(ctx)
 
 			after := ctx.Save()
-			rawAfter := ctx.PeekRaw(0)
-			logAfter := ctx.Peek(0)
 
 			moved := after.Index() - before.Index()
 			consumed := moved != 0
 			produced := res.Node != nil
 
 			if !ok {
-				fmt.Printf(
-					"✖ rule #%d FAILED\n"+
-						"    raw:     %v @ %d:%d\n"+
-						"    logical: %v @ %d:%d\n"+
-						"    text:    %s\n",
-					i,
-					rawBefore.Token,
-					rawBefore.StartLine, rawBefore.StartColumn,
-					logBefore.Token,
-					logBefore.StartLine, logBefore.StartColumn,
-					short(rawBefore.Raw),
-				)
-
 				ctx.Restore(snap)
 				return res, false
 			}
-
-			fmt.Printf(
-				"✔ rule #%d OK\n"+
-					"    raw:     %v → %v\n"+
-					"    logical: %v → %v\n"+
-					"    moved:   %d tokens\n"+
-					"    span:    %d:%d → %d:%d\n"+
-					"    text:    %s\n"+
-					"    node:    %v\n",
-				i,
-				rawBefore.Token, rawAfter.Token,
-				logBefore.Token, logAfter.Token,
-				moved,
-				rawBefore.StartLine, rawBefore.StartColumn,
-				rawAfter.EndLine, rawAfter.EndColumn,
-				short(rawBefore.Raw),
-				produced,
-			)
 
 			if !consumed {
 				panic(
@@ -344,8 +289,6 @@ func SequenceAs[
 				ctx.Editor.AttachChild(node, res.Node)
 			}
 		}
-
-		fmt.Printf("✔ SequenceAs %v COMPLETE\n\n", kind)
 
 		return NodeResult(node), true
 	}
