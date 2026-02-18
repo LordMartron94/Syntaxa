@@ -2164,8 +2164,8 @@ func parseWithContext[
 
 		if rule == nil {
 			execCtx.Report(
-				rawCurrent.StartLine,
-				rawCurrent.StartColumn,
+				current.StartLine,
+				current.StartColumn,
 				"unexpected token",
 			)
 
