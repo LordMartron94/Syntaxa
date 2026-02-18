@@ -4,8 +4,8 @@ import "cmp"
 
 /* RuleResult encapsulates the return value of a parser rule. */
 type RuleResult[TObservation cmp.Ordered, TToken, TTokenRole, TKind comparable] struct {
-	Node     *SyntaxaASTNode[TObservation, TToken, TTokenRole, TKind]
-	TopLevel bool
+	Node    *SyntaxaASTNode[TObservation, TToken, TTokenRole, TKind]
+	SkipAdd bool // Explicitly allow nil.
 }
 
 /*
@@ -22,6 +22,7 @@ type ParserRule[
 	TLexerState,
 	TNodeKind comparable,
 ] func(
+	token internalRuleExecutionToken,
 	ctx ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 ) (RuleResult[TObservation, TToken, TTokenRole, TNodeKind], bool)
 

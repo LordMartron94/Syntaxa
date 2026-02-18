@@ -10,6 +10,8 @@ import (
 // PARSING CURSOR
 // =============================================================
 
+type internalRuleExecutionToken = struct{}
+
 /*
 ParserSnapshot represents a snapshot of parser progress.
 
@@ -199,6 +201,8 @@ func parseWithContext[
 	var lastCursor int
 	var sawNonEOFRaw bool
 
+	inRecovery := false
+
 	for {
 
 		raw := ctx.PeekRaw(0)
@@ -206,6 +210,21 @@ func parseWithContext[
 
 		if raw.Token != parser.eofToken {
 			sawNonEOFRaw = true
+		}
+
+		if inRecovery {
+			ctx.Error.sink.suppress()
+
+			synced := recoverWithContext(ctx, current, parser.eofToken)
+
+			ctx.Error.sink.resume()
+
+			if synced {
+				inRecovery = false
+				continue
+			}
+
+			break
 		}
 
 		// ───── Phase 1: lexer failure ─────
@@ -241,41 +260,25 @@ func parseWithContext[
 		// ───── Phase 3: no rule → error + recovery ─────
 
 		if rule == nil {
-
-			ctx.Error.Report(
-				current.StartLine,
-				current.StartColumn,
-				"unexpected token",
-			)
+			ctx.Error.Report(current.StartLine, current.StartColumn, "unexpected token")
 
 			errNode := ctx.createErrorNode("unexpected token")
 			errNode.tokens = append(errNode.tokens, current)
 			editor.AttachChild(root, errNode)
 
-			if trace != nil {
-				trace.Events = append(trace.Events, event)
-			}
-
-			if recoverWithContext(ctx, current, parser.eofToken) {
-				if startPos == lastCursor {
-					ctx.Token.Consume()
-				}
-				lastCursor = startPos
-				continue
-			}
-
-			break
+			inRecovery = true
+			continue
 		}
 
 		// ───── Phase 4: execute rule ─────
 
-		result, ok := rule(ctx)
+		result, ok := rule(internalRuleExecutionToken{}, ctx)
 		endPos := ctx.Transaction.save().tokenIndex
 
 		if trace != nil {
 			event.RuleSucceeded = ok
 			event.Consumed = endPos != startPos
-			event.TopLevel = result.TopLevel
+			event.TopLevel = true
 			event.NodeReturned = result.Node != nil
 			trace.Events = append(trace.Events, event)
 		}
@@ -305,9 +308,7 @@ func parseWithContext[
 			return trace, err
 		}
 
-		if result.TopLevel {
-			editor.AttachChild(root, result.Node)
-		}
+		editor.AttachChild(root, result.Node)
 
 		lastCursor = -1
 	}
@@ -360,7 +361,6 @@ func validateRuleSuccess[
 	endPos int,
 	current lexarch.Lexeme[TObservation, TToken, TTokenRole],
 ) error {
-
 	if endPos == startPos {
 		return fmt.Errorf(
 			"parser invariant violated: rule succeeded without consuming input at cursor %d (token=%v)",
@@ -369,9 +369,9 @@ func validateRuleSuccess[
 		)
 	}
 
-	if result.TopLevel && result.Node == nil {
+	if result.Node == nil && !result.SkipAdd {
 		return fmt.Errorf(
-			"parser invariant violated: TopLevel rule returned nil node at cursor %d",
+			"parser invariant violated: rule returned nil node without explicit skip at cursor %d",
 			startPos,
 		)
 	}

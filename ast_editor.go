@@ -49,7 +49,7 @@ func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) AttachChild(parent, child *
 	e.ensureMutable()
 
 	if child == nil {
-		panic("AST invariant: nil node not allowed")
+		return
 	}
 
 	if child.parent != nil {

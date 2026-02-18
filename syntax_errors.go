@@ -1,6 +1,8 @@
 package syntaxa
 
-import "cmp"
+import (
+	"cmp"
+)
 
 /*
 SyntaxError represents a single syntax error.
@@ -26,7 +28,8 @@ SyntaxErrors aggregates syntax errors produced during parsing.
 type SyntaxErrors[TObservation cmp.Ordered] struct {
 	Errors []SyntaxError[TObservation]
 
-	stack []errorFrame[TObservation]
+	stack      []errorFrame[TObservation]
+	suppressed int
 }
 
 type errorFrame[TObservation cmp.Ordered] struct {
@@ -45,11 +48,22 @@ func (s *SyntaxErrors[_]) HasErrors() bool {
 	return len(s.Errors) > 0
 }
 
-func (s *SyntaxErrors[TObservation]) PushFrame() {
+func (s *SyntaxErrors[_]) suppress() {
+	s.suppressed++
+}
+
+func (s *SyntaxErrors[_]) resume() {
+	if s.suppressed == 0 {
+		panic("Resume without Suppress")
+	}
+	s.suppressed--
+}
+
+func (s *SyntaxErrors[TObservation]) pushFrame() {
 	s.stack = append(s.stack, errorFrame[TObservation]{})
 }
 
-func (s *SyntaxErrors[TObservation]) PopFrame(commit bool) {
+func (s *SyntaxErrors[TObservation]) popFrame(commit bool) {
 	if len(s.stack) == 0 {
 		panic("SyntaxErrors: PopFrame without PushFrame")
 	}
@@ -57,10 +71,7 @@ func (s *SyntaxErrors[TObservation]) PopFrame(commit bool) {
 	top := s.stack[len(s.stack)-1]
 	s.stack = s.stack[:len(s.stack)-1]
 
-	if commit {
-		if top.best != nil {
-			s.commitCandidate(*top.best)
-		}
+	if !commit {
 		return
 	}
 
@@ -84,6 +95,10 @@ func (s *SyntaxErrors[TObservation]) commitCandidate(err SyntaxError[TObservatio
 }
 
 func (s *SyntaxErrors[TObservation]) report(err SyntaxError[TObservation]) {
+	if s.suppressed > 0 && !err.ProducedByLexer {
+		return
+	}
+
 	if len(s.stack) == 0 {
 		s.Errors = append(s.Errors, err)
 		return
