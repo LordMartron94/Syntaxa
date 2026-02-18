@@ -1140,136 +1140,105 @@ func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) recomputeSpanUp(n *SyntaxaA
 	}
 }
 
+type span struct {
+	start, end int
+	sl, sc     int
+	el, ec     int
+}
+
+func merge(a, b span) span {
+	// byte span
+	if b.start < a.start {
+		a.start = b.start
+	}
+	if b.end > a.end {
+		a.end = b.end
+	}
+
+	// start position
+	if b.sl < a.sl || (b.sl == a.sl && b.sc < a.sc) {
+		a.sl = b.sl
+		a.sc = b.sc
+	}
+
+	// end position
+	if b.el > a.el || (b.el == a.el && b.ec > a.ec) {
+		a.el = b.el
+		a.ec = b.ec
+	}
+
+	return a
+}
+
+func spanFromNode[TObs cmp.Ordered, TToken, TTokenRole, TKind comparable](
+	n *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind],
+) span {
+	return span{
+		start: n.start,
+		end:   n.end,
+		sl:    n.startLine,
+		sc:    n.startColumn,
+		el:    n.endLine,
+		ec:    n.endColumn,
+	}
+}
+
+func spanFromToken[TObs cmp.Ordered, TToken, TTokenRole comparable](
+	t lexarch.Lexeme[TObs, TToken, TTokenRole],
+) span {
+	return span{
+		start: t.Start,
+		end:   t.End,
+		sl:    t.StartLine,
+		sc:    t.StartColumn,
+		el:    t.EndLine,
+		ec:    t.EndColumn,
+	}
+}
+
 func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) recomputeSpan(
 	n *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind],
 ) {
-	first := true
-
 	var (
-		minStart int
-		maxEnd   int
-
-		startLine   int
-		startColumn int
-		endLine     int
-		endColumn   int
+		acc   span
+		first = true
 	)
 
-	applyNode := func(ch *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) {
-		if ch == nil {
-			return
-		}
-
+	apply := func(s span) {
 		if first {
+			acc = s
 			first = false
-
-			minStart = ch.start
-			maxEnd = ch.end
-
-			startLine = ch.startLine
-			startColumn = ch.startColumn
-			endLine = ch.endLine
-			endColumn = ch.endColumn
 			return
 		}
-
-		// ---- byte span ----
-
-		if ch.start < minStart {
-			minStart = ch.start
-		}
-		if ch.end > maxEnd {
-			maxEnd = ch.end
-		}
-
-		// ---- start position ----
-
-		if ch.startLine < startLine ||
-			(ch.startLine == startLine && ch.startColumn < startColumn) {
-
-			startLine = ch.startLine
-			startColumn = ch.startColumn
-		}
-
-		// ---- end position ----
-
-		if ch.endLine > endLine ||
-			(ch.endLine == endLine && ch.endColumn > endColumn) {
-
-			endLine = ch.endLine
-			endColumn = ch.endColumn
-		}
+		acc = merge(acc, s)
 	}
-
-	applyToken := func(tok lexarch.Lexeme[TObs, TToken, TTokenRole]) {
-		if first {
-			first = false
-
-			minStart = tok.Start
-			maxEnd = tok.End
-
-			startLine = tok.StartLine
-			startColumn = tok.StartColumn
-			endLine = tok.EndLine
-			endColumn = tok.EndColumn
-			return
-		}
-
-		// ---- byte span ----
-
-		if tok.Start < minStart {
-			minStart = tok.Start
-		}
-		if tok.End > maxEnd {
-			maxEnd = tok.End
-		}
-
-		// ---- start position ----
-
-		if tok.StartLine < startLine ||
-			(tok.StartLine == startLine && tok.StartColumn < startColumn) {
-
-			startLine = tok.StartLine
-			startColumn = tok.StartColumn
-		}
-
-		// ---- end position ----
-
-		if tok.EndLine > endLine ||
-			(tok.EndLine == endLine && tok.EndColumn > endColumn) {
-
-			endLine = tok.EndLine
-			endColumn = tok.EndColumn
-		}
-	}
-
-	// ─────────────────────────────────────
-	// Union all span contributors
-	// ─────────────────────────────────────
 
 	for _, tok := range n.tokens {
-		applyToken(tok)
+		apply(spanFromToken(tok))
 	}
 
 	for _, ch := range n.children {
-		applyNode(ch)
+		if ch != nil {
+			apply(spanFromNode(ch))
+		}
 	}
 
 	for _, ch := range n.slots {
-		applyNode(ch)
+		if ch != nil {
+			apply(spanFromNode(ch))
+		}
 	}
 
 	if first {
-		return // no span contributors
+		return // no contributors
 	}
 
-	n.start = minStart
-	n.end = maxEnd
-
-	n.startLine = startLine
-	n.startColumn = startColumn
-	n.endLine = endLine
-	n.endColumn = endColumn
+	n.start = acc.start
+	n.end = acc.end
+	n.startLine = acc.sl
+	n.startColumn = acc.sc
+	n.endLine = acc.el
+	n.endColumn = acc.ec
 }
 
 func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) Freeze() {
