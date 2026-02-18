@@ -253,8 +253,8 @@ func parseWithContext[
 
 		// ───── Phase 1: lexer failure ─────
 
-		if lexErr := ctx.LastLexingError(); lexErr != nil {
-			ctx.reportLexerError(
+		if lexErr := ctx.lastLexingError(); lexErr != nil {
+			ctx.Error.reportLexerError(
 				lexErr.StartLine,
 				lexErr.StartColumn,
 				lexErr.Error(),
@@ -268,7 +268,7 @@ func parseWithContext[
 			break
 		}
 
-		startSnap := ctx.save()
+		startSnap := ctx.Transaction.save()
 		startPos := startSnap.tokenIndex
 
 		rule := parser.selectRule(ctx.selectCTX())
@@ -285,13 +285,13 @@ func parseWithContext[
 
 		if rule == nil {
 
-			ctx.Report(
+			ctx.Error.Report(
 				current.StartLine,
 				current.StartColumn,
 				"unexpected token",
 			)
 
-			errNode := ctx.CreateErrorNode("unexpected token")
+			errNode := ctx.createErrorNode("unexpected token")
 			errNode.tokens = append(errNode.tokens, current)
 			editor.AttachChild(root, errNode)
 
@@ -301,7 +301,7 @@ func parseWithContext[
 
 			if recoverWithContext(ctx, current, parser.eofToken) {
 				if startPos == lastCursor {
-					ctx.Consume()
+					ctx.Token.Consume()
 				}
 				lastCursor = startPos
 				continue
@@ -313,7 +313,7 @@ func parseWithContext[
 		// ───── Phase 4: execute rule ─────
 
 		result, ok := rule(ctx)
-		endPos := ctx.save().tokenIndex
+		endPos := ctx.Transaction.save().tokenIndex
 
 		if trace != nil {
 			event.RuleSucceeded = ok
@@ -324,11 +324,11 @@ func parseWithContext[
 		}
 
 		if !ok {
-			ctx.restore(startSnap)
+			ctx.Transaction.restore(startSnap)
 
 			if recoverWithContext(ctx, current, parser.eofToken) {
 				if startPos == lastCursor {
-					ctx.Consume()
+					ctx.Token.Consume()
 				}
 				lastCursor = startPos
 				continue
@@ -355,7 +355,7 @@ func parseWithContext[
 		lastCursor = -1
 	}
 
-	if err := validateFinalAST(root, ctx.getErrors(), sawNonEOFRaw); err != nil {
+	if err := validateFinalAST(root, ctx.Error.sink, sawNonEOFRaw); err != nil {
 		return trace, err
 	}
 
@@ -373,10 +373,10 @@ func recoverWithContext[
 	current lexarch.Lexeme[TObs, TToken, TTokenRole],
 	eof TToken,
 ) bool {
-	sync := ctx.currentRecovery()
+	sync := ctx.Recovery.currentRecovery()
 
 	if len(sync) == 0 {
-		ctx.Consume()
+		ctx.Token.Consume()
 		return current.Token != eof
 	}
 
@@ -384,7 +384,7 @@ func recoverWithContext[
 		if _, ok := sync[current.Token]; ok {
 			return true
 		}
-		ctx.Consume()
+		ctx.Token.Consume()
 		current = ctx.PeekRaw(0)
 	}
 
