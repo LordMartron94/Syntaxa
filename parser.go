@@ -16,12 +16,23 @@ ParserSnapshot represents a snapshot of parser progress.
 It is opaque by design and only meaningful to the RuleContext
 implementation that created it.
 */
-type ParserSnapshot struct {
+type snapshotKind uint8
+
+const (
+	snapSlice snapshotKind = iota
+	snapLexer
+	snapStreaming
+)
+
+type ParserSnapshot[TObs cmp.Ordered, TState comparable] struct {
+	kind       snapshotKind
 	tokenIndex int
-	aux        any
+
+	lexerSnap     lexarch.LexerSessionSnapshot[TState]
+	streamingSnap lexarch.StreamingLexerSessionSnapshot[TObs, TState]
 }
 
-func (p *ParserSnapshot) Index() int {
+func (p *ParserSnapshot[_, _]) Index() int {
 	return p.tokenIndex
 }
 

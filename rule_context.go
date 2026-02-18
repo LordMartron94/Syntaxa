@@ -129,12 +129,12 @@ type ExecRuleContext[
 	/*
 		save snapshots the current cursor state.
 	*/
-	save func() ParserSnapshot
+	save func() ParserSnapshot[TObservation, TLexerState]
 
 	/*
 		restore restores a previously saved cursor state.
 	*/
-	restore func(ParserSnapshot)
+	restore func(ParserSnapshot[TObservation, TLexerState])
 
 	/* ============================================================
 	   Error handling
@@ -314,11 +314,11 @@ func BuildExecRuleContextFromSlice[
 		},
 	})
 
-	ctx.save = func() ParserSnapshot {
-		return ParserSnapshot{tokenIndex: *cursor}
+	ctx.save = func() ParserSnapshot[TObservation, TLexerState] {
+		return ParserSnapshot[TObservation, TLexerState]{tokenIndex: *cursor}
 	}
 
-	ctx.restore = func(c ParserSnapshot) {
+	ctx.restore = func(c ParserSnapshot[TObservation, TLexerState]) {
 		*cursor = c.tokenIndex
 	}
 
@@ -353,20 +353,16 @@ func BuildExecRuleContextFromLexerSession[
 		},
 	})
 
-	ctx.save = func() ParserSnapshot {
+	ctx.save = func() ParserSnapshot[TObservation, TState] {
 		snap := session.Snapshot()
-		return ParserSnapshot{
+		return ParserSnapshot[TObservation, TState]{
 			tokenIndex: snap.Position,
-			aux:        snap,
+			lexerSnap:  snap,
 		}
 	}
 
-	ctx.restore = func(c ParserSnapshot) {
-		snap, ok := c.aux.(lexarch.LexerSessionSnapshot[TState])
-		if !ok {
-			panic("ParserSnapshot.aux: invalid lexer snapshot")
-		}
-		session.RestoreSnapshot(snap)
+	ctx.restore = func(c ParserSnapshot[TObservation, TState]) {
+		session.RestoreSnapshot(c.lexerSnap)
 	}
 
 	ctx.SetLexerState = func(state TState) {
@@ -404,20 +400,16 @@ func BuildExecRuleContextFromStreamingSession[
 		},
 	})
 
-	ctx.save = func() ParserSnapshot {
+	ctx.save = func() ParserSnapshot[TObservation, TState] {
 		snap := session.Snapshot()
-		return ParserSnapshot{
-			tokenIndex: snap.AbsPos,
-			aux:        snap,
+		return ParserSnapshot[TObservation, TState]{
+			tokenIndex:    snap.AbsPos,
+			streamingSnap: snap,
 		}
 	}
 
-	ctx.restore = func(c ParserSnapshot) {
-		snap, ok := c.aux.(lexarch.StreamingLexerSessionSnapshot[TObservation, TState])
-		if !ok {
-			panic("ParserSnapshot.aux: invalid streaming snapshot")
-		}
-		session.RestoreSnapshot(snap)
+	ctx.restore = func(c ParserSnapshot[TObservation, TState]) {
+		session.RestoreSnapshot(c.streamingSnap)
 	}
 
 	ctx.SetLexerState = func(state TState) {
