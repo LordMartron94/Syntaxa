@@ -229,10 +229,7 @@ type ExecRuleContext[
 	*/
 	PopSkipRoles func()
 
-	/*
-		CurrentSkips returns the active skippable role set.
-	*/
-	CurrentSkips func() []TTokenRole
+	currentSkips func() tokenSet[TTokenRole]
 
 	LastLexingError func() *lexarch.LexingError[TObservation, TToken]
 }
@@ -1854,6 +1851,8 @@ func BuildExecRuleContextFromStreamingSession[
 	return ctx
 }
 
+type tokenSet[TTokenRole comparable] map[TTokenRole]struct{}
+
 func buildBaseContext[
 	TObservation cmp.Ordered,
 	TToken,
@@ -1867,8 +1866,7 @@ func buildBaseContext[
 	recoveryStack := make([][]TToken, 1)
 	recoveryStack[0] = []TToken{parser.eofToken}
 
-	skipTokensStack := make([][]TTokenRole, 1)
-	skipTokensStack[0] = make([]TTokenRole, 0)
+	skipTokensStack := make([]tokenSet[TTokenRole], 1)
 
 	editor := &ASTEditor[TObservation, TToken, TTokenRole, TNodeKind]{}
 	editor.begin()
@@ -1942,9 +1940,11 @@ func buildBaseContext[
 		// ====================================================
 
 		PushSkipRoles: func(roles ...TTokenRole) {
-			cp := make([]TTokenRole, len(roles))
-			copy(cp, roles)
-			skipTokensStack = append(skipTokensStack, cp)
+			set := make(tokenSet[TTokenRole])
+			for _, r := range roles {
+				set[r] = struct{}{}
+			}
+			skipTokensStack = append(skipTokensStack, set)
 		},
 
 		PopSkipRoles: func() {
@@ -1953,7 +1953,7 @@ func buildBaseContext[
 			}
 		},
 
-		CurrentSkips: func() []TTokenRole {
+		currentSkips: func() tokenSet[TTokenRole] {
 			if len(skipTokensStack) == 0 {
 				return nil
 			}
@@ -1979,12 +1979,8 @@ func finalizeExecContext[
 	}
 
 	isSkipped := func(role TTokenRole) bool {
-		for _, r := range ctx.CurrentSkips() {
-			if r == role {
-				return true
-			}
-		}
-		return false
+		_, skipped := ctx.currentSkips()[role]
+		return skipped
 	}
 
 	// ----------------------------------------------------
