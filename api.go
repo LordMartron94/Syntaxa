@@ -215,9 +215,9 @@ type ExecRuleContext[
 	PopRecovery func()
 
 	/*
-		CurrentRecovery returns the active synchronization tokens.
+		currentRecovery returns the active synchronization tokens.
 	*/
-	CurrentRecovery func() []TToken
+	currentRecovery func() tokenSet[TToken]
 
 	/*
 		PushSkipRoles installs a new local skippable role set.
@@ -1764,7 +1764,7 @@ func BuildExecRuleContextFromStreamingSession[
 	return ctx
 }
 
-type tokenSet[TTokenRole comparable] map[TTokenRole]struct{}
+type tokenSet[TToken comparable] map[TToken]struct{}
 
 func buildBaseContext[
 	TObservation cmp.Ordered,
@@ -1776,10 +1776,8 @@ func buildBaseContext[
 	parser *SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
 	errors *SyntaxErrors[TObservation],
 ) ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
-	recoveryStack := make([][]TToken, 1)
-	recoveryStack[0] = []TToken{parser.eofToken}
-
-	skipTokensStack := make([]tokenSet[TTokenRole], 1)
+	recoveryStack := make([]tokenSet[TToken], 0)
+	skipTokensStack := make([]tokenSet[TTokenRole], 0)
 
 	editor := &ASTEditor[TObservation, TToken, TTokenRole, TNodeKind]{}
 	editor.begin()
@@ -1830,9 +1828,11 @@ func buildBaseContext[
 		// ====================================================
 
 		PushRecovery: func(tokens ...TToken) {
-			cp := make([]TToken, len(tokens))
-			copy(cp, tokens)
-			recoveryStack = append(recoveryStack, cp)
+			set := make(tokenSet[TToken])
+			for _, r := range tokens {
+				set[r] = struct{}{}
+			}
+			recoveryStack = append(recoveryStack, set)
 		},
 
 		PopRecovery: func() {
@@ -1841,7 +1841,7 @@ func buildBaseContext[
 			}
 		},
 
-		CurrentRecovery: func() []TToken {
+		currentRecovery: func() tokenSet[TToken] {
 			if len(recoveryStack) == 0 {
 				return nil
 			}
@@ -2109,7 +2109,7 @@ func recoverWithContext[TObservation cmp.Ordered, TToken, TTokenRole, TLexerStat
 	eofToken TToken,
 ) bool {
 
-	sync := ctx.CurrentRecovery()
+	sync := ctx.currentRecovery()
 	if len(sync) == 0 {
 		ctx.Consume()
 		return current.Token != eofToken
@@ -2120,10 +2120,9 @@ func recoverWithContext[TObservation cmp.Ordered, TToken, TTokenRole, TLexerStat
 			return false
 		}
 
-		for _, t := range sync {
-			if current.Token == t {
-				return true
-			}
+		_, synced := sync[current.Token]
+		if synced {
+			return true
 		}
 
 		ctx.Consume()
