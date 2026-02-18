@@ -15,17 +15,17 @@ import (
 // =============================================================
 
 /*
-ParseCursor represents a snapshot of parser progress.
+ParserSnapshot represents a snapshot of parser progress.
 
 It is opaque by design and only meaningful to the RuleContext
 implementation that created it.
 */
-type ParseCursor struct {
+type ParserSnapshot struct {
 	tokenIndex int
 	aux        any
 }
 
-func (p *ParseCursor) Index() int {
+func (p *ParserSnapshot) Index() int {
 	return p.tokenIndex
 }
 
@@ -153,14 +153,14 @@ type ExecRuleContext[
 	   ============================================================ */
 
 	/*
-		Save snapshots the current cursor state.
+		save snapshots the current cursor state.
 	*/
-	Save func() ParseCursor
+	save func() ParserSnapshot
 
 	/*
-		Restore restores a previously saved cursor state.
+		restore restores a previously saved cursor state.
 	*/
-	Restore func(ParseCursor)
+	restore func(ParserSnapshot)
 
 	/* ============================================================
 	   Error handling
@@ -173,8 +173,7 @@ type ExecRuleContext[
 
 	reportLexerError func(line, column int, description string)
 
-	applyReports   func()
-	discardReports func()
+	getErrors func() *SyntaxErrors[TObservation]
 
 	/*
 		CreateErrorNode constructs a structured error AST node.
@@ -271,12 +270,12 @@ func BuildExecRuleContextFromSlice[
 ](
 	parser *SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
 	lexemes []lexarch.Lexeme[TObservation, TToken, TTokenRole],
-	errors *SyntaxErrors,
+	errors *SyntaxErrors[TObservation],
 	cursor *int,
 ) ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
-	ctx := buildBaseContext[TObservation, TToken, TTokenRole, TLexerState](
+	ctx := buildBaseContext(
+		parser,
 		errors,
-		parser.errorNodeKind,
 	)
 
 	ctx.PeekRaw = func(n int) lexarch.Lexeme[TObservation, TToken, TTokenRole] {
@@ -325,11 +324,11 @@ func BuildExecRuleContextFromSlice[
 		return out
 	}
 
-	ctx.Save = func() ParseCursor {
-		return ParseCursor{tokenIndex: *cursor}
+	ctx.save = func() ParserSnapshot {
+		return ParserSnapshot{tokenIndex: *cursor}
 	}
 
-	ctx.Restore = func(c ParseCursor) {
+	ctx.restore = func(c ParserSnapshot) {
 		*cursor = c.tokenIndex
 	}
 
@@ -364,12 +363,12 @@ func BuildExecRuleContextFromLexerSession[
 	parser *SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TState],
 	lexer *lexarch.Lexer[TObservation, TState, TToken, TTokenRole],
 	session *lexarch.LexerSession[TObservation, TState, TToken],
-	errors *SyntaxErrors,
+	errors *SyntaxErrors[TObservation],
 ) ExecRuleContext[TObservation, TToken, TTokenRole, TState, TNodeKind] {
 
-	ctx := buildBaseContext[TObservation, TToken, TTokenRole, TState](
+	ctx := buildBaseContext(
+		parser,
 		errors,
-		parser.errorNodeKind,
 	)
 
 	ctx.PeekRaw = func(n int) lexarch.Lexeme[TObservation, TToken, TTokenRole] {
@@ -392,15 +391,15 @@ func BuildExecRuleContextFromLexerSession[
 		return lex
 	}
 
-	ctx.Save = func() ParseCursor {
+	ctx.save = func() ParserSnapshot {
 		snap := session.Snapshot()
-		return ParseCursor{
+		return ParserSnapshot{
 			tokenIndex: snap.Position,
 			aux:        snap,
 		}
 	}
 
-	ctx.Restore = func(c ParseCursor) {
+	ctx.restore = func(c ParserSnapshot) {
 		snap, ok := c.aux.(lexarch.LexerSessionSnapshot[TState])
 		if !ok {
 			panic("ParseCursor.aux: unexpected snapshot type")
@@ -442,12 +441,12 @@ func BuildExecRuleContextFromStreamingSession[
 	parser *SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TState],
 	lexer *lexarch.Lexer[TObservation, TState, TToken, TTokenRole],
 	session *lexarch.StreamingLexerSession[TObservation, TState, TToken],
-	errors *SyntaxErrors,
+	errors *SyntaxErrors[TObservation],
 ) ExecRuleContext[TObservation, TToken, TTokenRole, TState, TNodeKind] {
 
-	ctx := buildBaseContext[TObservation, TToken, TTokenRole, TState](
+	ctx := buildBaseContext(
+		parser,
 		errors,
-		parser.errorNodeKind,
 	)
 
 	ctx.PeekRaw = func(n int) lexarch.Lexeme[TObservation, TToken, TTokenRole] {
@@ -470,15 +469,15 @@ func BuildExecRuleContextFromStreamingSession[
 		return lex
 	}
 
-	ctx.Save = func() ParseCursor {
+	ctx.save = func() ParserSnapshot {
 		snap := session.Snapshot()
-		return ParseCursor{
+		return ParserSnapshot{
 			tokenIndex: snap.AbsPos,
 			aux:        snap,
 		}
 	}
 
-	ctx.Restore = func(c ParseCursor) {
+	ctx.restore = func(c ParserSnapshot) {
 		snap, ok := c.aux.(lexarch.StreamingLexerSessionSnapshot[TObservation, TState])
 		if !ok {
 			panic("ParseCursor.aux: invalid streaming snapshot")
@@ -1588,46 +1587,117 @@ type RuleSelector[
 /*
 SyntaxError represents a single syntax error.
 */
-type SyntaxError struct {
+type SyntaxError[TObservation cmp.Ordered] struct {
 	ProducedByLexer bool
-	Message         string
-	Line            int
-	Column          int
+
+	Message string
+
+	Line   int
+	Column int
+
+	AbsolutePosition int
+	TokenNumber      int
+
+	Expected [][]TObservation
+	Found    *TObservation
 }
 
 /*
 SyntaxErrors aggregates syntax errors produced during parsing.
 */
-type SyntaxErrors struct {
-	Errors       []SyntaxError
-	stagedErrors []SyntaxError
+type SyntaxErrors[TObservation cmp.Ordered] struct {
+	Errors []SyntaxError[TObservation]
+
+	stack []errorFrame[TObservation]
 }
 
-func (s *SyntaxErrors) HasErrors() bool {
+type errorFrame[TObservation cmp.Ordered] struct {
+	best                 *SyntaxError[TObservation]
+	bestAbsolutePosition int
+}
+
+func SyntaxErrorsCreate[TObservation cmp.Ordered]() *SyntaxErrors[TObservation] {
+	return &SyntaxErrors[TObservation]{
+		Errors: make([]SyntaxError[TObservation], 0),
+		stack:  make([]errorFrame[TObservation], 0),
+	}
+}
+
+func (s *SyntaxErrors[_]) HasErrors() bool {
 	return len(s.Errors) > 0
 }
 
-func (s *SyntaxErrors) report(error SyntaxError) {
-	// fmt.Printf("staging 1 error report\n")
+func (s *SyntaxErrors[TObservation]) PushFrame() {
+	s.stack = append(s.stack, errorFrame[TObservation]{})
+}
 
-	if s.stagedErrors == nil {
-		s.stagedErrors = make([]SyntaxError, 0)
+func (s *SyntaxErrors[TObservation]) PopFrame(commit bool) {
+	if len(s.stack) == 0 {
+		panic("SyntaxErrors: PopFrame without PushFrame")
 	}
 
-	s.stagedErrors = append(s.stagedErrors, error)
+	top := s.stack[len(s.stack)-1]
+	s.stack = s.stack[:len(s.stack)-1]
+
+	if commit {
+		if top.best != nil {
+			s.commitCandidate(*top.best)
+		}
+		return
+	}
+
+	if top.best != nil {
+		s.commitCandidate(*top.best)
+	}
 }
 
-func (s *SyntaxErrors) applyReports() {
-	// fmt.Printf("applying %d staged error reports\n", len(s.stagedErrors))
+func (s *SyntaxErrors[TObservation]) commitCandidate(err SyntaxError[TObservation]) {
+	if len(s.stack) > 0 {
+		f := &s.stack[len(s.stack)-1]
 
-	s.Errors = append(s.Errors, s.stagedErrors...)
-	s.stagedErrors = s.stagedErrors[:0]
+		if betterError(f, err) {
+			f.best = &err
+			f.bestAbsolutePosition = err.AbsolutePosition
+		}
+		return
+	}
+
+	s.Errors = append(s.Errors, err)
 }
 
-func (s *SyntaxErrors) discardReports() {
-	// fmt.Printf("discarding %d staged error reports\n", len(s.stagedErrors))
+func (s *SyntaxErrors[TObservation]) report(err SyntaxError[TObservation]) {
+	if len(s.stack) == 0 {
+		s.Errors = append(s.Errors, err)
+		return
+	}
 
-	s.stagedErrors = s.stagedErrors[:0]
+	f := &s.stack[len(s.stack)-1]
+
+	if betterError(f, err) {
+		f.best = &err
+		f.bestAbsolutePosition = err.AbsolutePosition
+	}
+}
+
+func betterError[TObservation cmp.Ordered](
+	cur *errorFrame[TObservation],
+	err SyntaxError[TObservation],
+) bool {
+	if cur.best == nil {
+		return true
+	}
+
+	if err.AbsolutePosition > cur.bestAbsolutePosition {
+		return true
+	}
+
+	if err.AbsolutePosition == cur.bestAbsolutePosition &&
+		cur.best.ProducedByLexer &&
+		!err.ProducedByLexer {
+		return true
+	}
+
+	return false
 }
 
 // =============================================================
@@ -1652,7 +1722,7 @@ type ParseTrace[TToken any] struct {
 
 type ParseResult[TObs cmp.Ordered, TToken, TTokenRole, TKind comparable] struct {
 	Root   *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]
-	Errors *SyntaxErrors
+	Errors *SyntaxErrors[TObs]
 	Trace  *ParseTrace[TToken]
 }
 
@@ -1777,10 +1847,12 @@ func buildBaseContext[
 	TLexerState,
 	TNodeKind comparable,
 ](
-	errors *SyntaxErrors,
-	errorNodeKind TNodeKind,
+	parser *SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
+	errors *SyntaxErrors[TObservation],
 ) ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
-	recoveryStack := make([][]TToken, 0)
+	recoveryStack := make([][]TToken, 1)
+	recoveryStack[0] = []TToken{parser.eofToken}
+
 	skipTokensStack := make([][]TTokenRole, 1)
 	skipTokensStack[0] = make([]TTokenRole, 0)
 
@@ -1794,7 +1866,7 @@ func buildBaseContext[
 		// ====================================================
 
 		Report: func(line, column int, description string) {
-			errors.report(SyntaxError{
+			errors.report(SyntaxError[TObservation]{
 				Message: description,
 				Line:    line,
 				Column:  column,
@@ -1802,7 +1874,7 @@ func buildBaseContext[
 		},
 
 		reportLexerError: func(line, column int, description string) {
-			errors.report(SyntaxError{
+			errors.report(SyntaxError[TObservation]{
 				Message:         description,
 				Line:            line,
 				Column:          column,
@@ -1810,12 +1882,8 @@ func buildBaseContext[
 			})
 		},
 
-		applyReports: func() {
-			errors.applyReports()
-		},
-
-		discardReports: func() {
-			errors.discardReports()
+		getErrors: func() *SyntaxErrors[TObservation] {
+			return errors
 		},
 
 		// ====================================================
@@ -1827,7 +1895,7 @@ func buildBaseContext[
 		CreateErrorNode: func(message string) *SyntaxaASTNode[
 			TObservation, TToken, TTokenRole, TNodeKind,
 		] {
-			n := editor.NewNode(errorNodeKind)
+			n := editor.NewNode(parser.errorNodeKind)
 			editor.SetAttribute(n, "error", message)
 			return n
 		},
@@ -2046,15 +2114,22 @@ func finalizeExecContext[
 	}
 
 	// ----------------------------------------------------
-	// Transactional helpers (unchanged)
+	// Transactional helpers
 	// ----------------------------------------------------
 
 	ctx.Try = func(fn func() bool) bool {
-		snap := ctx.Save()
-		if fn() {
+		errors := ctx.getErrors()
+		snap := ctx.save()
+
+		errors.PushFrame()
+		ok := fn()
+		errors.PopFrame(ok)
+
+		if ok {
 			return true
 		}
-		ctx.Restore(snap)
+
+		ctx.restore(snap)
 		return false
 	}
 
@@ -2065,12 +2140,12 @@ func finalizeExecContext[
 
 	ctx.ZeroOrMore = func(fn func() bool) {
 		for {
-			snap := ctx.Save()
+			snap := ctx.save()
 			if !fn() {
-				ctx.Restore(snap)
+				ctx.restore(snap)
 				return
 			}
-			if ctx.Save().tokenIndex == snap.tokenIndex {
+			if ctx.save().tokenIndex == snap.tokenIndex {
 				panic("ZeroOrMore: rule succeeded without consuming input")
 			}
 		}
@@ -2098,13 +2173,6 @@ func finalizeExecContext[
 
 		ctx.Report(cur.StartLine, cur.StartColumn, message)
 		return false
-	}
-
-	originalRestore := ctx.Restore
-
-	ctx.Restore = func(pc ParseCursor) {
-		ctx.discardReports()
-		originalRestore(pc)
 	}
 
 	if len(defaultSkipRoles) > 0 {
@@ -2177,7 +2245,9 @@ func parseWithContext[
 		state.lastCursor = step
 	}
 
-	if err := validateFinalAST(root, state.sawNonEOFRaw); err != nil {
+	errors := execCtx.getErrors()
+
+	if err := validateFinalAST(root, errors, state.sawNonEOFRaw); err != nil {
 		return trace, err
 	}
 
@@ -2219,10 +2289,8 @@ func parseIteration[
 		return -1, true, nil
 	}
 
-	startSnap := execCtx.Save()
+	startSnap := execCtx.save()
 	startPos := startSnap.tokenIndex
-
-	execCtx.discardReports()
 
 	rule := parser.selectRule(execCtx.selectCTX())
 
@@ -2239,14 +2307,10 @@ func parseIteration[
 	appendTrace(trace, event)
 
 	if !ok {
-		execCtx.Restore(startSnap)
-		execCtx.discardReports()
-
+		execCtx.restore(startSnap)
 		handleRecovery(execCtx, current, parser.eofToken, startPos, state)
 		return startPos, false, nil
 	}
-
-	execCtx.applyReports()
 
 	if err := validateRuleSuccess[TObservation, TToken, TTokenRole, TLexerState](result, startPos, endPos, current); err != nil {
 		return -1, true, err
@@ -2312,7 +2376,7 @@ func executeRule[
 	ok bool,
 ) {
 	result, ok = rule(execCtx)
-	endPos = execCtx.Save().tokenIndex
+	endPos = execCtx.save().tokenIndex
 	return
 }
 
@@ -2369,10 +2433,11 @@ func validateFinalAST[
 	TNodeKind comparable,
 ](
 	root *SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind],
+	errors *SyntaxErrors[TObservation],
 	sawNonEOFRaw bool,
 ) error {
 
-	if sawNonEOFRaw && len(root.children) == 0 {
+	if sawNonEOFRaw && len(root.children) == 0 && !errors.HasErrors() {
 		return fmt.Errorf(
 			"parser produced empty AST despite non-empty input",
 		)
@@ -2478,7 +2543,6 @@ func handleRecovery[
 	startPos int,
 	state *parseLoopState,
 ) {
-
 	if !recoverWithContext(execCtx, current, eofToken) {
 		return
 	}
