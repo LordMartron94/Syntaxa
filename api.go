@@ -247,258 +247,6 @@ func (ctx *ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeK
 	}
 }
 
-/*
-BuildExecRuleContextFromSlice constructs a RuleContext over a linear
-lexeme slice.
-
-This is suitable for simple, fully-materialized token streams.
-
-The cursor pointer is owned by the caller and mutated as parsing
-progresses.
-
-Use cases:
-  - offline parsing
-  - unit tests
-  - small inputs fully resident in memory
-*/
-func BuildExecRuleContextFromSlice[
-	TObservation cmp.Ordered,
-	TToken,
-	TTokenRole,
-	TLexerState,
-	TNodeKind comparable,
-](
-	parser *SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
-	lexemes []lexarch.Lexeme[TObservation, TToken, TTokenRole],
-	errors *SyntaxErrors[TObservation],
-	cursor *int,
-) ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
-	ctx := buildBaseContext(
-		parser,
-		errors,
-	)
-
-	ctx.PeekRaw = func(n int) lexarch.Lexeme[TObservation, TToken, TTokenRole] {
-		idx := *cursor + n
-		if idx >= len(lexemes) {
-			return lexarch.Lexeme[TObservation, TToken, TTokenRole]{
-				Token: parser.eofToken,
-			}
-		}
-		return lexemes[idx]
-	}
-
-	ctx.ConsumeRaw = func() lexarch.Lexeme[TObservation, TToken, TTokenRole] {
-		if *cursor >= len(lexemes) {
-			return lexarch.Lexeme[TObservation, TToken, TTokenRole]{
-				Token: parser.eofToken,
-			}
-		}
-
-		l := lexemes[*cursor]
-		*cursor++
-		return l
-	}
-
-	ctx.PeekRangeRaw = func(n int) []lexarch.Lexeme[TObservation, TToken, TTokenRole] {
-		if n <= 0 {
-			return nil
-		}
-
-		end := *cursor + n
-		end = min(len(lexemes), end)
-
-		return lexemes[*cursor:end]
-	}
-
-	ctx.ConsumeRangeRaw = func(n int) []lexarch.Lexeme[TObservation, TToken, TTokenRole] {
-		if n <= 0 {
-			return nil
-		}
-
-		end := *cursor + n
-		end = min(len(lexemes), end)
-
-		out := lexemes[*cursor:end]
-		*cursor = end
-		return out
-	}
-
-	ctx.save = func() ParserSnapshot {
-		return ParserSnapshot{tokenIndex: *cursor}
-	}
-
-	ctx.restore = func(c ParserSnapshot) {
-		*cursor = c.tokenIndex
-	}
-
-	ctx.LastLexingError = func() *lexarch.LexingError[TObservation, TToken] {
-		return nil
-	}
-
-	finalizeExecContext(&ctx, parser.eofToken, parser.defaultSkipRoles)
-
-	return ctx
-}
-
-/*
-BuildExecRuleContextFromLexerSession adapts a lexarch LexerSession
-into a RuleContext.
-
-This allows grammar rules to drive token consumption directly
-from a stateful DFA-based lexer.
-
-Use cases:
-  - context-sensitive lexing
-  - language modes (strings, comments, templates)
-  - high-performance parsing
-*/
-func BuildExecRuleContextFromLexerSession[
-	TObservation cmp.Ordered,
-	TState comparable,
-	TToken comparable,
-	TTokenRole comparable,
-	TNodeKind comparable,
-](
-	parser *SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TState],
-	lexer *lexarch.Lexer[TObservation, TState, TToken, TTokenRole],
-	session *lexarch.LexerSession[TObservation, TState, TToken],
-	errors *SyntaxErrors[TObservation],
-) ExecRuleContext[TObservation, TToken, TTokenRole, TState, TNodeKind] {
-
-	ctx := buildBaseContext(
-		parser,
-		errors,
-	)
-
-	ctx.PeekRaw = func(n int) lexarch.Lexeme[TObservation, TToken, TTokenRole] {
-		lex := lexarch.LexerPeek(lexer, session, n)
-		return lex
-	}
-
-	ctx.ConsumeRaw = func() lexarch.Lexeme[TObservation, TToken, TTokenRole] {
-		lex := lexarch.LexerConsume(lexer, session)
-		return lex
-	}
-
-	ctx.PeekRangeRaw = func(n int) []lexarch.Lexeme[TObservation, TToken, TTokenRole] {
-		lex := lexarch.LexerPeekRange(lexer, session, n)
-		return lex
-	}
-
-	ctx.ConsumeRangeRaw = func(n int) []lexarch.Lexeme[TObservation, TToken, TTokenRole] {
-		lex := lexarch.LexerConsumeRange(lexer, session, n)
-		return lex
-	}
-
-	ctx.save = func() ParserSnapshot {
-		snap := session.Snapshot()
-		return ParserSnapshot{
-			tokenIndex: snap.Position,
-			aux:        snap,
-		}
-	}
-
-	ctx.restore = func(c ParserSnapshot) {
-		snap, ok := c.aux.(lexarch.LexerSessionSnapshot[TState])
-		if !ok {
-			panic("ParseCursor.aux: unexpected snapshot type")
-		}
-		session.RestoreSnapshot(snap)
-	}
-
-	ctx.SetLexerState = func(state TState) {
-		lexarch.LexerSessionSetState(session, state)
-	}
-
-	ctx.LastLexingError = func() *lexarch.LexingError[TObservation, TToken] {
-		return session.GetLastError()
-	}
-
-	finalizeExecContext(&ctx, parser.eofToken, parser.defaultSkipRoles)
-
-	return ctx
-}
-
-/*
-BuildExecRuleContextFromStreamingSession adapts a streaming lexer
-into a RuleContext.
-
-This enables online parsing over large or unbounded inputs.
-
-Use cases:
-  - network protocols
-  - large files
-  - incremental feeds
-*/
-func BuildExecRuleContextFromStreamingSession[
-	TObservation cmp.Ordered,
-	TState comparable,
-	TToken comparable,
-	TTokenRole comparable,
-	TNodeKind comparable,
-](
-	parser *SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TState],
-	lexer *lexarch.Lexer[TObservation, TState, TToken, TTokenRole],
-	session *lexarch.StreamingLexerSession[TObservation, TState, TToken],
-	errors *SyntaxErrors[TObservation],
-) ExecRuleContext[TObservation, TToken, TTokenRole, TState, TNodeKind] {
-
-	ctx := buildBaseContext(
-		parser,
-		errors,
-	)
-
-	ctx.PeekRaw = func(n int) lexarch.Lexeme[TObservation, TToken, TTokenRole] {
-		lex := lexarch.LexerPeekStreaming(lexer, session, n)
-		return lex
-	}
-
-	ctx.ConsumeRaw = func() lexarch.Lexeme[TObservation, TToken, TTokenRole] {
-		lex := lexarch.LexerConsumeStreaming(lexer, session)
-		return lex
-	}
-
-	ctx.PeekRangeRaw = func(n int) []lexarch.Lexeme[TObservation, TToken, TTokenRole] {
-		lex := lexarch.LexerPeekRangeStreaming(lexer, session, n)
-		return lex
-	}
-
-	ctx.ConsumeRangeRaw = func(n int) []lexarch.Lexeme[TObservation, TToken, TTokenRole] {
-		lex := lexarch.LexerConsumeRangeStreaming(lexer, session, n)
-		return lex
-	}
-
-	ctx.save = func() ParserSnapshot {
-		snap := session.Snapshot()
-		return ParserSnapshot{
-			tokenIndex: snap.AbsPos,
-			aux:        snap,
-		}
-	}
-
-	ctx.restore = func(c ParserSnapshot) {
-		snap, ok := c.aux.(lexarch.StreamingLexerSessionSnapshot[TObservation, TState])
-		if !ok {
-			panic("ParseCursor.aux: invalid streaming snapshot")
-		}
-
-		session.RestoreSnapshot(snap)
-	}
-
-	ctx.SetLexerState = func(state TState) {
-		lexarch.StreamingLexerSessionSetState(session, state)
-	}
-
-	ctx.LastLexingError = func() *lexarch.LexingError[TObservation, TToken] {
-		return session.GetLastError()
-	}
-
-	finalizeExecContext(&ctx, parser.eofToken, parser.defaultSkipRoles)
-
-	return ctx
-}
-
 // =============================================================
 // AST NODE
 // =============================================================
@@ -1837,8 +1585,274 @@ func SyntaxaParserParseWithContext[
 }
 
 // =============================================================
-// CONTEXT BUILDERS (SHARED CORE)
+// CONTEXT BUILDERS
 // =============================================================
+
+type rawAccess[TObs cmp.Ordered, TToken, TTokenRole comparable] struct {
+	peek         func(int) lexarch.Lexeme[TObs, TToken, TTokenRole]
+	consume      func() lexarch.Lexeme[TObs, TToken, TTokenRole]
+	peekRange    func(int) []lexarch.Lexeme[TObs, TToken, TTokenRole]
+	consumeRange func(int) []lexarch.Lexeme[TObs, TToken, TTokenRole]
+}
+
+func attachRawAccess[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable](
+	ctx *ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+	raw rawAccess[TObservation, TToken, TTokenRole],
+) {
+	ctx.PeekRaw = raw.peek
+	ctx.ConsumeRaw = raw.consume
+	ctx.PeekRangeRaw = raw.peekRange
+	ctx.ConsumeRangeRaw = raw.consumeRange
+}
+
+/*
+BuildExecRuleContextFromSlice constructs a RuleContext over a linear
+lexeme slice.
+
+This is suitable for simple, fully-materialized token streams.
+
+The cursor pointer is owned by the caller and mutated as parsing
+progresses.
+
+Use cases:
+  - offline parsing
+  - unit tests
+  - small inputs fully resident in memory
+*/
+func BuildExecRuleContextFromSlice[
+	TObservation cmp.Ordered,
+	TToken,
+	TTokenRole,
+	TLexerState,
+	TNodeKind comparable,
+](
+	parser *SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
+	lexemes []lexarch.Lexeme[TObservation, TToken, TTokenRole],
+	errors *SyntaxErrors[TObservation],
+	cursor *int,
+) ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
+	ctx := buildBaseContext(
+		parser,
+		errors,
+	)
+
+	attachRawAccess(&ctx, rawAccess[TObservation, TToken, TTokenRole]{
+		peek: func(n int) lexarch.Lexeme[TObservation, TToken, TTokenRole] {
+			idx := *cursor + n
+			if idx >= len(lexemes) {
+				return lexarch.Lexeme[TObservation, TToken, TTokenRole]{
+					Token: parser.eofToken,
+				}
+			}
+			return lexemes[idx]
+		},
+		consume: func() lexarch.Lexeme[TObservation, TToken, TTokenRole] {
+			if *cursor >= len(lexemes) {
+				return lexarch.Lexeme[TObservation, TToken, TTokenRole]{
+					Token: parser.eofToken,
+				}
+			}
+
+			l := lexemes[*cursor]
+			*cursor++
+			return l
+		},
+		peekRange: func(n int) []lexarch.Lexeme[TObservation, TToken, TTokenRole] {
+			if n <= 0 {
+				return nil
+			}
+
+			end := *cursor + n
+			end = min(len(lexemes), end)
+
+			return lexemes[*cursor:end]
+		},
+		consumeRange: func(n int) []lexarch.Lexeme[TObservation, TToken, TTokenRole] {
+			if n <= 0 {
+				return nil
+			}
+
+			end := *cursor + n
+			end = min(len(lexemes), end)
+
+			out := lexemes[*cursor:end]
+			*cursor = end
+			return out
+		},
+	})
+
+	ctx.save = func() ParserSnapshot {
+		return ParserSnapshot{tokenIndex: *cursor}
+	}
+
+	ctx.restore = func(c ParserSnapshot) {
+		*cursor = c.tokenIndex
+	}
+
+	ctx.LastLexingError = func() *lexarch.LexingError[TObservation, TToken] {
+		return nil
+	}
+
+	finalizeExecContext(&ctx, parser.eofToken, parser.defaultSkipRoles)
+
+	return ctx
+}
+
+/*
+BuildExecRuleContextFromLexerSession adapts a lexarch LexerSession
+into a RuleContext.
+
+This allows grammar rules to drive token consumption directly
+from a stateful DFA-based lexer.
+
+Use cases:
+  - context-sensitive lexing
+  - language modes (strings, comments, templates)
+  - high-performance parsing
+*/
+func BuildExecRuleContextFromLexerSession[
+	TObservation cmp.Ordered,
+	TState comparable,
+	TToken comparable,
+	TTokenRole comparable,
+	TNodeKind comparable,
+](
+	parser *SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TState],
+	lexer *lexarch.Lexer[TObservation, TState, TToken, TTokenRole],
+	session *lexarch.LexerSession[TObservation, TState, TToken],
+	errors *SyntaxErrors[TObservation],
+) ExecRuleContext[TObservation, TToken, TTokenRole, TState, TNodeKind] {
+
+	ctx := buildBaseContext(
+		parser,
+		errors,
+	)
+
+	attachRawAccess(&ctx, rawAccess[TObservation, TToken, TTokenRole]{
+		peek: func(n int) lexarch.Lexeme[TObservation, TToken, TTokenRole] {
+			lex := lexarch.LexerPeek(lexer, session, n)
+			return lex
+		},
+		consume: func() lexarch.Lexeme[TObservation, TToken, TTokenRole] {
+			lex := lexarch.LexerConsume(lexer, session)
+			return lex
+		},
+		peekRange: func(n int) []lexarch.Lexeme[TObservation, TToken, TTokenRole] {
+			lex := lexarch.LexerPeekRange(lexer, session, n)
+			return lex
+		},
+		consumeRange: func(n int) []lexarch.Lexeme[TObservation, TToken, TTokenRole] {
+			lex := lexarch.LexerConsumeRange(lexer, session, n)
+			return lex
+		},
+	})
+
+	ctx.save = func() ParserSnapshot {
+		snap := session.Snapshot()
+		return ParserSnapshot{
+			tokenIndex: snap.Position,
+			aux:        snap,
+		}
+	}
+
+	ctx.restore = func(c ParserSnapshot) {
+		snap, ok := c.aux.(lexarch.LexerSessionSnapshot[TState])
+		if !ok {
+			panic("ParseCursor.aux: unexpected snapshot type")
+		}
+		session.RestoreSnapshot(snap)
+	}
+
+	ctx.SetLexerState = func(state TState) {
+		lexarch.LexerSessionSetState(session, state)
+	}
+
+	ctx.LastLexingError = func() *lexarch.LexingError[TObservation, TToken] {
+		return session.GetLastError()
+	}
+
+	finalizeExecContext(&ctx, parser.eofToken, parser.defaultSkipRoles)
+
+	return ctx
+}
+
+/*
+BuildExecRuleContextFromStreamingSession adapts a streaming lexer
+into a RuleContext.
+
+This enables online parsing over large or unbounded inputs.
+
+Use cases:
+  - network protocols
+  - large files
+  - incremental feeds
+*/
+func BuildExecRuleContextFromStreamingSession[
+	TObservation cmp.Ordered,
+	TState comparable,
+	TToken comparable,
+	TTokenRole comparable,
+	TNodeKind comparable,
+](
+	parser *SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TState],
+	lexer *lexarch.Lexer[TObservation, TState, TToken, TTokenRole],
+	session *lexarch.StreamingLexerSession[TObservation, TState, TToken],
+	errors *SyntaxErrors[TObservation],
+) ExecRuleContext[TObservation, TToken, TTokenRole, TState, TNodeKind] {
+
+	ctx := buildBaseContext(
+		parser,
+		errors,
+	)
+
+	attachRawAccess(&ctx, rawAccess[TObservation, TToken, TTokenRole]{
+		peek: func(n int) lexarch.Lexeme[TObservation, TToken, TTokenRole] {
+			lex := lexarch.LexerPeekStreaming(lexer, session, n)
+			return lex
+		},
+		consume: func() lexarch.Lexeme[TObservation, TToken, TTokenRole] {
+			lex := lexarch.LexerConsumeStreaming(lexer, session)
+			return lex
+		},
+		peekRange: func(n int) []lexarch.Lexeme[TObservation, TToken, TTokenRole] {
+			lex := lexarch.LexerPeekRangeStreaming(lexer, session, n)
+			return lex
+		},
+		consumeRange: func(n int) []lexarch.Lexeme[TObservation, TToken, TTokenRole] {
+			lex := lexarch.LexerConsumeRangeStreaming(lexer, session, n)
+			return lex
+		},
+	})
+
+	ctx.save = func() ParserSnapshot {
+		snap := session.Snapshot()
+		return ParserSnapshot{
+			tokenIndex: snap.AbsPos,
+			aux:        snap,
+		}
+	}
+
+	ctx.restore = func(c ParserSnapshot) {
+		snap, ok := c.aux.(lexarch.StreamingLexerSessionSnapshot[TObservation, TState])
+		if !ok {
+			panic("ParseCursor.aux: invalid streaming snapshot")
+		}
+
+		session.RestoreSnapshot(snap)
+	}
+
+	ctx.SetLexerState = func(state TState) {
+		lexarch.StreamingLexerSessionSetState(session, state)
+	}
+
+	ctx.LastLexingError = func() *lexarch.LexingError[TObservation, TToken] {
+		return session.GetLastError()
+	}
+
+	finalizeExecContext(&ctx, parser.eofToken, parser.defaultSkipRoles)
+
+	return ctx
+}
 
 func buildBaseContext[
 	TObservation cmp.Ordered,
