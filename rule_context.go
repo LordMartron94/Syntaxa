@@ -26,12 +26,6 @@ type SelectRuleContext[TObservation cmp.Ordered, TToken, TTokenRole comparable] 
 	/* PeekRaw returns the lexeme at lookahead distance n without skipping. */
 	PeekRaw func(n int) lexarch.Lexeme[TObservation, TToken, TTokenRole]
 
-	/* PeekRange returns upcoming lexemes without consuming input. */
-	PeekRange func(n int) []lexarch.Lexeme[TObservation, TToken, TTokenRole]
-
-	/* PeekRangeRaw returns upcoming lexemes without consuming input. Skips roles. */
-	PeekRangeRaw func(n int) []lexarch.Lexeme[TObservation, TToken, TTokenRole]
-
 	/* Match reports whether current token matches any provided token. */
 	Match func(tokens ...TToken) bool
 }
@@ -80,20 +74,6 @@ type ExecRuleContext[
 		skipping any token roles.
 	*/
 	ConsumeRaw func() lexarch.Lexeme[TObservation, TToken, TTokenRole]
-
-	/*
-		ConsumeRange returns up to `n` upcoming lexemes while
-		consuming input.
-
-		Skips roles.
-	*/
-	ConsumeRange func(n int) []lexarch.Lexeme[TObservation, TToken, TTokenRole]
-
-	/*
-		ConsumeRangeRaw returns up to `n` upcoming lexemes while
-		consuming input.
-	*/
-	ConsumeRangeRaw func(n int) []lexarch.Lexeme[TObservation, TToken, TTokenRole]
 
 	/*
 	   Try executes fn transactionally.
@@ -210,11 +190,9 @@ type ExecRuleContext[
 
 func (ctx *ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) selectCTX() SelectRuleContext[TObservation, TToken, TTokenRole] {
 	return SelectRuleContext[TObservation, TToken, TTokenRole]{
-		Peek:         ctx.Peek,
-		PeekRaw:      ctx.PeekRaw,
-		PeekRange:    ctx.PeekRange,
-		PeekRangeRaw: ctx.PeekRangeRaw,
-		Match:        ctx.Match,
+		Peek:    ctx.Peek,
+		PeekRaw: ctx.PeekRaw,
+		Match:   ctx.Match,
 	}
 }
 
@@ -237,44 +215,8 @@ func attachRawSource[
 	ctx *ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	src rawSource[TObservation, TToken, TTokenRole],
 ) {
-	// ------------------------------------------------------------
-	// Primitive access
-	// ------------------------------------------------------------
-
 	ctx.PeekRaw = src.peek
 	ctx.ConsumeRaw = src.consume
-
-	// ------------------------------------------------------------
-	// Derived range helpers
-	// ------------------------------------------------------------
-
-	ctx.PeekRangeRaw = func(n int) []lexarch.Lexeme[TObservation, TToken, TTokenRole] {
-		if n <= 0 {
-			return nil
-		}
-
-		out := make([]lexarch.Lexeme[TObservation, TToken, TTokenRole], 0, n)
-
-		for i := 0; i < n; i++ {
-			out = append(out, src.peek(i))
-		}
-
-		return out
-	}
-
-	ctx.ConsumeRangeRaw = func(n int) []lexarch.Lexeme[TObservation, TToken, TTokenRole] {
-		if n <= 0 {
-			return nil
-		}
-
-		out := make([]lexarch.Lexeme[TObservation, TToken, TTokenRole], 0, n)
-
-		for i := 0; i < n; i++ {
-			out = append(out, src.consume())
-		}
-
-		return out
-	}
 }
 
 func BuildExecRuleContextFromSlice[
@@ -584,31 +526,6 @@ func finalizeExecContext[
 		}
 	}
 
-	ctx.PeekRange = func(n int) []lexarch.Lexeme[TObservation, TToken, TTokenRole] {
-		if n <= 0 {
-			return nil
-		}
-
-		out := make([]lexarch.Lexeme[TObservation, TToken, TTokenRole], 0, n)
-
-		i := 0
-		for len(out) < n {
-			cur := ctx.PeekRaw(i)
-
-			if isEOF(cur) {
-				break
-			}
-
-			if !isSkipped(cur.Role) {
-				out = append(out, cur)
-			}
-
-			i++
-		}
-
-		return out
-	}
-
 	// ----------------------------------------------------
 	// Actual consumption (ONLY place that mutates)
 	// ----------------------------------------------------
@@ -628,30 +545,6 @@ func finalizeExecContext[
 	ctx.Consume = func() lexarch.Lexeme[TObservation, TToken, TTokenRole] {
 		skipForward()
 		return ctx.ConsumeRaw()
-	}
-
-	ctx.ConsumeRange = func(n int) []lexarch.Lexeme[TObservation, TToken, TTokenRole] {
-		if n <= 0 {
-			return nil
-		}
-
-		out := make([]lexarch.Lexeme[TObservation, TToken, TTokenRole], 0, n)
-
-		for len(out) < n {
-			cur := ctx.PeekRaw(0)
-
-			if isEOF(cur) {
-				break
-			}
-
-			if !isSkipped(cur.Role) {
-				out = append(out, cur)
-			}
-
-			ctx.ConsumeRaw()
-		}
-
-		return out
 	}
 
 	// ----------------------------------------------------
