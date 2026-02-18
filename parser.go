@@ -215,37 +215,7 @@ func SyntaxaParserParseWithContext[
 	return parseWithContext(parser, ctx, root)
 }
 
-func recoverWithContext[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable](
-	ctx ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
-	current lexarch.Lexeme[TObservation, TToken, TTokenRole],
-	eofToken TToken,
-) bool {
-
-	sync := ctx.currentRecovery()
-	if len(sync) == 0 {
-		ctx.Consume()
-		return current.Token != eofToken
-	}
-
-	for {
-		if current.Token == eofToken {
-			return false
-		}
-
-		_, synced := sync[current.Token]
-		if synced {
-			return true
-		}
-
-		ctx.Consume()
-		current = ctx.PeekRaw(0)
-	}
-}
-
-type parseLoopState struct {
-	lastCursor   int
-	sawNonEOFRaw bool
-}
+// -------------------------------------------------------- PRIVATE HELPERS
 
 func parseWithContext[
 	TObservation cmp.Ordered,
@@ -255,163 +225,170 @@ func parseWithContext[
 	TNodeKind comparable,
 ](
 	parser *SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
-	execCtx ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+	ctx ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	root *SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind],
 ) (*ParseTrace[TToken], error) {
 
-	editor := execCtx.Editor
+	editor := ctx.Editor
 	if parser.freezeAfterParse {
 		defer editor.Freeze()
 	}
 
-	trace := initTrace[TToken](parser.debugTrace)
-
-	state := parseLoopState{}
-
-	for {
-		step, done, err := parseIteration(parser, execCtx, root, trace, &state)
-		if err != nil {
-			return trace, err
-		}
-		if done {
-			break
-		}
-		state.lastCursor = step
+	var trace *ParseTrace[TToken]
+	if parser.debugTrace {
+		trace = &ParseTrace[TToken]{}
 	}
 
-	errors := execCtx.getErrors()
+	var lastCursor int
+	var sawNonEOFRaw bool
 
-	if err := validateFinalAST(root, errors, state.sawNonEOFRaw); err != nil {
+	for {
+
+		raw := ctx.PeekRaw(0)
+		current := ctx.Peek(0)
+
+		if raw.Token != parser.eofToken {
+			sawNonEOFRaw = true
+		}
+
+		// ───── Phase 1: lexer failure ─────
+
+		if lexErr := ctx.LastLexingError(); lexErr != nil {
+			ctx.reportLexerError(
+				lexErr.StartLine,
+				lexErr.StartColumn,
+				lexErr.Error(),
+			)
+			break
+		}
+
+		// ───── Phase 2: EOF ─────
+
+		if current.Token == parser.eofToken {
+			break
+		}
+
+		startSnap := ctx.save()
+		startPos := startSnap.tokenIndex
+
+		rule := parser.selectRule(ctx.selectCTX())
+
+		event := ParseTraceEvent[TToken]{
+			Cursor:       startPos,
+			RawToken:     raw.Token,
+			LogicalToken: current.Token,
+			RuleSelected: rule != nil,
+			RootRevision: root.revision,
+		}
+
+		// ───── Phase 3: no rule → error + recovery ─────
+
+		if rule == nil {
+
+			ctx.Report(
+				current.StartLine,
+				current.StartColumn,
+				"unexpected token",
+			)
+
+			errNode := ctx.CreateErrorNode("unexpected token")
+			errNode.tokens = append(errNode.tokens, current)
+			editor.AttachChild(root, errNode)
+
+			if trace != nil {
+				trace.Events = append(trace.Events, event)
+			}
+
+			if recoverWithContext(ctx, current, parser.eofToken) {
+				if startPos == lastCursor {
+					ctx.Consume()
+				}
+				lastCursor = startPos
+				continue
+			}
+
+			break
+		}
+
+		// ───── Phase 4: execute rule ─────
+
+		result, ok := rule(ctx)
+		endPos := ctx.save().tokenIndex
+
+		if trace != nil {
+			event.RuleSucceeded = ok
+			event.Consumed = endPos != startPos
+			event.TopLevel = result.TopLevel
+			event.NodeReturned = result.Node != nil
+			trace.Events = append(trace.Events, event)
+		}
+
+		if !ok {
+			ctx.restore(startSnap)
+
+			if recoverWithContext(ctx, current, parser.eofToken) {
+				if startPos == lastCursor {
+					ctx.Consume()
+				}
+				lastCursor = startPos
+				continue
+			}
+
+			break
+		}
+
+		// ───── Phase 5: invariants ─────
+
+		if err := validateRuleSuccess[TObservation, TToken, TTokenRole, TLexerState](
+			result,
+			startPos,
+			endPos,
+			current,
+		); err != nil {
+			return trace, err
+		}
+
+		if result.TopLevel {
+			editor.AttachChild(root, result.Node)
+		}
+
+		lastCursor = -1
+	}
+
+	if err := validateFinalAST(root, ctx.getErrors(), sawNonEOFRaw); err != nil {
 		return trace, err
 	}
 
 	return trace, nil
 }
 
-func initTrace[TToken any](enabled bool) *ParseTrace[TToken] {
-	if !enabled {
-		return nil
-	}
-	return &ParseTrace[TToken]{}
-}
-
-func parseIteration[
-	TObservation cmp.Ordered,
+func recoverWithContext[
+	TObs cmp.Ordered,
 	TToken,
 	TTokenRole,
 	TLexerState,
-	TNodeKind comparable,
+	TKind comparable,
 ](
-	parser *SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
-	execCtx ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
-	root *SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind],
-	trace *ParseTrace[TToken],
-	state *parseLoopState,
-) (cursor int, done bool, err error) {
+	ctx ExecRuleContext[TObs, TToken, TTokenRole, TLexerState, TKind],
+	current lexarch.Lexeme[TObs, TToken, TTokenRole],
+	eof TToken,
+) bool {
+	sync := ctx.currentRecovery()
 
-	rawCurrent, current := peekTokens(execCtx)
-
-	if rawCurrent.Token != parser.eofToken {
-		state.sawNonEOFRaw = true
+	if len(sync) == 0 {
+		ctx.Consume()
+		return current.Token != eof
 	}
 
-	if handled, done := handleLexingError(execCtx); handled {
-		return -1, done, nil
+	for current.Token != eof {
+		if _, ok := sync[current.Token]; ok {
+			return true
+		}
+		ctx.Consume()
+		current = ctx.PeekRaw(0)
 	}
 
-	if current.Token == parser.eofToken {
-		return -1, true, nil
-	}
-
-	startSnap := execCtx.save()
-	startPos := startSnap.tokenIndex
-
-	rule := parser.selectRule(execCtx.selectCTX())
-
-	event := createTraceEvent[TObservation, TToken, TTokenRole, TNodeKind](startPos, rawCurrent, current, rule != nil, root.revision)
-
-	if rule == nil {
-		handleNoRule(parser, execCtx, root, trace, event, current, state)
-		return startPos, false, nil
-	}
-
-	result, endPos, ok := executeRule(execCtx, rule)
-
-	updateTrace(&event, result, ok, startPos, endPos)
-	appendTrace(trace, event)
-
-	if !ok {
-		execCtx.restore(startSnap)
-		handleRecovery(execCtx, current, parser.eofToken, startPos, state)
-		return startPos, false, nil
-	}
-
-	if err := validateRuleSuccess[TObservation, TToken, TTokenRole, TLexerState](result, startPos, endPos, current); err != nil {
-		return -1, true, err
-	}
-
-	attachIfTopLevel(execCtx.Editor, root, result)
-
-	state.lastCursor = -1
-	return endPos, false, nil
-}
-
-func peekTokens[
-	TObservation cmp.Ordered,
-	TToken,
-	TTokenRole comparable,
-	TLexerState,
-	TNodeKind comparable,
-](
-	execCtx ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
-) (
-	raw lexarch.Lexeme[TObservation, TToken, TTokenRole],
-	logical lexarch.Lexeme[TObservation, TToken, TTokenRole],
-) {
-	raw = execCtx.PeekRaw(0)
-	logical = execCtx.Peek(0)
-	return
-}
-
-func handleLexingError[
-	TObservation cmp.Ordered,
-	TToken,
-	TTokenRole comparable,
-	TLexerState,
-	TNodeKind comparable,
-](
-	execCtx ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
-) (handled bool, done bool) {
-
-	if lexErr := execCtx.LastLexingError(); lexErr != nil {
-		execCtx.reportLexerError(
-			lexErr.StartLine,
-			lexErr.StartColumn,
-			lexErr.Error(),
-		)
-		return true, true
-	}
-
-	return false, false
-}
-
-func executeRule[
-	TObservation cmp.Ordered,
-	TToken,
-	TTokenRole comparable,
-	TLexerState,
-	TNodeKind comparable,
-](
-	execCtx ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
-	rule ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
-) (
-	result RuleResult[TObservation, TToken, TTokenRole, TNodeKind],
-	endPos int,
-	ok bool,
-) {
-	result, ok = rule(execCtx)
-	endPos = execCtx.save().tokenIndex
-	return
+	return false
 }
 
 func validateRuleSuccess[
@@ -445,21 +422,6 @@ func validateRuleSuccess[
 	return nil
 }
 
-func attachIfTopLevel[
-	TObservation cmp.Ordered,
-	TToken,
-	TTokenRole comparable,
-	TNodeKind comparable,
-](
-	editor *ASTEditor[TObservation, TToken, TTokenRole, TNodeKind],
-	root *SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind],
-	result RuleResult[TObservation, TToken, TTokenRole, TNodeKind],
-) {
-	if result.TopLevel {
-		editor.AttachChild(root, result.Node)
-	}
-}
-
 func validateFinalAST[
 	TObservation cmp.Ordered,
 	TToken,
@@ -477,113 +439,4 @@ func validateFinalAST[
 		)
 	}
 	return nil
-}
-
-func createTraceEvent[
-	TObservation cmp.Ordered,
-	TToken,
-	TTokenRole comparable,
-	TNodeKind comparable,
-](
-	cursor int,
-	raw lexarch.Lexeme[TObservation, TToken, TTokenRole],
-	logical lexarch.Lexeme[TObservation, TToken, TTokenRole],
-	ruleSelected bool,
-	rootRevision uint64,
-) ParseTraceEvent[TToken] {
-	return ParseTraceEvent[TToken]{
-		Cursor:       cursor,
-		RawToken:     raw.Token,
-		LogicalToken: logical.Token,
-		RuleSelected: ruleSelected,
-		RootRevision: rootRevision,
-	}
-}
-
-func handleNoRule[
-	TObservation cmp.Ordered,
-	TToken,
-	TTokenRole comparable,
-	TLexerState,
-	TNodeKind comparable,
-](
-	parser *SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
-	execCtx ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
-	root *SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind],
-	trace *ParseTrace[TToken],
-	event ParseTraceEvent[TToken],
-	current lexarch.Lexeme[TObservation, TToken, TTokenRole],
-	state *parseLoopState,
-) {
-
-	execCtx.Report(
-		current.StartLine,
-		current.StartColumn,
-		"unexpected token",
-	)
-
-	errNode := execCtx.CreateErrorNode("unexpected token")
-	errNode.tokens = append(errNode.tokens, current)
-	execCtx.Editor.AttachChild(root, errNode)
-
-	appendTrace(trace, event)
-
-	handleRecovery(
-		execCtx,
-		current,
-		parser.eofToken,
-		event.Cursor,
-		state,
-	)
-}
-
-func updateTrace[
-	TObservation cmp.Ordered,
-	TToken,
-	TTokenRole comparable,
-	TNodeKind comparable,
-](
-	event *ParseTraceEvent[TToken],
-	result RuleResult[TObservation, TToken, TTokenRole, TNodeKind],
-	ok bool,
-	startPos int,
-	endPos int,
-) {
-	event.RuleSucceeded = ok
-	event.Consumed = endPos != startPos
-	event.TopLevel = result.TopLevel
-	event.NodeReturned = result.Node != nil
-}
-
-func appendTrace[TToken any](
-	trace *ParseTrace[TToken],
-	event ParseTraceEvent[TToken],
-) {
-	if trace != nil {
-		trace.Events = append(trace.Events, event)
-	}
-}
-
-func handleRecovery[
-	TObservation cmp.Ordered,
-	TToken,
-	TTokenRole comparable,
-	TLexerState,
-	TNodeKind comparable,
-](
-	execCtx ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
-	current lexarch.Lexeme[TObservation, TToken, TTokenRole],
-	eofToken TToken,
-	startPos int,
-	state *parseLoopState,
-) {
-	if !recoverWithContext(execCtx, current, eofToken) {
-		return
-	}
-
-	if startPos == state.lastCursor {
-		execCtx.Consume()
-	}
-
-	state.lastCursor = startPos
 }
