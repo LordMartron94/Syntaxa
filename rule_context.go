@@ -279,17 +279,31 @@ type errorCore[TObs cmp.Ordered] struct {
 
 func (ec *errorCore[TObs]) Report(line, column int, description string) {
 	ec.sink.report(SyntaxError[TObs]{
-		Message: description,
-		Line:    line,
-		Column:  column,
+		Message:     description,
+		StartLine:   line,
+		StartColumn: column,
+		EndLine:     line,
+		EndColumn:   column,
+	})
+}
+
+func (ec *errorCore[TObs]) ReportSpan(startLine, startColumn, endLine, endColumn int, description string) {
+	ec.sink.report(SyntaxError[TObs]{
+		Message:     description,
+		StartLine:   startLine,
+		StartColumn: startColumn,
+		EndLine:     endLine,
+		EndColumn:   endColumn,
 	})
 }
 
 func (ec *errorCore[TObs]) reportLexerError(line, column int, description string) {
 	ec.sink.report(SyntaxError[TObs]{
 		Message:         description,
-		Line:            line,
-		Column:          column,
+		StartLine:       line,
+		StartColumn:     column,
+		EndLine:         line,
+		EndColumn:       column,
 		ProducedByLexer: true,
 	})
 }
@@ -599,6 +613,7 @@ func buildBaseContext[
 		rule ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) (RuleResult[TObservation, TToken, TTokenRole, TNodeKind], bool) {
 		startSnap := ctx.Transaction.save()
 		startPos := startSnap.tokenIndex
+		lexemePreRule := ctx.Token.Peek(0)
 
 		res, ok := rule(internalRuleExecutionToken{}, ctx)
 		endPos := ctx.Transaction.save().tokenIndex
@@ -608,8 +623,7 @@ func buildBaseContext[
 			return res, false
 		}
 
-		current := ctx.Token.Peek(0)
-		if err := validateRuleSuccess[TObservation, TToken, TTokenRole, TLexerState](res, startPos, endPos, current); err != nil {
+		if err := validateRuleSuccess[TObservation, TToken, TTokenRole, TLexerState](res, startPos, endPos, lexemePreRule); err != nil {
 			panic(err)
 		}
 

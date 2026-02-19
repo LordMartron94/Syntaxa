@@ -7,6 +7,8 @@ type RuleResult[TObservation cmp.Ordered, TToken, TTokenRole, TKind comparable] 
 	Node     *SyntaxaASTNode[TObservation, TToken, TTokenRole, TKind]
 	SkipAdd  bool // Explicitly allow nil.
 	Optional bool
+
+	RuleDiagnostics string // Optional diagnostics to attach to the rule for error reporting.
 }
 
 /*

@@ -12,8 +12,10 @@ type SyntaxError[TObservation cmp.Ordered] struct {
 
 	Message string
 
-	Line   int
-	Column int
+	StartLine   int
+	StartColumn int
+	EndLine     int
+	EndColumn   int
 
 	AbsolutePosition int
 	TokenNumber      int

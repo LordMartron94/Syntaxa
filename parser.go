@@ -365,25 +365,27 @@ func validateRuleSuccess[
 	result RuleResult[TObservation, TToken, TTokenRole, TNodeKind],
 	startPos int,
 	endPos int,
-	current lexarch.Lexeme[TObservation, TToken, TTokenRole],
+	lexemePreRule lexarch.Lexeme[TObservation, TToken, TTokenRole],
 ) error {
 	if endPos == startPos && !result.Optional {
 		return fmt.Errorf(
-			"parser invariant violated: non-optional rule succeeded without consuming input at cursor %d (token=%v) [%d:%d]",
+			"parser invariant violated: non-optional rule succeeded without consuming input at cursor %d (token=%v) [%d:%d] | diagnostics = '%s'",
 			startPos,
-			current.Token,
-			current.StartLine,
-			current.StartColumn,
+			lexemePreRule.Token,
+			lexemePreRule.StartLine,
+			lexemePreRule.StartColumn,
+			result.RuleDiagnostics,
 		)
 	}
 
 	if result.Node == nil && !result.SkipAdd {
 		return fmt.Errorf(
-			"parser invariant violated: rule returned nil node without explicit skip at cursor %d (token=%v) [%d:%d]",
+			"parser invariant violated: rule returned nil node without explicit skip at cursor %d (token=%v) [%d:%d] | diagnostics = '%s'",
 			startPos,
-			current.Token,
-			current.StartLine,
-			current.StartColumn,
+			lexemePreRule.Token,
+			lexemePreRule.StartLine,
+			lexemePreRule.StartColumn,
+			result.RuleDiagnostics,
 		)
 	}
 
