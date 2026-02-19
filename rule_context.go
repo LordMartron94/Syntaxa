@@ -389,6 +389,9 @@ type FinalizationContext[
 	/* CreateErrorNode constructs a new error node. */
 	CreateErrorNode func(message string) *SyntaxaASTNode[TObs, TToken, TTokenRole, TNodeKind]
 
+	/* ComputeSpans (re)computes the spans for the tree. It is advisable to not call this unless absolutely necessary. */
+	ComputeSpans func()
+
 	/* ReportError reports a syntax error. */
 	ReportError func(line, col int, msg string)
 }
@@ -559,7 +562,6 @@ func buildBaseContext[
 	}
 
 	editor := &ASTEditor[TObservation, TToken, TTokenRole, TNodeKind]{}
-	editor.begin()
 
 	// Assemble Context
 	ctx := ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]{
@@ -586,6 +588,8 @@ func buildBaseContext[
 		SetTokens: editor.SetTokens,
 
 		CreateErrorNode: ctx.createErrorNode,
+
+		ComputeSpans: editor.ComputeSpans,
 
 		ReportError: eCore.Report,
 	}

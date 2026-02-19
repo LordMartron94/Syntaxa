@@ -39,6 +39,8 @@ type SyntaxaASTNode[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind comp
 	endLine     int
 	endColumn   int
 
+	spanValid bool
+
 	// ---------------------------------------------------------
 	// STRUCTURAL RELATIONSHIPS
 	// ---------------------------------------------------------
@@ -113,10 +115,18 @@ func (n *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) Tokens() []lexarch.Lex
 }
 
 func (n *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) Span() (int, int) {
+	if !n.spanValid {
+		panic("Span called without valid span!")
+	}
+
 	return n.start, n.end
 }
 
 func (n *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) LineSpan() (int, int, int, int) {
+	if !n.spanValid {
+		panic("LineSpan called without valid span!")
+	}
+
 	return n.startLine, n.startColumn, n.endLine, n.endColumn
 }
 

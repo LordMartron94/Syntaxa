@@ -28,7 +28,23 @@ func (e *ASTEditor[TObservation, TToken, TTokenRole, TNodeKind]) begin() {
 		panic("ASTEditor reused concurrently or across parses")
 	}
 
+	if e.root == nil {
+		panic("Editor session began without an active root")
+	}
+
 	e.inUse.Store(true)
+}
+
+func (e *ASTEditor[TObservation, TToken, TTokenRole, TNodeKind]) end() {
+	e.root = nil
+	e.nextID = 0
+	e.frozen = false
+
+	e.inUse.Store(false)
+}
+
+func (e *ASTEditor[TObservation, TToken, TTokenRole, TNodeKind]) setRoot(root *SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind]) {
+	e.root = root
 }
 
 /*
@@ -66,7 +82,6 @@ func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) AttachChild(parent, child *
 	parent.children = append(parent.children, child)
 
 	e.markDirtyCascade(parent)
-	e.recomputeSpanUp(parent)
 }
 
 func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) SetSlot(parent *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind], name string, child *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) {
@@ -88,7 +103,6 @@ func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) SetSlot(parent *SyntaxaASTN
 	child.parent = parent
 
 	e.markDirtyCascade(parent)
-	e.recomputeSpanUp(parent)
 }
 
 func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) Replace(oldNode, newNode *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) {
@@ -109,7 +123,6 @@ func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) Replace(oldNode, newNode *S
 			newNode.parent = parent
 			oldNode.parent = nil
 			e.markDirtyCascade(parent)
-			e.recomputeSpanUp(parent)
 			return
 		}
 	}
@@ -120,7 +133,6 @@ func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) Replace(oldNode, newNode *S
 			newNode.parent = parent
 			oldNode.parent = nil
 			e.markDirtyCascade(parent)
-			e.recomputeSpanUp(parent)
 			return
 		}
 	}
@@ -153,8 +165,6 @@ func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) Detach(node *SyntaxaASTNode
 			return
 		}
 	}
-
-	e.recomputeSpanUp(parent)
 }
 
 func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) SetAttribute(node *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind], key string, value any) {
@@ -182,41 +192,8 @@ func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) AddToken(
 	tok lexarch.Lexeme[TObs, TToken, TTokenRole],
 ) {
 	e.ensureMutable()
-
 	node.tokens = append(node.tokens, tok)
-
-	// ─────────────────────────────────────────────
-	// Establish or widen span from token
-	// ─────────────────────────────────────────────
-
-	if len(node.tokens) == 1 {
-		node.start = tok.Start
-		node.end = tok.End
-
-		node.startLine = tok.StartLine
-		node.startColumn = tok.StartColumn
-		node.endLine = tok.EndLine
-		node.endColumn = tok.EndColumn
-	} else {
-		if tok.Start < node.start {
-			node.start = tok.Start
-			node.startLine = tok.StartLine
-			node.startColumn = tok.StartColumn
-		}
-
-		if tok.End > node.end {
-			node.end = tok.End
-			node.endLine = tok.EndLine
-			node.endColumn = tok.EndColumn
-		}
-	}
-
-	// ─────────────────────────────────────────────
-	// Propagate structural invariants upward
-	// ─────────────────────────────────────────────
-
 	e.markDirtyCascade(node)
-	e.recomputeSpanUp(node)
 }
 
 func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) SetTokens(node *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind], toks []lexarch.Lexeme[TObs, TToken, TTokenRole]) {
@@ -257,12 +234,7 @@ func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) SetLineSpan(
 func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) markDirtyCascade(n *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) {
 	for cur := n; cur != nil; cur = cur.parent {
 		cur.revision++
-	}
-}
-
-func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) recomputeSpanUp(n *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) {
-	for cur := n; cur != nil; cur = cur.parent {
-		e.recomputeSpan(cur)
+		cur.spanValid = false
 	}
 }
 
@@ -272,28 +244,34 @@ type span struct {
 	el, ec     int
 }
 
-func merge(a, b span) span {
-	// byte span
-	if b.start < a.start {
-		a.start = b.start
-	}
-	if b.end > a.end {
-		a.end = b.end
+func merge(base span, next span, isEmpty bool) span {
+	if isEmpty {
+		return next
 	}
 
-	// start position
-	if b.sl < a.sl || (b.sl == a.sl && b.sc < a.sc) {
-		a.sl = b.sl
-		a.sc = b.sc
+	// 1. Widen Byte Span
+	if next.start < base.start {
+		base.start = next.start
+	}
+	if next.end > base.end {
+		base.end = next.end
 	}
 
-	// end position
-	if b.el > a.el || (b.el == a.el && b.ec > a.ec) {
-		a.el = b.el
-		a.ec = b.ec
+	// 2. Widen Start (Lexicographical Min)
+	// If next line is earlier, OR same line but earlier column
+	if next.sl < base.sl || (next.sl == base.sl && next.sc < base.sc) {
+		base.sl = next.sl
+		base.sc = next.sc
 	}
 
-	return a
+	// 3. Widen End (Lexicographical Max)
+	// If next line is later, OR same line but later column
+	if next.el > base.el || (next.el == base.el && next.ec > base.ec) {
+		base.el = next.el
+		base.ec = next.ec
+	}
+
+	return base
 }
 
 func spanFromNode[TObs cmp.Ordered, TToken, TTokenRole, TKind comparable](
@@ -322,52 +300,58 @@ func spanFromToken[TObs cmp.Ordered, TToken, TTokenRole comparable](
 	}
 }
 
-func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) recomputeSpan(
+func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) ensureSpanValid(
 	n *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind],
 ) {
-	var (
-		acc   span
-		first = true
-	)
-
-	apply := func(s span) {
-		if first {
-			acc = s
-			first = false
-			return
-		}
-		acc = merge(acc, s)
+	if n.spanValid {
+		return
 	}
 
+	var acc span
+	empty := true
+
+	// 1. Tokens
 	for _, tok := range n.tokens {
-		apply(spanFromToken(tok))
+		acc = merge(acc, spanFromToken(tok), empty)
+		empty = false
 	}
 
+	// 2. Positional Children
 	for _, ch := range n.children {
 		if ch != nil {
-			apply(spanFromNode(ch))
+			e.ensureSpanValid(ch) // Recursive depth-first validation
+			acc = merge(acc, spanFromNode(ch), empty)
+			empty = false
 		}
 	}
 
+	// 3. Named Slots
 	for _, ch := range n.slots {
 		if ch != nil {
-			apply(spanFromNode(ch))
+			e.ensureSpanValid(ch)
+			acc = merge(acc, spanFromNode(ch), empty)
+			empty = false
 		}
 	}
 
-	if first {
-		return // no contributors
+	if !empty {
+		n.start, n.end = acc.start, acc.end
+		n.startLine, n.startColumn = acc.sl, acc.sc
+		n.endLine, n.endColumn = acc.el, acc.ec
 	}
+	n.spanValid = true
+}
 
-	n.start = acc.start
-	n.end = acc.end
-	n.startLine = acc.sl
-	n.startColumn = acc.sc
-	n.endLine = acc.el
-	n.endColumn = acc.ec
+/* ComputeSpans should be called to ensure all spans inside the tree are valid. */
+func (e *ASTEditor[TObservation, TToken, TTokenRole, TNodeKind]) ComputeSpans() {
+	e.ensureSpanValid(e.root)
 }
 
 func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) Freeze() {
+	if e.root != nil {
+		e.ensureSpanValid(e.root)
+	}
+
 	e.frozen = true
 }
 

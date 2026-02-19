@@ -192,6 +192,10 @@ func parseWithContext[
 	if parser.freezeAfterParse {
 		defer editor.Freeze()
 	}
+	editor.setRoot(root)
+
+	editor.begin()
+	defer editor.end()
 
 	var trace *ParseTrace[TToken]
 	if parser.debugTrace {
@@ -317,6 +321,8 @@ func parseWithContext[
 		return trace, err
 	}
 
+	editor.ComputeSpans()
+
 	return trace, nil
 }
 
@@ -361,18 +367,23 @@ func validateRuleSuccess[
 	endPos int,
 	current lexarch.Lexeme[TObservation, TToken, TTokenRole],
 ) error {
-	if endPos == startPos {
+	if endPos == startPos && !result.Optional {
 		return fmt.Errorf(
-			"parser invariant violated: rule succeeded without consuming input at cursor %d (token=%v)",
+			"parser invariant violated: non-optional rule succeeded without consuming input at cursor %d (token=%v) [%d:%d]",
 			startPos,
 			current.Token,
+			current.StartLine,
+			current.StartColumn,
 		)
 	}
 
 	if result.Node == nil && !result.SkipAdd {
 		return fmt.Errorf(
-			"parser invariant violated: rule returned nil node without explicit skip at cursor %d",
+			"parser invariant violated: rule returned nil node without explicit skip at cursor %d (token=%v) [%d:%d]",
 			startPos,
+			current.Token,
+			current.StartLine,
+			current.StartColumn,
 		)
 	}
 

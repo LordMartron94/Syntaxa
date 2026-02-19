@@ -4,8 +4,9 @@ import "cmp"
 
 /* RuleResult encapsulates the return value of a parser rule. */
 type RuleResult[TObservation cmp.Ordered, TToken, TTokenRole, TKind comparable] struct {
-	Node    *SyntaxaASTNode[TObservation, TToken, TTokenRole, TKind]
-	SkipAdd bool // Explicitly allow nil.
+	Node     *SyntaxaASTNode[TObservation, TToken, TTokenRole, TKind]
+	SkipAdd  bool // Explicitly allow nil.
+	Optional bool
 }
 
 /*
