@@ -221,6 +221,9 @@ func syntaxaParserExecuteRule[
 	lexemePreRule := ctx.Token.Peek(0)
 	lexemePreRuleRaw := ctx.Token.PeekRaw(0)
 
+	// fmt.Printf("starting exec rule: %s\n", rule.name)
+	// defer fmt.Printf("end exec rule: %s\n", rule.name)
+
 	// Recovery scope for this construct
 	if mode == ExecutionNormal {
 		ctx.Recovery.pushRecovery(rule.recoveryTokens...)

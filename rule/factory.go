@@ -212,8 +212,13 @@ func (t *tokenEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 		// ------------------------------
 		// EXPECT SEPARATOR
 		// ------------------------------
-		if peek.Token != separatorToken {
-			return t.reportExpectedEither(ctx, name, peek, separatorToken, listEndToken)
+		if peek.Token == elementToken {
+			ctx.Error.ReportAtEnd(
+				name,
+				elem,
+				fmt.Sprintf("missing %s between list elements", t.sharedCore.tokenFormatter(separatorToken)),
+			)
+			return t.sharedCore.buildFailureRuleResult(nil, syntaxa.FailureError)
 		}
 
 		sep := ctx.Token.Consume()
@@ -281,20 +286,6 @@ func (t *tokenEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 	msg := fmt.Sprintf("unexpected %s, expected %s",
 		t.sharedCore.tokenFormatter(found.Token),
 		t.sharedCore.tokenFormatter(expected))
-	ctx.Error.ReportAt(name, found, msg)
-	return t.sharedCore.buildFailureRuleResult(nil, syntaxa.FailureError)
-}
-
-func (t *tokenEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) reportExpectedEither(
-	ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
-	name string,
-	found lexarch.Lexeme[TObservation, TToken, TTokenRole],
-	exp1, exp2 TToken,
-) Result[TObservation, TToken, TTokenRole, TNodeKind] {
-	msg := fmt.Sprintf("unexpected %s, expected %s or %s",
-		t.sharedCore.tokenFormatter(found.Token),
-		t.sharedCore.tokenFormatter(exp1),
-		t.sharedCore.tokenFormatter(exp2))
 	ctx.Error.ReportAt(name, found, msg)
 	return t.sharedCore.buildFailureRuleResult(nil, syntaxa.FailureError)
 }
