@@ -118,7 +118,8 @@ type ParserRule[
 	TLexerState,
 	TNodeKind comparable,
 ] struct {
-	name string
+	name          string
+	expectedLabel string
 
 	executionFn ParserRuleExecutor[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 
@@ -141,6 +142,10 @@ func (p *ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) G
 	return p.contract
 }
 
+func (p *ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) GetExpectedLabel() string {
+	return p.expectedLabel
+}
+
 /*
 ParserRuleCreate constructs a rule.
 
@@ -157,13 +162,14 @@ func ParserRuleCreate[
 	TLexerState,
 	TNodeKind comparable,
 ](
-	ruleName string,
+	ruleName, expectedLabel string,
 	executionFn ParserRuleExecutor[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	contract RuleContract,
 	recoveryTokens []TToken,
 ) ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
 	return ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]{
 		name:           ruleName,
+		expectedLabel:  expectedLabel,
 		executionFn:    executionFn,
 		contract:       contract,
 		recoveryTokens: recoveryTokens,

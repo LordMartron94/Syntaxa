@@ -143,31 +143,64 @@ func (sc *skipCore[TTokenRole]) isSkipped(role TTokenRole) bool {
 
 // -------------------------------------------------------------
 
-type errorCore[TObs cmp.Ordered] struct {
+type errorCore[TObs cmp.Ordered, TToken, TTokenRole comparable] struct {
 	sink *SyntaxErrors[TObs]
+	ts   *tokenStream[TObs, TToken, TTokenRole]
 }
 
-func (ec *errorCore[TObs]) Report(line, column int, description string) {
+func (ec *errorCore[TObs, _, _]) ReportHere(message string) {
+	current := ec.ts.Peek(0)
+
 	ec.sink.report(SyntaxError[TObs]{
-		Message:     description,
-		StartLine:   line,
-		StartColumn: column,
-		EndLine:     line,
-		EndColumn:   column,
+		Message:          message,
+		StartLine:        current.StartLine,
+		StartColumn:      current.StartColumn,
+		EndLine:          current.EndLine,
+		EndColumn:        current.EndColumn,
+		AbsolutePosition: current.Start,
+		TokenNumber:      current.TokenNumber,
 	})
 }
 
-func (ec *errorCore[TObs]) ReportSpan(startLine, startColumn, endLine, endColumn int, description string) {
+func (ec *errorCore[TObs, TToken, TTokenRole]) ReportAt(lexeme lexarch.Lexeme[TObs, TToken, TTokenRole], message string) {
 	ec.sink.report(SyntaxError[TObs]{
-		Message:     description,
-		StartLine:   startLine,
-		StartColumn: startColumn,
-		EndLine:     endLine,
-		EndColumn:   endColumn,
+		Message:          message,
+		StartLine:        lexeme.StartLine,
+		StartColumn:      lexeme.StartColumn,
+		EndLine:          lexeme.EndLine,
+		EndColumn:        lexeme.EndColumn,
+		AbsolutePosition: lexeme.Start,
+		TokenNumber:      lexeme.TokenNumber,
 	})
 }
 
-func (ec *errorCore[TObs]) reportLexerError(line, column int, description string) {
+func (ec *errorCore[TObs, TToken, TTokenRole]) ReportAdvanced(startLine, startColumn, endLine, endColumn, absolutePosition, tokenNumber int, message string) {
+	ec.sink.report(SyntaxError[TObs]{
+		Message:          message,
+		StartLine:        startLine,
+		StartColumn:      startColumn,
+		EndLine:          endLine,
+		EndColumn:        endColumn,
+		AbsolutePosition: absolutePosition,
+		TokenNumber:      tokenNumber,
+	})
+}
+
+func (ec *errorCore[TObs, TToken, TTokenRole]) replaceBestErrorAt(lexeme lexarch.Lexeme[TObs, TToken, TTokenRole], message string) bool {
+	err := SyntaxError[TObs]{
+		Message:          message,
+		StartLine:        lexeme.StartLine,
+		StartColumn:      lexeme.StartColumn,
+		EndLine:          lexeme.EndLine,
+		EndColumn:        lexeme.EndColumn,
+		AbsolutePosition: lexeme.Start,
+		TokenNumber:      lexeme.TokenNumber,
+	}
+
+	return ec.sink.replaceBest(err)
+}
+
+func (ec *errorCore[TObs, _, _]) reportLexerError(line, column int, description string) {
 	ec.sink.report(SyntaxError[TObs]{
 		Message:         description,
 		StartLine:       line,
@@ -200,7 +233,7 @@ type ExecRuleContext[
 	Skip *skipCore[TTokenRole]
 
 	/* The Error endpoint provides access to syntax error reporting functionality. */
-	Error *errorCore[TObservation]
+	Error *errorCore[TObservation, TToken, TTokenRole]
 
 	/* ExecuteRule routes a rule through the parser for invariant detection. */
 	ExecuteRule func(rule ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind], mode RuleExecutionMode) RuleResult[TObservation, TToken, TTokenRole, TNodeKind]
@@ -382,16 +415,16 @@ func buildBaseContext[
 		sCore.PushSkipRoles(parser.defaultSkipRoles...)
 	}
 
-	rCore := &recoveryCore[TToken]{}
-	rCore.setDefaultRecovery(parser.eofToken)
-	eCore := &errorCore[TObservation]{sink: errors}
-
 	tStream := &tokenStream[TObservation, TToken, TTokenRole]{
 		peekRaw:    src.peek,
 		consumeRaw: src.consume,
 		skipCore:   sCore,
 		eofToken:   parser.eofToken,
 	}
+
+	rCore := &recoveryCore[TToken]{}
+	rCore.setDefaultRecovery(parser.eofToken)
+	eCore := &errorCore[TObservation, TToken, TTokenRole]{sink: errors, ts: tStream}
 
 	editor := &ASTEditor[TObservation, TToken, TTokenRole, TNodeKind]{}
 

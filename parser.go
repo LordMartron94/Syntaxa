@@ -238,6 +238,17 @@ func syntaxaParserExecuteRule[
 		ctx.restore(startSnap)
 
 		if mode == ExecutionNormal {
+			if bestPos, ok := ctx.Error.sink.currentBestPosition(); ok && bestPos == startPos {
+				ctx.Error.replaceBestErrorAt(
+					lexemePreRule,
+					fmt.Sprintf(
+						"unexpected %v, expected %s",
+						lexemePreRule.Token,
+						rule.expectedLabel,
+					),
+				)
+			}
+
 			ctx.Error.sink.popFrame(true)
 
 			recovered := performRecovery(ctx, parser.eofToken)

@@ -96,6 +96,27 @@ func (s *SyntaxErrors[TObservation]) popFrame(commit bool) {
 	s.Errors = append(s.Errors, *top.best)
 }
 
+func (s *SyntaxErrors[TObservation]) replaceBest(err SyntaxError[TObservation]) bool {
+	if len(s.stack) == 0 {
+		return false
+	}
+	f := &s.stack[len(s.stack)-1]
+	f.best = &err
+	f.bestAbsolutePosition = err.AbsolutePosition
+	return true
+}
+
+func (s *SyntaxErrors[TObservation]) currentBestPosition() (int, bool) {
+	if len(s.stack) == 0 {
+		return 0, false
+	}
+	top := s.stack[len(s.stack)-1]
+	if top.best == nil {
+		return 0, false
+	}
+	return top.best.AbsolutePosition, true
+}
+
 /*
 report records a candidate syntax error in the current frame.
 
