@@ -272,7 +272,7 @@ func syntaxaParserExecuteRule[
 
 	ctx.Error.sink.popFrame(true)
 
-	if err := validateRuleSuccess(rule, ruleResult, startPos, endPos, lexemePreRule); err != nil {
+	if err := validateRuleSuccess(parser, rule, ruleResult, startPos, endPos, lexemePreRule); err != nil {
 		panic(err)
 	}
 
@@ -315,6 +315,7 @@ func validateRuleSuccess[
 	TLexerState,
 	TNodeKind comparable,
 ](
+	parser *SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
 	rule ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	result RuleResult[TObservation, TToken, TTokenRole, TNodeKind],
 	startPos int,
@@ -323,7 +324,7 @@ func validateRuleSuccess[
 ) error {
 	contract := rule.contract
 
-	if endPos == startPos && contract.MustConsume {
+	if endPos == startPos && contract.MustConsume && lexemePreRule.Token != parser.eofToken {
 		return fmt.Errorf(
 			"parser invariant violated: non-optional rule succeeded without consuming input at cursor %d (token=%v) [%d:%d] | rule = '%s'",
 			startPos,
