@@ -246,31 +246,6 @@ func (t *tokenEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 	}
 }
 
-func (t *tokenEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) validateTrailingMode(
-	ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
-	name string,
-	node *syntaxa.SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind],
-	closingLexeme lexarch.Lexeme[TObservation, TToken, TTokenRole],
-	lastSeparator lexarch.Lexeme[TObservation, TToken, TTokenRole],
-	lastElement lexarch.Lexeme[TObservation, TToken, TTokenRole],
-	mode TrailingSeparatorMode,
-) Result[TObservation, TToken, TTokenRole, TNodeKind] {
-
-	switch mode {
-	case TrailingForbidden:
-		ctx.Error.ReportAt(name, lastSeparator, "trailing separator not allowed")
-		return t.sharedCore.buildFailureRuleResult(nil, syntaxa.FailureError)
-
-	case TrailingRequired:
-		ctx.Error.ReportAtEnd(name, lastElement, "missing required trailing separator")
-		return t.sharedCore.buildFailureRuleResult(nil, syntaxa.FailureError)
-
-	default:
-		ctx.Token.Consume()
-		return t.sharedCore.buildSuccessRuleResult(node)
-	}
-}
-
 func (t *tokenEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) handleEmptyList(
 	ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	name string,
@@ -325,6 +300,7 @@ func (t *tokenEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 }
 
 type ruleEndpoint[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable] struct {
+	token      *tokenEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 	sharedCore *sharedCore[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 }
 
@@ -407,9 +383,33 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 	nodeKind TNodeKind,
 	rules ...Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 ) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
-
 	name := r.sharedCore.createRuleName("Sequence", grammarID)
+	return r.listCore(name, grammarID, nodeKind, nil, rules...)
+}
 
+/*
+Block is akin to Sequence except that it has an integrated blockEnd token.
+
+It automatically handles recovery.
+
+Note: You must still include the rule for the block end token.
+*/
+func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) Block(
+	grammarID string,
+	nodeKind TNodeKind,
+	blockEndToken TToken,
+	rules ...Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
+	name := r.sharedCore.createRuleName("Block", grammarID)
+	return r.listCore(name, grammarID, nodeKind, []TToken{blockEndToken}, rules...)
+}
+
+func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) listCore(
+	name, grammarID string,
+	nodeKind TNodeKind,
+	recovery []TToken,
+	rules ...Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
 	mustConsume := false
 	for i := range rules {
 		if rules[i].GetContract().MustConsume {
@@ -452,7 +452,7 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 
 			return r.sharedCore.buildSuccessRuleResult(node)
 		},
-		nil,
+		recovery,
 	)
 }
 
@@ -622,6 +622,7 @@ func RuleBuilderCreate[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState
 
 	ruleEndpoint := &ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]{
 		sharedCore: sharedCore,
+		token:      tokenEndpoint,
 	}
 
 	return &RuleBuilder[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]{

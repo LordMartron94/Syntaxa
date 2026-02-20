@@ -1,6 +1,8 @@
 package syntaxa
 
-import "cmp"
+import (
+	"cmp"
+)
 
 /*
 SyntaxError represents a single syntax error produced during parsing or lexing.
@@ -41,6 +43,8 @@ type SyntaxErrors[TObservation cmp.Ordered] struct {
 type errorFrame[TObservation cmp.Ordered] struct {
 	best                 *SyntaxError[TObservation]
 	bestAbsolutePosition int
+
+	committed []SyntaxError[TObservation]
 }
 
 /*
@@ -64,7 +68,9 @@ All reported errors are buffered until the frame is either committed
 or discarded.
 */
 func (s *SyntaxErrors[TObservation]) pushFrame() {
-	s.stack = append(s.stack, errorFrame[TObservation]{})
+	s.stack = append(s.stack, errorFrame[TObservation]{
+		committed: make([]SyntaxError[TObservation], 0, 4),
+	})
 }
 
 /*
@@ -81,20 +87,30 @@ func (s *SyntaxErrors[TObservation]) popFrame(commit bool) {
 	top := s.stack[len(s.stack)-1]
 	s.stack = s.stack[:len(s.stack)-1]
 
-	if !commit || top.best == nil {
+	if !commit {
+		return
+	}
+
+	// Build the list of errors this frame contributes upward:
+	// 1) all committed child errors
+	// 2) plus this frame's own best error (if any)
+	out := make([]SyntaxError[TObservation], 0, len(top.committed)+1)
+	out = append(out, top.committed...)
+	if top.best != nil {
+		out = append(out, *top.best)
+	}
+
+	if len(out) == 0 {
 		return
 	}
 
 	if len(s.stack) > 0 {
 		parent := &s.stack[len(s.stack)-1]
-		if betterError(parent, *top.best) {
-			parent.best = top.best
-			parent.bestAbsolutePosition = top.best.AbsolutePosition
-		}
+		parent.committed = append(parent.committed, out...)
 		return
 	}
 
-	s.Errors = append(s.Errors, *top.best)
+	s.Errors = append(s.Errors, out...)
 }
 
 func (s *SyntaxErrors[TObservation]) replaceBest(err SyntaxError[TObservation]) bool {
@@ -130,7 +146,6 @@ func (s *SyntaxErrors[TObservation]) report(err SyntaxError[TObservation]) {
 	}
 
 	f := &s.stack[len(s.stack)-1]
-
 	if betterError(f, err) {
 		f.best = &err
 		f.bestAbsolutePosition = err.AbsolutePosition

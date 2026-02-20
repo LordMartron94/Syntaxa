@@ -221,11 +221,13 @@ func syntaxaParserExecuteRule[
 	lexemePreRule := ctx.Token.Peek(0)
 	lexemePreRuleRaw := ctx.Token.PeekRaw(0)
 
+	// Recovery scope for this construct
 	if mode == ExecutionNormal {
 		ctx.Recovery.pushRecovery(rule.recoveryTokens...)
 		defer ctx.Recovery.popRecovery()
 	}
 
+	// === Error frame for THIS construct ===
 	ctx.Error.sink.pushFrame()
 
 	ruleResult := rule.executionFn(ctx)
@@ -233,16 +235,21 @@ func syntaxaParserExecuteRule[
 	endPos := ctx.save().tokenIndex
 	success := ruleResult.Succeeded
 
-	ctx.trace.Events = append(ctx.trace.Events, ParseTraceEvent[TToken]{
-		Cursor:        startPos,
-		RawToken:      lexemePreRuleRaw.Token,
-		LogicalToken:  lexemePreRule.Token,
-		RuleSucceeded: success,
-		Consumed:      endPos != startPos,
-		NodeReturned:  ruleResult.Node != nil,
-		RuleName:      rule.name,
-	})
+	if ctx.trace != nil {
+		ctx.trace.Events = append(ctx.trace.Events, ParseTraceEvent[TToken]{
+			Cursor:        startPos,
+			RawToken:      lexemePreRuleRaw.Token,
+			LogicalToken:  lexemePreRule.Token,
+			RuleSucceeded: success,
+			Consumed:      endPos != startPos,
+			NodeReturned:  ruleResult.Node != nil,
+			RuleName:      rule.name,
+		})
+	}
 
+	// ============================================================
+	// FAILURE PATH
+	// ============================================================
 	if !success {
 		ctx.restore(startSnap)
 
@@ -262,10 +269,17 @@ func syntaxaParserExecuteRule[
 
 				ctx.Error.sink.popFrame(true)
 
-				recovered := performRecovery(ctx, parser.eofToken)
+				// ------------------------------------------------
+				// Recovery should NOT produce competing errors
+				// ------------------------------------------------
+				ctx.Error.sink.pushFrame()
+				recovered := performRecovery(ctx, parser.eofToken, rule)
+				ctx.Error.sink.popFrame(false)
+
 				if recovered {
 					ctx.Token.ConsumeRaw()
 				}
+
 			} else {
 				ctx.Error.sink.popFrame(false)
 			}
@@ -277,9 +291,20 @@ func syntaxaParserExecuteRule[
 		return ruleResult
 	}
 
+	// ============================================================
+	// SUCCESS PATH
+	// ============================================================
+
 	ctx.Error.sink.popFrame(true)
 
-	if err := validateRuleSuccess(parser, rule, ruleResult, startPos, endPos, lexemePreRule); err != nil {
+	if err := validateRuleSuccess(
+		parser,
+		rule,
+		ruleResult,
+		startPos,
+		endPos,
+		lexemePreRule,
+	); err != nil {
 		panic(err)
 	}
 
@@ -295,10 +320,11 @@ func performRecovery[
 ](
 	ctx *ExecRuleContext[TObs, TToken, TTokenRole, TLexerState, TKind],
 	eof TToken,
+	recoveryFromRule ParserRule[TObs, TToken, TTokenRole, TLexerState, TKind],
 ) bool {
 	syncSet := ctx.Recovery.currentRecovery()
 
-	fmt.Printf("recovering with set: %v\n", syncSet)
+	// fmt.Printf("recovering from rule %s with set: %v\n", recoveryFromRule.GetName(), syncSet)
 
 	for {
 		cur := ctx.Token.PeekRaw(0)

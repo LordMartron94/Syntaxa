@@ -115,34 +115,6 @@ func (rc *recoveryCore[_, TToken, _]) currentRecovery() tokenSet[TToken] {
 	return merged
 }
 
-func (rc *recoveryCore[TObservation, TToken, TTokenRole]) makeSet(tokens ...TToken) tokenSet[TToken] {
-	merged := make(tokenSet[TToken])
-
-	for t := range rc.defaultRecovery {
-		merged[t] = struct{}{}
-	}
-
-	for _, t := range tokens {
-		merged[t] = struct{}{}
-	}
-
-	return merged
-}
-
-func (rc *recoveryCore[_, TToken, _]) PerformLocalRecovery(skipUntilOneOf ...TToken) {
-	set := rc.makeSet(skipUntilOneOf...)
-
-	for {
-		cur := rc.ts.PeekRaw(0)
-
-		if _, ok := set[cur.Token]; ok {
-			return
-		}
-
-		rc.ts.ConsumeRaw()
-	}
-}
-
 // -------------------------------------------------------------
 
 type skipCore[TTokenRole comparable] struct {
