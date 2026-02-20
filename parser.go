@@ -191,6 +191,14 @@ func parseWithContext[
 	editor.setRoot(programResult.Node)
 	editor.ComputeSpans()
 
+	peeked := ctx.Token.Peek(0)
+	if peeked.Token != parser.eofToken {
+		ctx.Error.ReportAt(
+			peeked,
+			fmt.Sprintf("unexpected %v, expected end of file", peeked.Token),
+		)
+	}
+
 	return programResult.Node, ctx.trace, nil
 }
 

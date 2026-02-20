@@ -158,8 +158,9 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 	grammarID string,
 	nodeKind TNodeKind,
 	mustConsume bool,
-	rule Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+	rules ...Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 ) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
+
 	name := r.sharedCore.createRuleName("Root", grammarID)
 
 	return r.sharedCore.constructRule(
@@ -167,18 +168,20 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 		grammarID,
 		r.sharedCore.createContract(mustConsume, true),
 		func(ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) Result[TObservation, TToken, TTokenRole, TNodeKind] {
-			result := ctx.ExecuteRule(rule, syntaxa.ExecutionNormal)
-
-			if result.Failed() {
-				node := ctx.Editor.NewNode(nodeKind)
-				return r.sharedCore.buildSuccessRuleResult(node)
-			}
-
-			if result.Node != nil {
-				return result
-			}
-
 			node := ctx.Editor.NewNode(nodeKind)
+
+			for _, rule := range rules {
+				result := ctx.ExecuteRule(rule, syntaxa.ExecutionNormal)
+
+				if result.Failed() {
+					return r.sharedCore.buildFailureRuleResult(nil)
+				}
+
+				if result.Node != nil {
+					ctx.Editor.AttachChild(node, result.Node)
+				}
+			}
+
 			return r.sharedCore.buildSuccessRuleResult(node)
 		},
 		nil,
