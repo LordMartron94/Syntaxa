@@ -3,6 +3,7 @@ package syntaxa
 import (
 	"cmp"
 	"lexarch"
+	"strings"
 	"structarch"
 )
 
@@ -78,6 +79,26 @@ func (n *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) Kind() TKind {
 
 func (n *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) Parent() *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind] {
 	return n.parent
+}
+
+func (n *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) GetContent(
+	sep string,
+) string {
+
+	if len(n.tokens) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+
+	for i, lex := range n.tokens {
+		if i > 0 {
+			b.WriteString(sep)
+		}
+		b.WriteString(lex.FormatRawDiagnostic())
+	}
+
+	return b.String()
 }
 
 /* Children returns a defensive copy of child nodes. */
