@@ -117,7 +117,105 @@ func (t *tokenEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 			nil,
 		)
 	}
+}
 
+/*
+List matches a list-like grammar:
+
+	OPEN ( ELEMENT ( SEP ELEMENT )* [SEP]? ) CLOSE
+
+It automatically handles recovery.
+
+If allowEmptyList is true, OPEN CLOSE is valid.
+If optionalTrailingSeparator is true, the final separator may appear before CLOSE.
+*/
+func (t *tokenEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) List(
+	grammarID string,
+	listOpenToken, elementToken, separatorToken, listEndToken TToken,
+	listNodeKind, elementNodeKind TNodeKind,
+	allowEmptyList, optionalTrailingSeparator bool,
+) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
+	name := t.sharedCore.createRuleName("List", grammarID)
+
+	recovery := []TToken{listEndToken}
+
+	return t.sharedCore.constructStructuralRule(
+		name,
+		grammarID,
+		func(ctx *syntaxa.ExecRuleContext[
+			TObservation, TToken, TTokenRole, TLexerState, TNodeKind,
+		]) Result[TObservation, TToken, TTokenRole, TNodeKind] {
+
+			peek := ctx.Token.Peek(0)
+			if peek.Token != listOpenToken {
+				ctx.Error.ReportAt(peek, fmt.Sprintf(
+					"unexpected %s, expected %s",
+					t.sharedCore.tokenFormatter(peek.Token),
+					t.sharedCore.tokenFormatter(listOpenToken),
+				))
+				return t.sharedCore.buildFailureRuleResult(nil)
+			}
+
+			ctx.Token.Consume()
+
+			node := ctx.Editor.NewNode(listNodeKind)
+
+			peek = ctx.Token.Peek(0)
+			if peek.Token == listEndToken {
+				if !allowEmptyList {
+					ctx.Error.ReportAt(peek, "empty list not allowed")
+				}
+				ctx.Token.Consume()
+				return t.sharedCore.buildSuccessRuleResult(node)
+			}
+
+			for {
+				peek = ctx.Token.Peek(0)
+				if peek.Token != elementToken {
+					ctx.Error.ReportAt(peek, fmt.Sprintf(
+						"unexpected %s, expected %s",
+						t.sharedCore.tokenFormatter(peek.Token),
+						t.sharedCore.tokenFormatter(elementToken),
+					))
+					return t.sharedCore.buildFailureRuleResult(nil)
+				}
+
+				value := ctx.Token.Consume()
+				elem := ctx.Editor.NewNode(elementNodeKind)
+				ctx.Editor.AddToken(elem, value)
+				ctx.Editor.AttachChild(node, elem)
+
+				peek = ctx.Token.Peek(0)
+
+				if peek.Token == separatorToken {
+					ctx.Token.Consume()
+
+					peek = ctx.Token.Peek(0)
+					if peek.Token == listEndToken && optionalTrailingSeparator {
+						ctx.Token.Consume()
+						return t.sharedCore.buildSuccessRuleResult(node)
+					}
+
+					continue
+				}
+
+				if peek.Token == listEndToken {
+					ctx.Token.Consume()
+					return t.sharedCore.buildSuccessRuleResult(node)
+				}
+
+				ctx.Error.ReportAt(peek, fmt.Sprintf(
+					"unexpected %s, expected %s or %s",
+					t.sharedCore.tokenFormatter(peek.Token),
+					t.sharedCore.tokenFormatter(separatorToken),
+					t.sharedCore.tokenFormatter(listEndToken),
+				))
+
+				return t.sharedCore.buildFailureRuleResult(nil)
+			}
+		},
+		recovery,
+	)
 }
 
 type ruleEndpoint[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable] struct {
@@ -160,7 +258,6 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 	mustConsume bool,
 	rules ...Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 ) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
-
 	name := r.sharedCore.createRuleName("Root", grammarID)
 
 	return r.sharedCore.constructRule(
@@ -168,13 +265,14 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 		grammarID,
 		r.sharedCore.createContract(mustConsume, true),
 		func(ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) Result[TObservation, TToken, TTokenRole, TNodeKind] {
+
 			node := ctx.Editor.NewNode(nodeKind)
 
 			for _, rule := range rules {
 				result := ctx.ExecuteRule(rule, syntaxa.ExecutionNormal)
 
 				if result.Failed() {
-					return r.sharedCore.buildFailureRuleResult(nil)
+					return r.sharedCore.buildSuccessRuleResult(node)
 				}
 
 				if result.Node != nil {
@@ -235,6 +333,89 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 		},
 		nil,
 	)
+}
+
+/*
+NOrMore matches a rule at least min times and then as many times as possible.
+
+Each iteration is speculative — failure simply stops the repetition.
+
+Guards against infinite loops by requiring consumption per success.
+*/
+func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) NOrMore(
+	grammarID string,
+	nodeKind TNodeKind,
+	min int,
+	rule Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
+
+	if min < 0 {
+		panic("NOrMore: min must be >= 0")
+	}
+
+	name := r.sharedCore.createRuleName("NOrMore", grammarID)
+
+	mustConsume := min > 0 && rule.GetContract().MustConsume
+
+	return r.sharedCore.constructRule(
+		name,
+		rule.GetExpectedLabel(),
+		r.sharedCore.createContract(mustConsume, true),
+		func(ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) Result[TObservation, TToken, TTokenRole, TNodeKind] {
+
+			node := ctx.Editor.NewNode(nodeKind)
+
+			count := 0
+
+			for {
+				before := ctx.Token.PeekRaw(0)
+
+				result := ctx.ExecuteRule(rule, syntaxa.ExecutionProbe)
+				if result.Failed() {
+					break
+				}
+
+				after := ctx.Token.PeekRaw(0)
+
+				if before.Token == after.Token &&
+					before.StartLine == after.StartLine &&
+					before.StartColumn == after.StartColumn {
+					panic("NOrMore: rule succeeded without consuming input (infinite loop)")
+				}
+
+				if result.Node != nil {
+					ctx.Editor.AttachChild(node, result.Node)
+				}
+
+				count++
+			}
+
+			if count < min {
+				return r.sharedCore.buildFailureRuleResult(nil)
+			}
+
+			return r.sharedCore.buildSuccessRuleResult(node)
+		},
+		rule.GetRecoveryTokens(),
+	)
+}
+
+/* ZeroOrMore is a thin wrapper around NOrMore. */
+func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) ZeroOrMore(
+	grammarID string,
+	nodeKind TNodeKind,
+	rule Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
+	return r.NOrMore(grammarID, nodeKind, 0, rule)
+}
+
+/* OneOrMore is a thin wrapper around NOrMore. */
+func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) OneOrMore(
+	grammarID string,
+	nodeKind TNodeKind,
+	rule Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
+	return r.NOrMore(grammarID, nodeKind, 1, rule)
 }
 
 /*
