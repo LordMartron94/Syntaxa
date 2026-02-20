@@ -28,10 +28,6 @@ func (e *ASTEditor[TObservation, TToken, TTokenRole, TNodeKind]) begin() {
 		panic("ASTEditor reused concurrently or across parses")
 	}
 
-	if e.root == nil {
-		panic("Editor session began without an active root")
-	}
-
 	e.inUse.Store(true)
 }
 
@@ -344,6 +340,10 @@ func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) ensureSpanValid(
 
 /* ComputeSpans should be called to ensure all spans inside the tree are valid. */
 func (e *ASTEditor[TObservation, TToken, TTokenRole, TNodeKind]) ComputeSpans() {
+	if e.root == nil {
+		panic("editor does not have root set yet")
+	}
+
 	e.ensureSpanValid(e.root)
 }
 

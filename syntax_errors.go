@@ -1,11 +1,9 @@
 package syntaxa
 
-import (
-	"cmp"
-)
+import "cmp"
 
 /*
-SyntaxError represents a single syntax error.
+SyntaxError represents a single syntax error produced during parsing or lexing.
 */
 type SyntaxError[TObservation cmp.Ordered] struct {
 	ProducedByLexer bool
@@ -25,13 +23,18 @@ type SyntaxError[TObservation cmp.Ordered] struct {
 }
 
 /*
-SyntaxErrors aggregates syntax errors produced during parsing.
+SyntaxErrors aggregates syntax errors using transactional frames.
+
+Errors are collected speculatively during rule execution and are only
+committed when the grammar commits a branch. Failed speculative paths
+discard their diagnostics automatically.
+
+This mirrors transactional parsing state and prevents ghost errors
+from optional rules, backtracking, and ordered choice.
 */
 type SyntaxErrors[TObservation cmp.Ordered] struct {
 	Errors []SyntaxError[TObservation]
-
-	stack      []errorFrame[TObservation]
-	suppressed int
+	stack  []errorFrame[TObservation]
 }
 
 type errorFrame[TObservation cmp.Ordered] struct {
@@ -39,6 +42,9 @@ type errorFrame[TObservation cmp.Ordered] struct {
 	bestAbsolutePosition int
 }
 
+/*
+SyntaxErrorsCreate constructs a new error collector.
+*/
 func SyntaxErrorsCreate[TObservation cmp.Ordered]() *SyntaxErrors[TObservation] {
 	return &SyntaxErrors[TObservation]{
 		Errors: make([]SyntaxError[TObservation], 0),
@@ -50,21 +56,22 @@ func (s *SyntaxErrors[_]) HasErrors() bool {
 	return len(s.Errors) > 0
 }
 
-func (s *SyntaxErrors[_]) suppress() {
-	s.suppressed++
-}
+/*
+pushFrame begins a speculative error scope.
 
-func (s *SyntaxErrors[_]) resume() {
-	if s.suppressed == 0 {
-		panic("Resume without Suppress")
-	}
-	s.suppressed--
-}
-
+All reported errors are buffered until the frame is either committed
+or discarded.
+*/
 func (s *SyntaxErrors[TObservation]) pushFrame() {
 	s.stack = append(s.stack, errorFrame[TObservation]{})
 }
 
+/*
+popFrame closes the current error scope.
+
+If commit is true, the best error from the frame is committed upward.
+If commit is false, all buffered errors are discarded.
+*/
 func (s *SyntaxErrors[TObservation]) popFrame(commit bool) {
 	if len(s.stack) == 0 {
 		panic("SyntaxErrors: PopFrame without PushFrame")
@@ -73,34 +80,28 @@ func (s *SyntaxErrors[TObservation]) popFrame(commit bool) {
 	top := s.stack[len(s.stack)-1]
 	s.stack = s.stack[:len(s.stack)-1]
 
-	if !commit {
+	if !commit || top.best == nil {
 		return
 	}
 
-	if top.best != nil {
-		s.commitCandidate(*top.best)
-	}
-}
-
-func (s *SyntaxErrors[TObservation]) commitCandidate(err SyntaxError[TObservation]) {
 	if len(s.stack) > 0 {
-		f := &s.stack[len(s.stack)-1]
-
-		if betterError(f, err) {
-			f.best = &err
-			f.bestAbsolutePosition = err.AbsolutePosition
+		parent := &s.stack[len(s.stack)-1]
+		if betterError(parent, *top.best) {
+			parent.best = top.best
+			parent.bestAbsolutePosition = top.best.AbsolutePosition
 		}
 		return
 	}
 
-	s.Errors = append(s.Errors, err)
+	s.Errors = append(s.Errors, *top.best)
 }
 
-func (s *SyntaxErrors[TObservation]) report(err SyntaxError[TObservation]) {
-	if s.suppressed > 0 && !err.ProducedByLexer {
-		return
-	}
+/*
+report records a candidate syntax error in the current frame.
 
+The most relevant error (furthest progress, lexer priority) is retained.
+*/
+func (s *SyntaxErrors[TObservation]) report(err SyntaxError[TObservation]) {
 	if len(s.stack) == 0 {
 		s.Errors = append(s.Errors, err)
 		return

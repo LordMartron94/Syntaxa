@@ -68,161 +68,22 @@ func (ts *tokenStream[TObs, TToken, TTokenRole]) ConsumeRaw() lexarch.Lexeme[TOb
 	return ts.consumeRaw()
 }
 
-func (ts *tokenStream[TObs, TToken, TTokenRole]) Match(tokens ...TToken) bool {
-	cur := ts.Peek(0)
-	for _, t := range tokens {
-		if cur.Token == t {
-			return true
-		}
-	}
-	return false
-}
-
-func (ts *tokenStream[TObs, TToken, TTokenRole]) ConsumeIf(tokens ...TToken) bool {
-	ts.skipForward()
-	cur := ts.peekRaw(0)
-
-	for _, t := range tokens {
-		if cur.Token == t {
-			ts.consumeRaw()
-			return true
-		}
-	}
-	return false
-}
-
-func (ts *tokenStream[TObs, TToken, TTokenRole]) Expect(token TToken, message string) (ok bool, line int, col int) {
-	ts.skipForward()
-	cur := ts.peekRaw(0)
-
-	if cur.Token == token {
-		ts.consumeRaw()
-		return true, cur.StartLine, cur.StartColumn
-	}
-
-	return false, cur.StartLine, cur.StartColumn
-}
-
-func (ts *tokenStream[TObs, TToken, TTokenRole]) ExpectOneOf(tokens []TToken, message string) (ok bool, line int, col int) {
-	ts.skipForward()
-	cur := ts.peekRaw(0)
-
-	for _, t := range tokens {
-		if cur.Token == t {
-			ts.consumeRaw()
-			return true, cur.StartLine, cur.StartColumn
-		}
-	}
-
-	return false, cur.StartLine, cur.StartColumn
-}
-
-// -------------------------------------------------------------
-
-type ErrorCommitMode uint8
-
-const (
-	DiscardErrors ErrorCommitMode = iota
-	CommitOnFailure
-	CommitOnSuccess
-)
-
-type transactionCore[TObs cmp.Ordered, TLexerState comparable] struct {
-	save    func() ParserSnapshot[TObs, TLexerState]
-	restore func(ParserSnapshot[TObs, TLexerState])
-	errors  *errorCore[TObs]
-}
-
-func (tc *transactionCore[TObs, TLexerState]) TryWithErrors(mode ErrorCommitMode, fn func() bool) bool {
-	tc.errors.sink.pushFrame()
-	snap := tc.save()
-
-	ok := fn()
-
-	if ok {
-		// success: never roll back
-		tc.errors.sink.popFrame(mode == CommitOnSuccess)
-		return true
-	}
-
-	// failure: roll back
-	tc.restore(snap)
-	tc.errors.sink.popFrame(mode == CommitOnFailure)
-	return false
-}
-
-// Normal Try: failures are diagnostic-relevant -> COMMIT best error upward
-func (tc *transactionCore[TObs, TLexerState]) Try(fn func() bool) bool {
-	return tc.TryWithErrors(CommitOnFailure, fn)
-}
-
-// Speculative Try: success discards frame, failure discards frame
-func (tc *transactionCore[TObs, TLexerState]) TrySpeculative(fn func() bool) bool {
-	return tc.TryWithErrors(DiscardErrors, fn)
-}
-
-func (tc *transactionCore[TObs, TLexerState]) TryChoice(
-	fns ...func() bool,
-) bool {
-
-	tc.errors.sink.pushFrame()
-
-	for _, fn := range fns {
-		tc.errors.sink.pushFrame()
-		snap := tc.save()
-
-		ok := fn()
-
-		if ok {
-			tc.errors.sink.popFrame(false)
-			tc.errors.sink.popFrame(false)
-			return true
-		}
-
-		tc.restore(snap)
-
-		tc.errors.sink.popFrame(true)
-	}
-
-	tc.errors.sink.popFrame(true)
-	return false
-}
-
-func (tc *transactionCore[TObs, TLexerState]) Optional(fn func() bool) bool {
-	tc.Try(fn)
-	return true
-}
-
-func (tc *transactionCore[TObs, TLexerState]) ZeroOrMore(fn func() bool) {
-	for {
-		snap := tc.save()
-		if !fn() {
-			tc.restore(snap)
-			return
-		}
-		// Safety check to prevent infinite loops on zero-length matches
-		if tc.save().tokenIndex == snap.tokenIndex {
-			panic("ZeroOrMore: rule succeeded without consuming input")
-		}
-	}
-}
-
-func (tc *transactionCore[TObs, TLexerState]) OneOrMore(fn func() bool) bool {
-	if !tc.Try(fn) {
-		return false
-	}
-	for tc.Try(fn) {
-	}
-	return true
-}
-
 // -------------------------------------------------------------
 
 type recoveryCore[TToken comparable] struct {
-	stack []tokenSet[TToken]
+	defaultRecovery tokenSet[TToken]
+	stack           []tokenSet[TToken]
 }
 
-func (rc *recoveryCore[TToken]) PushRecovery(tokens ...TToken) {
+func (rc *recoveryCore[TToken]) setDefaultRecovery(tokens ...TToken) {
+	set := make(tokenSet[TToken])
+	for _, r := range tokens {
+		set[r] = struct{}{}
+	}
+	rc.defaultRecovery = set
+}
+
+func (rc *recoveryCore[TToken]) pushRecovery(tokens ...TToken) {
 	set := make(tokenSet[TToken])
 	for _, r := range tokens {
 		set[r] = struct{}{}
@@ -230,17 +91,26 @@ func (rc *recoveryCore[TToken]) PushRecovery(tokens ...TToken) {
 	rc.stack = append(rc.stack, set)
 }
 
-func (rc *recoveryCore[TToken]) PopRecovery() {
+func (rc *recoveryCore[TToken]) popRecovery() {
 	if len(rc.stack) > 0 {
 		rc.stack = rc.stack[:len(rc.stack)-1]
 	}
 }
 
 func (rc *recoveryCore[TToken]) currentRecovery() tokenSet[TToken] {
-	if len(rc.stack) == 0 {
-		return nil
+	merged := make(tokenSet[TToken])
+
+	for t := range rc.defaultRecovery {
+		merged[t] = struct{}{}
 	}
-	return rc.stack[len(rc.stack)-1]
+
+	for _, frame := range rc.stack {
+		for t := range frame {
+			merged[t] = struct{}{}
+		}
+	}
+
+	return merged
 }
 
 // -------------------------------------------------------------
@@ -310,29 +180,6 @@ func (ec *errorCore[TObs]) reportLexerError(line, column int, description string
 
 type tokenSet[TToken comparable] map[TToken]struct{}
 
-// =============================================================
-// CONTEXTS
-// =============================================================
-
-/*
-SelectRuleContext exposes pure, non-mutating lookahead operations.
-*/
-type SelectRuleContext[TObservation cmp.Ordered, TToken, TTokenRole comparable] struct {
-	stream *tokenStream[TObservation, TToken, TTokenRole]
-}
-
-func (ctx SelectRuleContext[TObservation, TToken, TTokenRole]) Peek(n int) lexarch.Lexeme[TObservation, TToken, TTokenRole] {
-	return ctx.stream.Peek(n)
-}
-
-func (ctx SelectRuleContext[TObservation, TToken, TTokenRole]) PeekRaw(n int) lexarch.Lexeme[TObservation, TToken, TTokenRole] {
-	return ctx.stream.PeekRaw(n)
-}
-
-func (ctx SelectRuleContext[TObservation, TToken, TTokenRole]) Match(tokens ...TToken) bool {
-	return ctx.stream.Match(tokens...)
-}
-
 /*
 ExecRuleContext exposes transactional, mutating parsing operations.
 */
@@ -343,13 +190,8 @@ type ExecRuleContext[
 	TLexerState,
 	TNodeKind comparable,
 ] struct {
-	SelectRuleContext[TObservation, TToken, TTokenRole]
-
 	/* The Token endpoint provides access to the lexer token stream. */
 	Token *tokenStream[TObservation, TToken, TTokenRole]
-
-	/* The Transaction endpoint provides access to compositional functions (i.e., Try). */
-	Transaction *transactionCore[TObservation, TLexerState]
 
 	/* The Recovery endpoint provides access to syntax error recovery functionality. */
 	Recovery *recoveryCore[TToken]
@@ -361,53 +203,35 @@ type ExecRuleContext[
 	Error *errorCore[TObservation]
 
 	/* ExecuteRule routes a rule through the parser for invariant detection. */
-	ExecuteRule func(rule ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) (RuleResult[TObservation, TToken, TTokenRole, TNodeKind], bool)
+	ExecuteRule func(rule ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind], mode RuleExecutionMode) RuleResult[TObservation, TToken, TTokenRole, TNodeKind]
 
 	// Specific AST/State helpers
 	Editor *ASTEditor[TObservation, TToken, TTokenRole, TNodeKind]
 
-	Final *FinalizationContext[TObservation, TToken, TTokenRole, TNodeKind]
-
 	/* SetLexerState alters the lexer state for languages with multiple lexer states. */
 	SetLexerState func(TLexerState)
 
+	Select *SelectRuleContext[TObservation, TToken, TTokenRole]
+
 	lastLexingError func() *lexarch.LexingError[TObservation, TToken]
 	createErrorNode func(string) *SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind]
+
+	trace *ParseTrace[TToken]
+
+	save    func() ParserSnapshot[TObservation, TLexerState]
+	restore func(snapshot ParserSnapshot[TObservation, TLexerState])
 }
 
-func (ctx *ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) selectCTX() SelectRuleContext[TObservation, TToken, TTokenRole] {
-	return ctx.SelectRuleContext
+type SelectRuleContext[TObservation cmp.Ordered, TToken, TTokenRole comparable] struct {
+	ts *tokenStream[TObservation, TToken, TTokenRole]
 }
 
-type FinalizationContext[
-	TObs cmp.Ordered,
-	TToken,
-	TTokenRole,
-	TNodeKind comparable,
-] struct {
-	/* NewNode constructs a new node. */
-	NewNode func(kind TNodeKind) *SyntaxaASTNode[TObs, TToken, TTokenRole, TNodeKind]
+func (s *SelectRuleContext[TObservation, TToken, TTokenRole]) Peek(n int) lexarch.Lexeme[TObservation, TToken, TTokenRole] {
+	return s.ts.Peek(n)
+}
 
-	/* AttachChild attaches a child to its parent. Child can be nil, and it will be safely ignored. */
-	AttachChild func(parent, child *SyntaxaASTNode[TObs, TToken, TTokenRole, TNodeKind])
-
-	/* AddToken adds a token to the node. */
-	AddToken func(node *SyntaxaASTNode[TObs, TToken, TTokenRole, TNodeKind], token lexarch.Lexeme[TObs, TToken, TTokenRole])
-
-	/* SetTokens sets all tokens of the node in one pass. */
-	SetTokens func(node *SyntaxaASTNode[TObs, TToken, TTokenRole, TNodeKind], tokens []lexarch.Lexeme[TObs, TToken, TTokenRole])
-
-	/* SetAttribute sets an attribute for the node. */
-	SetAttribute func(node *SyntaxaASTNode[TObs, TToken, TTokenRole, TNodeKind], key string, value any)
-
-	/* CreateErrorNode constructs a new error node. */
-	CreateErrorNode func(message string) *SyntaxaASTNode[TObs, TToken, TTokenRole, TNodeKind]
-
-	/* ComputeSpans (re)computes the spans for the tree. It is advisable to not call this unless absolutely necessary. */
-	ComputeSpans func()
-
-	/* ReportError reports a syntax error. */
-	ReportError func(line, col int, msg string)
+func (s *SelectRuleContext[TObservation, TToken, TTokenRole]) PeekRaw(n int) lexarch.Lexeme[TObservation, TToken, TTokenRole] {
+	return s.ts.PeekRaw(n)
 }
 
 // =============================================================
@@ -430,7 +254,7 @@ func BuildExecRuleContextFromSlice[
 	lexemes []lexarch.Lexeme[TObservation, TToken, TTokenRole],
 	errors *SyntaxErrors[TObservation],
 	cursor *int,
-) ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
+) *ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
 	eofLex := lexarch.Lexeme[TObservation, TToken, TTokenRole]{Token: parser.eofToken}
 
 	src := rawSource[TObservation, TToken, TTokenRole]{
@@ -479,7 +303,7 @@ func BuildExecRuleContextFromLexerSession[
 	lexer *lexarch.Lexer[TObservation, TState, TToken, TTokenRole],
 	session *lexarch.LexerSession[TObservation, TState, TToken],
 	errors *SyntaxErrors[TObservation],
-) ExecRuleContext[TObservation, TToken, TTokenRole, TState, TNodeKind] {
+) *ExecRuleContext[TObservation, TToken, TTokenRole, TState, TNodeKind] {
 	src := rawSource[TObservation, TToken, TTokenRole]{
 		peek: func(n int) lexarch.Lexeme[TObservation, TToken, TTokenRole] {
 			return lexarch.LexerPeek(lexer, session, n)
@@ -513,7 +337,7 @@ func BuildExecRuleContextFromStreamingSession[
 	lexer *lexarch.Lexer[TObservation, TState, TToken, TTokenRole],
 	session *lexarch.StreamingLexerSession[TObservation, TState, TToken],
 	errors *SyntaxErrors[TObservation],
-) ExecRuleContext[TObservation, TToken, TTokenRole, TState, TNodeKind] {
+) *ExecRuleContext[TObservation, TToken, TTokenRole, TState, TNodeKind] {
 	src := rawSource[TObservation, TToken, TTokenRole]{
 		peek: func(n int) lexarch.Lexeme[TObservation, TToken, TTokenRole] {
 			return lexarch.LexerPeekStreaming(lexer, session, n)
@@ -550,7 +374,7 @@ func buildBaseContext[
 	src rawSource[TObservation, TToken, TTokenRole],
 	saveFn func() ParserSnapshot[TObservation, TLexerState],
 	restoreFn func(ParserSnapshot[TObservation, TLexerState]),
-) ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
+) *ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
 
 	// Initialize Cores
 	sCore := &skipCore[TTokenRole]{stack: make([]tokenSet[TTokenRole], 0)}
@@ -558,8 +382,8 @@ func buildBaseContext[
 		sCore.PushSkipRoles(parser.defaultSkipRoles...)
 	}
 
-	rCore := &recoveryCore[TToken]{stack: make([]tokenSet[TToken], 0)}
-	rCore.PushRecovery(parser.eofToken)
+	rCore := &recoveryCore[TToken]{}
+	rCore.setDefaultRecovery(parser.eofToken)
 	eCore := &errorCore[TObservation]{sink: errors}
 
 	tStream := &tokenStream[TObservation, TToken, TTokenRole]{
@@ -569,66 +393,45 @@ func buildBaseContext[
 		eofToken:   parser.eofToken,
 	}
 
-	txCore := &transactionCore[TObservation, TLexerState]{
-		save:    saveFn,
-		restore: restoreFn,
-		errors:  eCore,
-	}
-
 	editor := &ASTEditor[TObservation, TToken, TTokenRole, TNodeKind]{}
+
+	selectCtx := &SelectRuleContext[TObservation, TToken, TTokenRole]{
+		ts: tStream,
+	}
 
 	// Assemble Context
 	ctx := ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]{
-		SelectRuleContext: SelectRuleContext[TObservation, TToken, TTokenRole]{stream: tStream},
-		Token:             tStream,
-		Transaction:       txCore,
-		Recovery:          rCore,
-		Skip:              sCore,
-		Error:             eCore,
-		Editor:            editor,
+		Token:    tStream,
+		Recovery: rCore,
+		Skip:     sCore,
+		Error:    eCore,
+		Editor:   editor,
 		createErrorNode: func(message string) *SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind] {
 			n := editor.NewNode(parser.errorNodeKind)
 			editor.SetAttribute(n, "error", message)
 			return n
 		},
+		save:    saveFn,
+		restore: restoreFn,
+		Select:  selectCtx,
 	}
 
-	finalCtx := &FinalizationContext[TObservation, TToken, TTokenRole, TNodeKind]{
-		NewNode:      editor.NewNode,
-		AttachChild:  editor.AttachChild,
-		SetAttribute: editor.SetAttribute,
-
-		AddToken:  editor.AddToken,
-		SetTokens: editor.SetTokens,
-
-		CreateErrorNode: ctx.createErrorNode,
-
-		ComputeSpans: editor.ComputeSpans,
-
-		ReportError: eCore.Report,
-	}
-
-	ctx.Final = finalCtx
-	ctx.ExecuteRule = func(
-		rule ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) (RuleResult[TObservation, TToken, TTokenRole, TNodeKind], bool) {
-		startSnap := ctx.Transaction.save()
-		startPos := startSnap.tokenIndex
-		lexemePreRule := ctx.Token.Peek(0)
-
-		res, ok := rule(internalRuleExecutionToken{}, ctx)
-		endPos := ctx.Transaction.save().tokenIndex
-
-		if !ok {
-			ctx.Transaction.restore(startSnap)
-			return res, false
+	var trace *ParseTrace[TToken]
+	if parser.debugTrace {
+		trace = &ParseTrace[TToken]{
+			Events: make([]ParseTraceEvent[TToken], 0),
 		}
-
-		if err := validateRuleSuccess[TObservation, TToken, TTokenRole, TLexerState](res, startPos, endPos, lexemePreRule); err != nil {
-			panic(err)
-		}
-
-		return res, true
+		ctx.trace = trace
 	}
 
-	return ctx
+	ctxPtr := &ctx
+
+	ctxPtr.ExecuteRule = func(
+		rule ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+		mode RuleExecutionMode,
+	) RuleResult[TObservation, TToken, TTokenRole, TNodeKind] {
+		return syntaxaParserExecuteRule(parser, ctxPtr, rule, mode)
+	}
+
+	return ctxPtr
 }
