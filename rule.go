@@ -1,15 +1,58 @@
 package syntaxa
 
-import "cmp"
+import (
+	"cmp"
+	"fmt"
+)
+
+/*
+FailureKind distinguishes between multiple kinds of failures.
+
+A FailureNoMatch does not result in any syntax errors.
+*/
+type FailureKind int
+
+const (
+	/*
+		FailureError indicates this is a true syntax error.
+
+		This means a construct started but got malformed.
+	*/
+	FailureError FailureKind = iota + 1
+
+	/*
+		FailureNoMatch indicates the rule failed because the token(s) didn't match.
+
+		This is returned when the first token did not match.
+	*/
+	FailureNoMatch
+)
+
+func (f FailureKind) String() string {
+	switch f {
+	case FailureError:
+		return "Error"
+	case FailureNoMatch:
+		return "No Match"
+	default:
+		return "UNKNOWN KIND"
+	}
+}
 
 /* RuleResult encapsulates the return value of a parser rule. */
 type RuleResult[TObservation cmp.Ordered, TToken, TTokenRole, TKind comparable] struct {
 	Node      *SyntaxaASTNode[TObservation, TToken, TTokenRole, TKind]
 	Succeeded bool
+
+	Kind FailureKind
 }
 
 func (r *RuleResult[TObservation, TToken, TTokenRole, TKind]) Failed() bool {
 	return !r.Succeeded
+}
+
+func (r *RuleResult[TObservation, TToken, TTokenRole, TKind]) Format() string {
+	return fmt.Sprintf("node filled? %v, success? %v, kind? %s", r.Node != nil, r.Succeeded, r.Kind.String())
 }
 
 /*

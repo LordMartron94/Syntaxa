@@ -8,6 +8,7 @@ SyntaxError represents a single syntax error produced during parsing or lexing.
 type SyntaxError[TObservation cmp.Ordered] struct {
 	ProducedByLexer bool
 
+	Rule    string
 	Message string
 
 	StartLine   int

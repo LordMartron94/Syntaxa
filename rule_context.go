@@ -70,12 +70,14 @@ func (ts *tokenStream[TObs, TToken, TTokenRole]) ConsumeRaw() lexarch.Lexeme[TOb
 
 // -------------------------------------------------------------
 
-type recoveryCore[TToken comparable] struct {
+type recoveryCore[TObservation cmp.Ordered, TToken, TTokenRole comparable] struct {
+	ts *tokenStream[TObservation, TToken, TTokenRole]
+
 	defaultRecovery tokenSet[TToken]
 	stack           []tokenSet[TToken]
 }
 
-func (rc *recoveryCore[TToken]) setDefaultRecovery(tokens ...TToken) {
+func (rc *recoveryCore[_, TToken, _]) setDefaultRecovery(tokens ...TToken) {
 	set := make(tokenSet[TToken])
 	for _, r := range tokens {
 		set[r] = struct{}{}
@@ -83,7 +85,7 @@ func (rc *recoveryCore[TToken]) setDefaultRecovery(tokens ...TToken) {
 	rc.defaultRecovery = set
 }
 
-func (rc *recoveryCore[TToken]) pushRecovery(tokens ...TToken) {
+func (rc *recoveryCore[_, TToken, _]) pushRecovery(tokens ...TToken) {
 	set := make(tokenSet[TToken])
 	for _, r := range tokens {
 		set[r] = struct{}{}
@@ -91,13 +93,13 @@ func (rc *recoveryCore[TToken]) pushRecovery(tokens ...TToken) {
 	rc.stack = append(rc.stack, set)
 }
 
-func (rc *recoveryCore[TToken]) popRecovery() {
+func (rc *recoveryCore[_, TToken, _]) popRecovery() {
 	if len(rc.stack) > 0 {
 		rc.stack = rc.stack[:len(rc.stack)-1]
 	}
 }
 
-func (rc *recoveryCore[TToken]) currentRecovery() tokenSet[TToken] {
+func (rc *recoveryCore[_, TToken, _]) currentRecovery() tokenSet[TToken] {
 	merged := make(tokenSet[TToken])
 
 	for t := range rc.defaultRecovery {
@@ -111,6 +113,34 @@ func (rc *recoveryCore[TToken]) currentRecovery() tokenSet[TToken] {
 	}
 
 	return merged
+}
+
+func (rc *recoveryCore[TObservation, TToken, TTokenRole]) makeSet(tokens ...TToken) tokenSet[TToken] {
+	merged := make(tokenSet[TToken])
+
+	for t := range rc.defaultRecovery {
+		merged[t] = struct{}{}
+	}
+
+	for _, t := range tokens {
+		merged[t] = struct{}{}
+	}
+
+	return merged
+}
+
+func (rc *recoveryCore[_, TToken, _]) PerformLocalRecovery(skipUntilOneOf ...TToken) {
+	set := rc.makeSet(skipUntilOneOf...)
+
+	for {
+		cur := rc.ts.PeekRaw(0)
+
+		if _, ok := set[cur.Token]; ok {
+			return
+		}
+
+		rc.ts.ConsumeRaw()
+	}
 }
 
 // -------------------------------------------------------------
@@ -148,10 +178,11 @@ type errorCore[TObs cmp.Ordered, TToken, TTokenRole comparable] struct {
 	ts   *tokenStream[TObs, TToken, TTokenRole]
 }
 
-func (ec *errorCore[TObs, _, _]) ReportHere(message string) {
+func (ec *errorCore[TObs, _, _]) ReportHere(ruleName, message string) {
 	current := ec.ts.Peek(0)
 
 	ec.sink.report(SyntaxError[TObs]{
+		Rule:             ruleName,
 		Message:          message,
 		StartLine:        current.StartLine,
 		StartColumn:      current.StartColumn,
@@ -162,8 +193,9 @@ func (ec *errorCore[TObs, _, _]) ReportHere(message string) {
 	})
 }
 
-func (ec *errorCore[TObs, TToken, TTokenRole]) ReportAt(lexeme lexarch.Lexeme[TObs, TToken, TTokenRole], message string) {
+func (ec *errorCore[TObs, TToken, TTokenRole]) ReportAt(ruleName string, lexeme lexarch.Lexeme[TObs, TToken, TTokenRole], message string) {
 	ec.sink.report(SyntaxError[TObs]{
+		Rule:             ruleName,
 		Message:          message,
 		StartLine:        lexeme.StartLine,
 		StartColumn:      lexeme.StartColumn,
@@ -174,8 +206,22 @@ func (ec *errorCore[TObs, TToken, TTokenRole]) ReportAt(lexeme lexarch.Lexeme[TO
 	})
 }
 
-func (ec *errorCore[TObs, TToken, TTokenRole]) ReportAdvanced(startLine, startColumn, endLine, endColumn, absolutePosition, tokenNumber int, message string) {
+func (ec *errorCore[TObs, TToken, TTokenRole]) ReportAtEnd(ruleName string, lexeme lexarch.Lexeme[TObs, TToken, TTokenRole], message string) {
 	ec.sink.report(SyntaxError[TObs]{
+		Rule:             ruleName,
+		Message:          message,
+		StartLine:        lexeme.EndLine,
+		StartColumn:      lexeme.EndColumn,
+		EndLine:          lexeme.EndLine,
+		EndColumn:        lexeme.EndColumn,
+		AbsolutePosition: lexeme.Start,
+		TokenNumber:      lexeme.TokenNumber,
+	})
+}
+
+func (ec *errorCore[TObs, TToken, TTokenRole]) ReportAdvanced(ruleName string, startLine, startColumn, endLine, endColumn, absolutePosition, tokenNumber int, message string) {
+	ec.sink.report(SyntaxError[TObs]{
+		Rule:             ruleName,
 		Message:          message,
 		StartLine:        startLine,
 		StartColumn:      startColumn,
@@ -186,8 +232,9 @@ func (ec *errorCore[TObs, TToken, TTokenRole]) ReportAdvanced(startLine, startCo
 	})
 }
 
-func (ec *errorCore[TObs, TToken, TTokenRole]) replaceBestErrorAt(lexeme lexarch.Lexeme[TObs, TToken, TTokenRole], message string) bool {
+func (ec *errorCore[TObs, TToken, TTokenRole]) replaceBestErrorAt(ruleName string, lexeme lexarch.Lexeme[TObs, TToken, TTokenRole], message string) bool {
 	err := SyntaxError[TObs]{
+		Rule:             ruleName,
 		Message:          message,
 		StartLine:        lexeme.StartLine,
 		StartColumn:      lexeme.StartColumn,
@@ -227,7 +274,7 @@ type ExecRuleContext[
 	Token *tokenStream[TObservation, TToken, TTokenRole]
 
 	/* The Recovery endpoint provides access to syntax error recovery functionality. */
-	Recovery *recoveryCore[TToken]
+	Recovery *recoveryCore[TObservation, TToken, TTokenRole]
 
 	/* The Skip endpoint provides access to skip token functionality. */
 	Skip *skipCore[TTokenRole]
@@ -422,7 +469,9 @@ func buildBaseContext[
 		eofToken:   parser.eofToken,
 	}
 
-	rCore := &recoveryCore[TToken]{}
+	rCore := &recoveryCore[TObservation, TToken, TTokenRole]{
+		ts: tStream,
+	}
 	rCore.setDefaultRecovery(parser.eofToken)
 	eCore := &errorCore[TObservation, TToken, TTokenRole]{sink: errors, ts: tStream}
 

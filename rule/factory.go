@@ -91,6 +91,7 @@ func (t *tokenEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 		}
 
 		ctx.Error.ReportAt(
+			name,
 			peeked,
 			fmt.Sprintf(
 				"unexpected %s, wanted one of %s",
@@ -99,7 +100,7 @@ func (t *tokenEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 			),
 		)
 
-		return t.sharedCore.buildFailureRuleResult(nil)
+		return t.sharedCore.buildFailureRuleResult(nil, syntaxa.FailureNoMatch)
 	}
 
 	if addNode {
@@ -119,10 +120,16 @@ func (t *tokenEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 	}
 }
 
-/*
-List matches a list-like grammar:
+type TrailingSeparatorMode uint8
 
-	OPEN ( ELEMENT ( SEP ELEMENT )* [SEP]? ) CLOSE
+const (
+	TrailingForbidden TrailingSeparatorMode = iota
+	TrailingOptional
+	TrailingRequired
+)
+
+/*
+List matches a list-like grammar.
 
 It automatically handles recovery.
 
@@ -133,89 +140,188 @@ func (t *tokenEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 	grammarID string,
 	listOpenToken, elementToken, separatorToken, listEndToken TToken,
 	listNodeKind, elementNodeKind TNodeKind,
-	allowEmptyList, optionalTrailingSeparator bool,
+	allowEmptyList bool,
+	mode TrailingSeparatorMode,
 ) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
-	name := t.sharedCore.createRuleName("List", grammarID)
 
+	name := t.sharedCore.createRuleName("List", grammarID)
 	recovery := []TToken{listEndToken}
 
 	return t.sharedCore.constructStructuralRule(
 		name,
 		grammarID,
-		func(ctx *syntaxa.ExecRuleContext[
-			TObservation, TToken, TTokenRole, TLexerState, TNodeKind,
-		]) Result[TObservation, TToken, TTokenRole, TNodeKind] {
+		func(ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) Result[TObservation, TToken, TTokenRole, TNodeKind] {
 
-			peek := ctx.Token.Peek(0)
-			if peek.Token != listOpenToken {
-				ctx.Error.ReportAt(peek, fmt.Sprintf(
-					"unexpected %s, expected %s",
-					t.sharedCore.tokenFormatter(peek.Token),
-					t.sharedCore.tokenFormatter(listOpenToken),
-				))
-				return t.sharedCore.buildFailureRuleResult(nil)
+			// 1. Initial validation of the opening token
+			open := ctx.Token.Peek(0)
+			if open.Token != listOpenToken {
+				return t.reportMismatch(ctx, name, open, listOpenToken)
 			}
-
 			ctx.Token.Consume()
 
 			node := ctx.Editor.NewNode(listNodeKind)
 
-			peek = ctx.Token.Peek(0)
-			if peek.Token == listEndToken {
-				if !allowEmptyList {
-					ctx.Error.ReportAt(peek, "empty list not allowed")
-				}
-				ctx.Token.Consume()
-				return t.sharedCore.buildSuccessRuleResult(node)
+			// 2. Handle the immediate exit (Empty List)
+			if peek := ctx.Token.Peek(0); peek.Token == listEndToken {
+				return t.handleEmptyList(ctx, name, node, peek, allowEmptyList)
 			}
 
-			for {
-				peek = ctx.Token.Peek(0)
-				if peek.Token != elementToken {
-					ctx.Error.ReportAt(peek, fmt.Sprintf(
-						"unexpected %s, expected %s",
-						t.sharedCore.tokenFormatter(peek.Token),
-						t.sharedCore.tokenFormatter(elementToken),
-					))
-					return t.sharedCore.buildFailureRuleResult(nil)
-				}
-
-				value := ctx.Token.Consume()
-				elem := ctx.Editor.NewNode(elementNodeKind)
-				ctx.Editor.AddToken(elem, value)
-				ctx.Editor.AttachChild(node, elem)
-
-				peek = ctx.Token.Peek(0)
-
-				if peek.Token == separatorToken {
-					ctx.Token.Consume()
-
-					peek = ctx.Token.Peek(0)
-					if peek.Token == listEndToken && optionalTrailingSeparator {
-						ctx.Token.Consume()
-						return t.sharedCore.buildSuccessRuleResult(node)
-					}
-
-					continue
-				}
-
-				if peek.Token == listEndToken {
-					ctx.Token.Consume()
-					return t.sharedCore.buildSuccessRuleResult(node)
-				}
-
-				ctx.Error.ReportAt(peek, fmt.Sprintf(
-					"unexpected %s, expected %s or %s",
-					t.sharedCore.tokenFormatter(peek.Token),
-					t.sharedCore.tokenFormatter(separatorToken),
-					t.sharedCore.tokenFormatter(listEndToken),
-				))
-
-				return t.sharedCore.buildFailureRuleResult(nil)
-			}
+			// 3. Enter Main Automaton
+			return t.runListAutomaton(ctx, name, node, elementToken, separatorToken, listEndToken, elementNodeKind, mode)
 		},
 		recovery,
 	)
+}
+
+func (t *tokenEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) runListAutomaton(
+	ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+	name string,
+	parentNode *syntaxa.SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind],
+	elementToken, separatorToken, listEndToken TToken,
+	elementNodeKind TNodeKind,
+	mode TrailingSeparatorMode,
+) Result[TObservation, TToken, TTokenRole, TNodeKind] {
+
+	// --- first element (already ensured not empty) ---
+
+	first := ctx.Token.Peek(0)
+	if first.Token != elementToken {
+		return t.reportMismatch(ctx, name, first, elementToken)
+	}
+
+	elem := ctx.Token.Consume()
+	t.addChildElement(ctx, parentNode, elementNodeKind, elem)
+
+	for {
+		peek := ctx.Token.Peek(0)
+
+		// ------------------------------
+		// NORMAL CLOSE (no trailing)
+		// ------------------------------
+		if peek.Token == listEndToken {
+
+			if mode == TrailingRequired {
+				ctx.Error.ReportAtEnd(name, elem, "missing required trailing separator")
+				return t.sharedCore.buildFailureRuleResult(nil, syntaxa.FailureError)
+			}
+
+			ctx.Token.Consume()
+			return t.sharedCore.buildSuccessRuleResult(parentNode)
+		}
+
+		// ------------------------------
+		// EXPECT SEPARATOR
+		// ------------------------------
+		if peek.Token != separatorToken {
+			return t.reportExpectedEither(ctx, name, peek, separatorToken, listEndToken)
+		}
+
+		sep := ctx.Token.Consume()
+
+		next := ctx.Token.Peek(0)
+
+		// ------------------------------
+		// TRAILING SEPARATOR CASE
+		// ------------------------------
+		if next.Token == listEndToken {
+
+			if mode == TrailingForbidden {
+				ctx.Error.ReportAt(name, sep, "trailing separator not allowed")
+				return t.sharedCore.buildFailureRuleResult(nil, syntaxa.FailureError)
+			}
+
+			ctx.Token.Consume()
+			return t.sharedCore.buildSuccessRuleResult(parentNode)
+		}
+
+		// ------------------------------
+		// NEXT ELEMENT
+		// ------------------------------
+		if next.Token != elementToken {
+			return t.reportMismatch(ctx, name, next, elementToken)
+		}
+
+		elem = ctx.Token.Consume()
+		t.addChildElement(ctx, parentNode, elementNodeKind, elem)
+	}
+}
+
+func (t *tokenEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) validateTrailingMode(
+	ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+	name string,
+	node *syntaxa.SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind],
+	closingLexeme lexarch.Lexeme[TObservation, TToken, TTokenRole],
+	lastSeparator lexarch.Lexeme[TObservation, TToken, TTokenRole],
+	lastElement lexarch.Lexeme[TObservation, TToken, TTokenRole],
+	mode TrailingSeparatorMode,
+) Result[TObservation, TToken, TTokenRole, TNodeKind] {
+
+	switch mode {
+	case TrailingForbidden:
+		ctx.Error.ReportAt(name, lastSeparator, "trailing separator not allowed")
+		return t.sharedCore.buildFailureRuleResult(nil, syntaxa.FailureError)
+
+	case TrailingRequired:
+		ctx.Error.ReportAtEnd(name, lastElement, "missing required trailing separator")
+		return t.sharedCore.buildFailureRuleResult(nil, syntaxa.FailureError)
+
+	default:
+		ctx.Token.Consume()
+		return t.sharedCore.buildSuccessRuleResult(node)
+	}
+}
+
+func (t *tokenEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) handleEmptyList(
+	ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+	name string,
+	node *syntaxa.SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind],
+	peek lexarch.Lexeme[TObservation, TToken, TTokenRole],
+	allowEmpty bool,
+) Result[TObservation, TToken, TTokenRole, TNodeKind] {
+	if !allowEmpty {
+		ctx.Error.ReportAt(name, peek, "empty list not allowed")
+		return t.sharedCore.buildFailureRuleResult(nil, syntaxa.FailureError)
+	}
+	ctx.Token.Consume()
+	return t.sharedCore.buildSuccessRuleResult(node)
+}
+
+func (t *tokenEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) addChildElement(
+	ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+	parent *syntaxa.SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind],
+	kind TNodeKind,
+	lexeme lexarch.Lexeme[TObservation, TToken, TTokenRole],
+) {
+	elem := ctx.Editor.NewNode(kind)
+	ctx.Editor.AddToken(elem, lexeme)
+	ctx.Editor.AttachChild(parent, elem)
+}
+
+func (t *tokenEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) reportMismatch(
+	ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+	name string,
+	found lexarch.Lexeme[TObservation, TToken, TTokenRole],
+	expected TToken,
+) Result[TObservation, TToken, TTokenRole, TNodeKind] {
+	msg := fmt.Sprintf("unexpected %s, expected %s",
+		t.sharedCore.tokenFormatter(found.Token),
+		t.sharedCore.tokenFormatter(expected))
+	ctx.Error.ReportAt(name, found, msg)
+	return t.sharedCore.buildFailureRuleResult(nil, syntaxa.FailureError)
+}
+
+func (t *tokenEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) reportExpectedEither(
+	ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+	name string,
+	found lexarch.Lexeme[TObservation, TToken, TTokenRole],
+	exp1, exp2 TToken,
+) Result[TObservation, TToken, TTokenRole, TNodeKind] {
+	msg := fmt.Sprintf("unexpected %s, expected %s or %s",
+		t.sharedCore.tokenFormatter(found.Token),
+		t.sharedCore.tokenFormatter(exp1),
+		t.sharedCore.tokenFormatter(exp2))
+	ctx.Error.ReportAt(name, found, msg)
+	return t.sharedCore.buildFailureRuleResult(nil, syntaxa.FailureError)
 }
 
 type ruleEndpoint[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable] struct {
@@ -289,14 +395,19 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 /*
 Sequence matches a sequence of rules.
 
-On success it adds all child nodes to this node (skipping nil-nodes).
-On failure it emits a syntax error (propagating the child-rule syntax error).
+Semantics:
+  - First rule may fail with FailureNoMatch (grammar boundary)
+  - Once any rule succeeds, the sequence is committed
+  - Any later failure is a syntax error (FailureError)
+
+On success all child nodes are attached (nil nodes skipped).
 */
 func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) Sequence(
 	grammarID string,
 	nodeKind TNodeKind,
 	rules ...Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 ) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
+
 	name := r.sharedCore.createRuleName("Sequence", grammarID)
 
 	mustConsume := false
@@ -311,18 +422,28 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 		name,
 		grammarID,
 		r.sharedCore.createContract(mustConsume, true),
-		func(ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) Result[TObservation, TToken, TTokenRole, TNodeKind] {
+		func(ctx *syntaxa.ExecRuleContext[
+			TObservation, TToken, TTokenRole, TLexerState, TNodeKind,
+		]) Result[TObservation, TToken, TTokenRole, TNodeKind] {
+
 			results := make([]Result[TObservation, TToken, TTokenRole, TNodeKind], len(rules))
 
 			for i, rule := range rules {
 				result := ctx.ExecuteRule(rule, syntaxa.ExecutionNormal)
+
 				if result.Failed() {
-					return r.sharedCore.buildFailureRuleResult(nil)
+					if i == 0 && result.Kind == syntaxa.FailureNoMatch {
+						return r.sharedCore.buildFailureRuleResult(nil, syntaxa.FailureNoMatch)
+					}
+
+					return r.sharedCore.buildFailureRuleResult(nil, syntaxa.FailureError)
 				}
+
 				results[i] = result
 			}
 
 			node := ctx.Editor.NewNode(nodeKind)
+
 			for _, result := range results {
 				if result.Node != nil {
 					ctx.Editor.AttachChild(node, result.Node)
@@ -338,9 +459,14 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 /*
 NOrMore matches a rule at least min times and then as many times as possible.
 
-Each iteration is speculative — failure simply stops the repetition.
+Semantics:
+  - Success → attach + continue
+  - FailureNoMatch → stop repetition (grammar boundary)
+  - FailureError → recovery already ran:
+  - if progress happened → retry
+  - if no progress → propagate error
 
-Guards against infinite loops by requiring consumption per success.
+Guards against infinite loops by requiring progress on recovery.
 */
 func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) NOrMore(
 	grammarID string,
@@ -361,37 +487,43 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 		name,
 		rule.GetExpectedLabel(),
 		r.sharedCore.createContract(mustConsume, true),
-		func(ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) Result[TObservation, TToken, TTokenRole, TNodeKind] {
-
+		func(ctx *syntaxa.ExecRuleContext[
+			TObservation, TToken, TTokenRole, TLexerState, TNodeKind,
+		]) Result[TObservation, TToken, TTokenRole, TNodeKind] {
 			node := ctx.Editor.NewNode(nodeKind)
-
 			count := 0
 
 			for {
 				before := ctx.Token.PeekRaw(0)
+				result := ctx.ExecuteRule(rule, syntaxa.ExecutionNormal)
 
-				result := ctx.ExecuteRule(rule, syntaxa.ExecutionProbe)
-				if result.Failed() {
-					break
+				if result.Succeeded {
+					if result.Node != nil {
+						ctx.Editor.AttachChild(node, result.Node)
+					}
+					count++
+					continue
 				}
 
-				after := ctx.Token.PeekRaw(0)
+				switch result.Kind {
 
-				if before.Token == after.Token &&
-					before.StartLine == after.StartLine &&
-					before.StartColumn == after.StartColumn {
-					panic("NOrMore: rule succeeded without consuming input (infinite loop)")
+				case syntaxa.FailureNoMatch:
+					goto done
+
+				case syntaxa.FailureError:
+					after := ctx.Token.PeekRaw(0)
+
+					if before.TokenNumber == after.TokenNumber {
+						return result
+					}
+
+					continue
 				}
-
-				if result.Node != nil {
-					ctx.Editor.AttachChild(node, result.Node)
-				}
-
-				count++
 			}
 
+		done:
 			if count < min {
-				return r.sharedCore.buildFailureRuleResult(nil)
+				return r.sharedCore.buildFailureRuleResult(nil, syntaxa.FailureNoMatch)
 			}
 
 			return r.sharedCore.buildSuccessRuleResult(node)
@@ -552,10 +684,12 @@ func (s *sharedCore[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) b
 
 func (s *sharedCore[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) buildFailureRuleResult(
 	node *syntaxa.SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind],
+	failureKind syntaxa.FailureKind,
 ) Result[TObservation, TToken, TTokenRole, TNodeKind] {
 	return Result[TObservation, TToken, TTokenRole, TNodeKind]{
 		Node:      node,
 		Succeeded: false,
+		Kind:      failureKind,
 	}
 }
 

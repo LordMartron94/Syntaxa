@@ -194,6 +194,7 @@ func parseWithContext[
 	peeked := ctx.Token.Peek(0)
 	if peeked.Token != parser.eofToken {
 		ctx.Error.ReportAt(
+			"SYNTAXA ENGINE",
 			peeked,
 			fmt.Sprintf("unexpected %v, expected end of file", peeked.Token),
 		)
@@ -246,23 +247,29 @@ func syntaxaParserExecuteRule[
 		ctx.restore(startSnap)
 
 		if mode == ExecutionNormal {
-			if bestPos, ok := ctx.Error.sink.currentBestPosition(); ok && bestPos == startPos {
-				ctx.Error.replaceBestErrorAt(
-					lexemePreRule,
-					fmt.Sprintf(
-						"unexpected %v, expected %s",
-						lexemePreRule.Token,
-						rule.expectedLabel,
-					),
-				)
+			if ruleResult.Kind == FailureError {
+				if bestPos, ok := ctx.Error.sink.currentBestPosition(); ok && bestPos == startPos {
+					ctx.Error.replaceBestErrorAt(
+						rule.GetName(),
+						lexemePreRule,
+						fmt.Sprintf(
+							"unexpected %v, expected %s",
+							lexemePreRule.Token,
+							rule.expectedLabel,
+						),
+					)
+				}
+
+				ctx.Error.sink.popFrame(true)
+
+				recovered := performRecovery(ctx, parser.eofToken)
+				if recovered {
+					ctx.Token.ConsumeRaw()
+				}
+			} else {
+				ctx.Error.sink.popFrame(false)
 			}
 
-			ctx.Error.sink.popFrame(true)
-
-			recovered := performRecovery(ctx, parser.eofToken)
-			if recovered {
-				ctx.Token.ConsumeRaw()
-			}
 		} else {
 			ctx.Error.sink.popFrame(false)
 		}
@@ -291,7 +298,7 @@ func performRecovery[
 ) bool {
 	syncSet := ctx.Recovery.currentRecovery()
 
-	// fmt.Printf("recovering with set: %v\n", syncSet)
+	fmt.Printf("recovering with set: %v\n", syncSet)
 
 	for {
 		cur := ctx.Token.PeekRaw(0)
