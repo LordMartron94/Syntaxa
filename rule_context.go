@@ -263,7 +263,8 @@ type ExecRuleContext[
 	/* SetLexerState alters the lexer state for languages with multiple lexer states. */
 	SetLexerState func(TLexerState)
 
-	Select *SelectRuleContext[TObservation, TToken, TTokenRole]
+	Select       *SelectRuleContext[TObservation, TToken, TTokenRole]
+	Finalization *FinalizationCtx[TObservation, TToken, TTokenRole, TNodeKind]
 
 	lastLexingError func() *lexarch.LexingError[TObservation, TToken]
 	createErrorNode func(string) *SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind]
@@ -284,6 +285,20 @@ func (s *SelectRuleContext[TObservation, TToken, TTokenRole]) Peek(n int) lexarc
 
 func (s *SelectRuleContext[TObservation, TToken, TTokenRole]) PeekRaw(n int) lexarch.Lexeme[TObservation, TToken, TTokenRole] {
 	return s.ts.PeekRaw(n)
+}
+
+type FinalizationCtx[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind comparable] struct {
+	editor *ASTEditor[TObservation, TToken, TTokenRole, TNodeKind]
+}
+
+/* SetAttribute sets a named attribute for the node, overriding any attribute with the same name if existent.*/
+func (f *FinalizationCtx[TObservation, TToken, TTokenRole, TNodeKind]) SetAttribute(node *SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind], attributeName string, value any) {
+	f.editor.SetAttribute(node, attributeName, value)
+}
+
+/* DeleteAttribute deletes a named attribute for the node.*/
+func (f *FinalizationCtx[TObservation, TToken, TTokenRole, TNodeKind]) DeleteAttribute(node *SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind], attributeName string) {
+	f.editor.DeleteAttribute(node, attributeName)
 }
 
 // =============================================================
@@ -447,10 +462,16 @@ func buildBaseContext[
 	rCore.setDefaultRecovery(parser.eofToken)
 	eCore := &errorCore[TObservation, TToken, TTokenRole]{sink: errors, ts: tStream}
 
-	editor := &ASTEditor[TObservation, TToken, TTokenRole, TNodeKind]{}
+	editor := &ASTEditor[TObservation, TToken, TTokenRole, TNodeKind]{
+		created: make([]*SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind], 0),
+	}
 
 	selectCtx := &SelectRuleContext[TObservation, TToken, TTokenRole]{
 		ts: tStream,
+	}
+
+	finalCtx := &FinalizationCtx[TObservation, TToken, TTokenRole, TNodeKind]{
+		editor: editor,
 	}
 
 	// Assemble Context
@@ -465,9 +486,10 @@ func buildBaseContext[
 			editor.SetAttribute(n, "error", message)
 			return n
 		},
-		save:    saveFn,
-		restore: restoreFn,
-		Select:  selectCtx,
+		save:         saveFn,
+		restore:      restoreFn,
+		Select:       selectCtx,
+		Finalization: finalCtx,
 	}
 
 	var trace *ParseTrace[TToken]

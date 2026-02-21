@@ -20,6 +20,8 @@ type ASTEditor[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind comparabl
 	root   *SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind]
 	frozen bool
 
+	created []*SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind]
+
 	inUse atomic.Bool
 }
 
@@ -51,10 +53,14 @@ func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) NewNode(kind TKind) *Syntax
 
 	e.nextID++
 
-	return &SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]{
+	node := &SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]{
 		id:   e.nextID,
 		kind: kind,
 	}
+
+	e.created = append(e.created, node)
+
+	return node
 }
 
 func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) AttachChild(parent, child *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) {
@@ -347,12 +353,14 @@ func (e *ASTEditor[TObservation, TToken, TTokenRole, TNodeKind]) ComputeSpans() 
 	e.ensureSpanValid(e.root)
 }
 
+/* Freeze calls editor.end because this is the only place the editor session actually ends. */
 func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) Freeze() {
 	if e.root != nil {
 		e.ensureSpanValid(e.root)
 	}
 
 	e.frozen = true
+	e.end()
 }
 
 func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) ensureMutable() {

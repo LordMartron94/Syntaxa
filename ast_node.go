@@ -67,6 +67,8 @@ type SyntaxaASTNode[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind comp
 	// ---------------------------------------------------------
 
 	revision uint64
+
+	postProcessed bool
 }
 
 func (n *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) ID() uint64 {
@@ -162,6 +164,25 @@ func (n *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) Attribute(key string) 
 	}
 	v, ok := n.attributes[key]
 	return v, ok
+}
+
+func AttributeAs[TObs cmp.Ordered, TToken, TTokenRole, TKind comparable, TAttribute any](
+	n *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind],
+	key string,
+) (TAttribute, bool) {
+	var zero TAttribute
+
+	v, ok := n.Attribute(key)
+	if !ok {
+		return zero, false
+	}
+
+	casted, ok := v.(TAttribute)
+	if !ok {
+		return zero, false
+	}
+
+	return casted, true
 }
 
 /* AttributeKeys returns all attribute keys. */

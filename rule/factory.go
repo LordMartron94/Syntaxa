@@ -73,6 +73,7 @@ func (t *tokenEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 	tokens ...TToken,
 ) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
 	name := t.sharedCore.createRuleName(ruleName, grammarID)
+	identity := t.sharedCore.createRuleIdentity(name, grammarID, t.sharedCore.formatTokensAsList(", ", tokens...))
 
 	rule := func(ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) Result[TObservation, TToken, TTokenRole, TNodeKind] {
 		peeked := ctx.Token.Peek(0)
@@ -105,15 +106,13 @@ func (t *tokenEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 
 	if addNode {
 		return t.sharedCore.constructStructuralRule(
-			name,
-			grammarID,
+			identity,
 			rule,
 			nil,
 		)
 	} else {
 		return t.sharedCore.constructSkippingRule(
-			name,
-			grammarID,
+			identity,
 			rule,
 			nil,
 		)
@@ -145,11 +144,11 @@ func (t *tokenEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 ) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
 
 	name := t.sharedCore.createRuleName("List", grammarID)
+	identity := t.sharedCore.createRuleIdentity(name, grammarID, "")
 	recovery := []TToken{listEndToken}
 
 	return t.sharedCore.constructStructuralRule(
-		name,
-		grammarID,
+		identity,
 		func(ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) Result[TObservation, TToken, TTokenRole, TNodeKind] {
 
 			// 1. Initial validation of the opening token
@@ -302,9 +301,9 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 	rule Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 ) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
 	name := fmt.Sprintf("Optional(%s)", rule.GetName())
+	identity := r.sharedCore.createRuleIdentity(name, rule.GetGrammarID(), rule.GetExpectedLabel())
 	return r.sharedCore.constructOptionalRule(
-		name,
-		rule.GetExpectedLabel(),
+		identity,
 		func(ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) Result[TObservation, TToken, TTokenRole, TNodeKind] {
 			result := ctx.ExecuteRule(rule, syntaxa.ExecutionProbe)
 			if result.Failed() {
@@ -315,6 +314,46 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 			}
 
 			return result
+		},
+		rule.GetRecoveryTokens(),
+	)
+}
+
+/*
+OptionalPrefix is a wrapper around OptionalWhen that turns a rule optional when the first token is matched.
+*/
+func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) OptionalPrefix(
+	rule Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+	prefixToken TToken,
+) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
+	return r.OptionalWhen(rule, func(ctx *syntaxa.SelectRuleContext[TObservation, TToken, TTokenRole]) bool {
+		peeked := ctx.Peek(0)
+		return peeked.Token == prefixToken
+	})
+}
+
+/*
+OptionalWhen turns a rule into an optional rule but only when shouldStart is false.
+
+This can be used for prefixed optionals.
+
+Recommended is to use the wrappers around this.
+*/
+func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) OptionalWhen(
+	rule Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+	shouldStart func(ctx *syntaxa.SelectRuleContext[TObservation, TToken, TTokenRole]) bool,
+) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
+	name := fmt.Sprintf("OptionalWhen(%s)", rule.GetName())
+	identity := r.sharedCore.createRuleIdentity(name, rule.GetGrammarID(), rule.GetExpectedLabel())
+
+	return r.sharedCore.constructOptionalRule(
+		identity,
+		func(ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) Result[TObservation, TToken, TTokenRole, TNodeKind] {
+			if !shouldStart(ctx.Select) {
+				return Result[TObservation, TToken, TTokenRole, TNodeKind]{Node: nil, Succeeded: true}
+			}
+
+			return ctx.ExecuteRule(rule, syntaxa.ExecutionNormal)
 		},
 		rule.GetRecoveryTokens(),
 	)
@@ -332,10 +371,10 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 	rules ...Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 ) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
 	name := r.sharedCore.createRuleName("Root", grammarID)
+	identity := r.sharedCore.createRuleIdentity(name, grammarID, "")
 
 	return r.sharedCore.constructRule(
-		name,
-		grammarID,
+		identity,
 		r.sharedCore.createContract(mustConsume, true),
 		func(ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) Result[TObservation, TToken, TTokenRole, TNodeKind] {
 
@@ -375,7 +414,8 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 	rules ...Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 ) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
 	name := r.sharedCore.createRuleName("Sequence", grammarID)
-	return r.listCore(name, grammarID, nodeKind, nil, rules...)
+	identity := r.sharedCore.createRuleIdentity(name, grammarID, "")
+	return r.listCore(identity, nodeKind, nil, rules...)
 }
 
 /*
@@ -392,11 +432,12 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 	rules ...Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 ) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
 	name := r.sharedCore.createRuleName("Block", grammarID)
-	return r.listCore(name, grammarID, nodeKind, []TToken{blockEndToken}, rules...)
+	identity := r.sharedCore.createRuleIdentity(name, grammarID, "")
+	return r.listCore(identity, nodeKind, []TToken{blockEndToken}, rules...)
 }
 
 func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) listCore(
-	name, grammarID string,
+	identity syntaxa.RuleIdentity,
 	nodeKind TNodeKind,
 	recovery []TToken,
 	rules ...Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
@@ -410,8 +451,7 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 	}
 
 	return r.sharedCore.constructRule(
-		name,
-		grammarID,
+		identity,
 		r.sharedCore.createContract(mustConsume, true),
 		func(ctx *syntaxa.ExecRuleContext[
 			TObservation, TToken, TTokenRole, TLexerState, TNodeKind,
@@ -471,12 +511,12 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 	}
 
 	name := r.sharedCore.createRuleName("NOrMore", grammarID)
+	identity := r.sharedCore.createRuleIdentity(name, grammarID, rule.GetExpectedLabel())
 
 	mustConsume := min > 0 && rule.GetContract().MustConsume
 
 	return r.sharedCore.constructRule(
-		name,
-		rule.GetExpectedLabel(),
+		identity,
 		r.sharedCore.createContract(mustConsume, true),
 		func(ctx *syntaxa.ExecRuleContext[
 			TObservation, TToken, TTokenRole, TLexerState, TNodeKind,
@@ -539,46 +579,6 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 	rule Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 ) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
 	return r.NOrMore(grammarID, nodeKind, 1, rule)
-}
-
-/*
-OptionalPrefix is a wrapper around OptionalWhen that turns a rule optional when the first token is matched.
-*/
-func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) OptionalPrefix(
-	rule Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
-	prefixToken TToken,
-) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
-	return r.OptionalWhen(rule, func(ctx *syntaxa.SelectRuleContext[TObservation, TToken, TTokenRole]) bool {
-		peeked := ctx.Peek(0)
-		return peeked.Token == prefixToken
-	})
-}
-
-/*
-OptionalWhen turns a rule into an optional rule but only when shouldStart is false.
-
-This can be used for prefixed optionals.
-
-Recommended is to use the wrappers around this.
-*/
-func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) OptionalWhen(
-	rule Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
-	shouldStart func(ctx *syntaxa.SelectRuleContext[TObservation, TToken, TTokenRole]) bool,
-) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
-	name := fmt.Sprintf("OptionalWhen(%s)", rule.GetName())
-
-	return r.sharedCore.constructOptionalRule(
-		name,
-		rule.GetExpectedLabel(),
-		func(ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) Result[TObservation, TToken, TTokenRole, TNodeKind] {
-			if !shouldStart(ctx.Select) {
-				return Result[TObservation, TToken, TTokenRole, TNodeKind]{Node: nil, Succeeded: true}
-			}
-
-			return ctx.ExecuteRule(rule, syntaxa.ExecutionNormal)
-		},
-		rule.GetRecoveryTokens(),
-	)
 }
 
 // ------------------------------------------------------------- RULEBUILDER
@@ -691,36 +691,48 @@ func (s *sharedCore[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) c
 	return fmt.Sprintf("Rule %s (id:%s)", rule, grammarID)
 }
 
+func (s *sharedCore[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) createRuleIdentity(
+	name string,
+	grammarID string,
+	expectedLabel string,
+) syntaxa.RuleIdentity {
+	return syntaxa.RuleIdentity{
+		RuleName:      name,
+		GrammarID:     grammarID,
+		ExpectedLabel: expectedLabel,
+	}
+}
+
 func (s *sharedCore[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) constructStructuralRule(
-	ruleName, expectedLabel string,
+	identity syntaxa.RuleIdentity,
 	execution syntaxa.ParserRuleExecutor[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	recovery []TToken,
 ) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
-	return s.constructRule(ruleName, expectedLabel, s.createContract(true, true), execution, recovery)
+	return s.constructRule(identity, s.createContract(true, true), execution, recovery)
 }
 
 func (s *sharedCore[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) constructSkippingRule(
-	ruleName, expectedLabel string,
+	identity syntaxa.RuleIdentity,
 	execution syntaxa.ParserRuleExecutor[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	recovery []TToken,
 ) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
-	return s.constructRule(ruleName, expectedLabel, s.createContract(true, false), execution, recovery)
+	return s.constructRule(identity, s.createContract(true, false), execution, recovery)
 }
 
 func (s *sharedCore[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) constructOptionalRule(
-	ruleName, expectedLabel string,
+	identity syntaxa.RuleIdentity,
 	execution syntaxa.ParserRuleExecutor[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	recovery []TToken,
 ) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
-	return s.constructRule(ruleName, expectedLabel, s.createContract(false, false), execution, recovery)
+	return s.constructRule(identity, s.createContract(false, false), execution, recovery)
 }
 
 func (s *sharedCore[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) constructVirtualRule(
-	ruleName, expectedLabel string,
+	identity syntaxa.RuleIdentity,
 	execution syntaxa.ParserRuleExecutor[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	recovery []TToken,
 ) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
-	return s.constructRule(ruleName, expectedLabel, s.createContract(false, true), execution, recovery)
+	return s.constructRule(identity, s.createContract(false, true), execution, recovery)
 }
 
 func (s *sharedCore[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) createContract(
@@ -733,14 +745,13 @@ func (s *sharedCore[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) c
 }
 
 func (s *sharedCore[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) constructRule(
-	name, expectedLabel string,
+	identity syntaxa.RuleIdentity,
 	ruleContract syntaxa.RuleContract,
 	execution syntaxa.ParserRuleExecutor[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	recovery []TToken,
 ) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
 	return syntaxa.ParserRuleCreate(
-		name,
-		expectedLabel,
+		identity,
 		execution,
 		ruleContract,
 		recovery,

@@ -147,6 +147,12 @@ type ParserRuleExecutor[
 	TNodeKind comparable,
 ] func(ctx *ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) RuleResult[TObservation, TToken, TTokenRole, TNodeKind]
 
+type RuleIdentity struct {
+	RuleName      string
+	GrammarID     string
+	ExpectedLabel string
+}
+
 /*
 ParserRule attempts to parse input at the current cursor position.
 
@@ -161,8 +167,7 @@ type ParserRule[
 	TLexerState,
 	TNodeKind comparable,
 ] struct {
-	name          string
-	expectedLabel string
+	identity RuleIdentity
 
 	executionFn ParserRuleExecutor[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 
@@ -171,7 +176,7 @@ type ParserRule[
 }
 
 func (p *ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) GetName() string {
-	return p.name
+	return p.identity.RuleName
 }
 
 func (p *ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) GetRecoveryTokens() []TToken {
@@ -186,7 +191,11 @@ func (p *ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) G
 }
 
 func (p *ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) GetExpectedLabel() string {
-	return p.expectedLabel
+	return p.identity.ExpectedLabel
+}
+
+func (p *ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) GetGrammarID() string {
+	return p.identity.GrammarID
 }
 
 /*
@@ -205,14 +214,13 @@ func ParserRuleCreate[
 	TLexerState,
 	TNodeKind comparable,
 ](
-	ruleName, expectedLabel string,
+	identity RuleIdentity,
 	executionFn ParserRuleExecutor[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	contract RuleContract,
 	recoveryTokens []TToken,
 ) ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
 	return ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]{
-		name:           ruleName,
-		expectedLabel:  expectedLabel,
+		identity:       identity,
 		executionFn:    executionFn,
 		contract:       contract,
 		recoveryTokens: recoveryTokens,

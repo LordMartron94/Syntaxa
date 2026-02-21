@@ -6,6 +6,46 @@ import (
 	"lexarch"
 )
 
+// ------------------------------------------------------------- POST PROCESSOR
+
+/*
+NodePostProcessor is an optional hook invoked immediately after a non-nil AST node
+has been constructed during rule execution.
+
+It is intended for local, syntactic-adjacent enrichment of newly created nodes,
+such as:
+
+  - normalizing literal values (e.g. parsing numbers, unescaping strings)
+  - caching raw token text
+  - tagging nodes with lightweight metadata derived from their own tokens
+  - performing trivial structural annotations that require no tree context
+
+The post-processor MUST operate purely on the produced node and its own
+associated tokens. It MUST NOT:
+
+  - inspect or modify parent or sibling nodes
+  - depend on global semantic state (scope, symbols, types, etc.)
+  - influence parsing control flow or token consumption
+  - perform validation or semantic reasoning
+
+All context-dependent analysis and language semantics belong in explicit
+post-AST passes, not in this hook.
+
+Violating these constraints will lead to fragile grammars, broken recovery,
+and tightly coupled compiler phases.
+
+The provided FinalizationCtx may be used only for lightweight node-local
+utilities (e.g. attribute setting helpers, diagnostics tied to the node's
+tokens). It must not be used to access or mutate global semantic structures.
+
+This hook is optional and has zero behavioral impact when unset.
+*/
+type NodePostProcessor[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind comparable] func(
+	node *SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind],
+	finalizationCTX *FinalizationCtx[TObservation, TToken, TTokenRole, TNodeKind],
+	ruleIdentity RuleIdentity,
+)
+
 // =============================================================
 // PARSING SNAPSHOT
 // =============================================================
@@ -73,6 +113,8 @@ Responsibilities:
 type SyntaxaParser[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind, TLexerState comparable] struct {
 	programRule ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 
+	postProcessor NodePostProcessor[TObservation, TToken, TTokenRole, TNodeKind]
+
 	defaultSkipRoles []TTokenRole
 
 	tokenFormatter       func(token TToken) string
@@ -89,11 +131,14 @@ type SyntaxaParser[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind, TLex
 
 /*
 SyntaxaParserCreate constructs a new parser instance.
+
+nodePostProcessor is optional and allowed to be nil.
 */
 func SyntaxaParserCreate[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind, TLexerState comparable](
 	programRule ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	tokenFormatter func(token TToken) string,
 	observationFormatter lexarch.ObservationFormatter[TObservation],
+	nodePostProcessor NodePostProcessor[TObservation, TToken, TTokenRole, TNodeKind],
 	eofToken TToken,
 	rootNodeKind, errorNodeKind TNodeKind,
 	freezeAfterParse bool,
@@ -102,6 +147,7 @@ func SyntaxaParserCreate[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind
 		programRule:          programRule,
 		tokenFormatter:       tokenFormatter,
 		observationFormatter: observationFormatter,
+		postProcessor:        nodePostProcessor,
 		eofToken:             eofToken,
 		rootNodeKind:         rootNodeKind,
 		errorNodeKind:        errorNodeKind,
@@ -179,8 +225,7 @@ func parseWithContext[
 		defer editor.Freeze()
 	}
 
-	editor.begin()
-	defer editor.end()
+	editor.begin() // No defer end here because end resets the editor.
 
 	programResult := syntaxaParserExecuteRule(parser, ctx, parser.programRule, ExecutionNormal)
 
@@ -218,6 +263,8 @@ func syntaxaParserExecuteRule[
 	startSnap := ctx.save()
 	startPos := startSnap.tokenIndex
 
+	startASTNodeCreationIdx := len(ctx.Editor.created)
+
 	lexemePreRule := ctx.Token.Peek(0)
 	lexemePreRuleRaw := ctx.Token.PeekRaw(0)
 
@@ -246,7 +293,7 @@ func syntaxaParserExecuteRule[
 			RuleSucceeded: success,
 			Consumed:      endPos != startPos,
 			NodeReturned:  ruleResult.Node != nil,
-			RuleName:      rule.name,
+			RuleName:      rule.identity.RuleName,
 		})
 	}
 
@@ -255,6 +302,7 @@ func syntaxaParserExecuteRule[
 	// ============================================================
 	if !success {
 		ctx.restore(startSnap)
+		ctx.Editor.created = ctx.Editor.created[:startASTNodeCreationIdx]
 
 		if mode == ExecutionNormal {
 			if ruleResult.Kind == FailureError {
@@ -265,7 +313,7 @@ func syntaxaParserExecuteRule[
 						fmt.Sprintf(
 							"unexpected %v, expected %s",
 							lexemePreRule.Token,
-							rule.expectedLabel,
+							rule.identity.ExpectedLabel,
 						),
 					)
 				}
@@ -309,6 +357,17 @@ func syntaxaParserExecuteRule[
 		lexemePreRule,
 	); err != nil {
 		panic(err)
+	}
+
+	newNodes := ctx.Editor.created[startASTNodeCreationIdx:]
+
+	if parser.postProcessor != nil {
+		for _, node := range newNodes {
+			if !node.postProcessed {
+				parser.postProcessor(node, ctx.Finalization, rule.identity)
+				node.postProcessed = true
+			}
+		}
 	}
 
 	return ruleResult
@@ -367,7 +426,7 @@ func validateRuleSuccess[
 			lexemePreRule.Token,
 			lexemePreRule.StartLine,
 			lexemePreRule.StartColumn,
-			rule.name,
+			rule.identity.RuleName,
 		)
 	}
 
@@ -378,7 +437,7 @@ func validateRuleSuccess[
 			lexemePreRule.Token,
 			lexemePreRule.StartLine,
 			lexemePreRule.StartColumn,
-			rule.name,
+			rule.identity.RuleName,
 		)
 	}
 
