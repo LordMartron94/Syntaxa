@@ -173,6 +173,8 @@ type ParserRule[
 
 	contract       RuleContract
 	recoveryTokens []TToken
+
+	grammar *Grammar[TToken]
 }
 
 func (p *ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) GetName() string {
@@ -198,6 +200,10 @@ func (p *ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) G
 	return p.identity.GrammarID
 }
 
+func (p *ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) GetGrammar() *Grammar[TToken] {
+	return p.grammar
+}
+
 /*
 ParserRuleCreate constructs a rule.
 
@@ -218,11 +224,13 @@ func ParserRuleCreate[
 	executionFn ParserRuleExecutor[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	contract RuleContract,
 	recoveryTokens []TToken,
+	grammar *Grammar[TToken],
 ) ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
 	return ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]{
 		identity:       identity,
 		executionFn:    executionFn,
 		contract:       contract,
 		recoveryTokens: recoveryTokens,
+		grammar:        grammar,
 	}
 }

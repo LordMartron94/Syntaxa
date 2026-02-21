@@ -72,23 +72,50 @@ func (t *tokenEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 	addNode bool,
 	tokens ...TToken,
 ) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
-	name := t.sharedCore.createRuleName(ruleName, grammarID)
-	identity := t.sharedCore.createRuleIdentity(name, grammarID, t.sharedCore.formatTokensAsList(", ", tokens...))
 
-	rule := func(ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) Result[TObservation, TToken, TTokenRole, TNodeKind] {
+	name := t.sharedCore.createRuleName(ruleName, grammarID)
+	identity := t.sharedCore.createRuleIdentity(
+		name,
+		grammarID,
+		t.sharedCore.formatTokensAsList(", ", tokens...),
+	)
+
+	// ---------------------------
+	// Build grammar IR
+	// ---------------------------
+
+	var grammar *syntaxa.Grammar[TToken]
+
+	if len(tokens) == 1 {
+		grammar = syntaxa.Token(grammarID, tokens[0])
+	} else {
+		children := make([]*syntaxa.Grammar[TToken], len(tokens))
+		for i, tok := range tokens {
+			children[i] = syntaxa.Token(grammarID, tok)
+		}
+		grammar = syntaxa.Choice(grammarID, children...)
+	}
+
+	// ---------------------------
+	// Runtime execution
+	// ---------------------------
+
+	rule := func(ctx *syntaxa.ExecRuleContext[
+		TObservation, TToken, TTokenRole, TLexerState, TNodeKind,
+	]) Result[TObservation, TToken, TTokenRole, TNodeKind] {
+
 		peeked := ctx.Token.Peek(0)
+
 		if slices.Contains(tokens, peeked.Token) {
 			value := ctx.Token.Consume()
 
 			if addNode {
 				node := ctx.Editor.NewNode(outputNodeKind)
 				ctx.Editor.AddToken(node, value)
-
 				return t.sharedCore.buildSuccessRuleResult(node)
-			} else {
-				return t.sharedCore.buildSuccessRuleResult(nil)
 			}
 
+			return t.sharedCore.buildSuccessRuleResult(nil)
 		}
 
 		ctx.Error.ReportAt(
@@ -104,19 +131,25 @@ func (t *tokenEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 		return t.sharedCore.buildFailureRuleResult(nil, syntaxa.FailureNoMatch)
 	}
 
+	// ---------------------------
+	// Construct rule
+	// ---------------------------
+
 	if addNode {
 		return t.sharedCore.constructStructuralRule(
 			identity,
 			rule,
 			nil,
-		)
-	} else {
-		return t.sharedCore.constructSkippingRule(
-			identity,
-			rule,
-			nil,
+			grammar,
 		)
 	}
+
+	return t.sharedCore.constructSkippingRule(
+		identity,
+		rule,
+		nil,
+		grammar,
+	)
 }
 
 type TrailingSeparatorMode uint8
@@ -169,7 +202,69 @@ func (t *tokenEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 			return t.runListAutomaton(ctx, name, node, elementToken, separatorToken, listEndToken, elementNodeKind, mode)
 		},
 		recovery,
+		t.getListGrammar(grammarID, listOpenToken, elementToken, separatorToken, listEndToken, allowEmptyList, mode),
 	)
+}
+
+func (t *tokenEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) getListGrammar(
+	grammarID string,
+	listOpenToken, elementToken, separatorToken, listEndToken TToken,
+	allowEmptyList bool,
+	mode TrailingSeparatorMode,
+) *syntaxa.Grammar[TToken] {
+	// ---------------------------
+	// Build grammar IR
+	// ---------------------------
+
+	openG := syntaxa.Token(grammarID, listOpenToken)
+	elemG := syntaxa.Token(grammarID, elementToken)
+	sepG := syntaxa.Token(grammarID, separatorToken)
+	closeG := syntaxa.Token(grammarID, listEndToken)
+
+	// Core: (S E)
+	sepElem := syntaxa.Concat(grammarID, sepG, elemG)
+
+	// Repetition: (S E)*
+	repeatSepElem := syntaxa.ZeroOrMore(grammarID, sepElem)
+
+	// Base body: E (S E)*
+	baseBody := syntaxa.Concat(grammarID, elemG, repeatSepElem)
+
+	var body *syntaxa.Grammar[TToken]
+
+	switch mode {
+
+	case TrailingForbidden:
+		body = baseBody
+
+	case TrailingOptional:
+		body = syntaxa.Concat(
+			grammarID,
+			baseBody,
+			syntaxa.Optional(grammarID, sepG),
+		)
+
+	case TrailingRequired:
+		body = syntaxa.Concat(
+			grammarID,
+			baseBody,
+			sepG,
+		)
+	}
+
+	// Allow empty list
+	if allowEmptyList {
+		body = syntaxa.Optional(grammarID, body)
+	}
+
+	// Full list grammar: O body C
+	grammar := syntaxa.Concat(
+		grammarID,
+		openG,
+		body,
+		closeG,
+	)
+	return grammar
 }
 
 func (t *tokenEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) runListAutomaton(
@@ -316,6 +411,7 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 			return result
 		},
 		rule.GetRecoveryTokens(),
+		syntaxa.Optional(rule.GetGrammarID(), rule.GetGrammar()),
 	)
 }
 
@@ -356,6 +452,7 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 			return ctx.ExecuteRule(rule, syntaxa.ExecutionNormal)
 		},
 		rule.GetRecoveryTokens(),
+		syntaxa.Optional(rule.GetGrammarID(), rule.GetGrammar()),
 	)
 }
 
@@ -370,31 +467,52 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 	mustConsume bool,
 	rules ...Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 ) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
+
 	name := r.sharedCore.createRuleName("Root", grammarID)
 	identity := r.sharedCore.createRuleIdentity(name, grammarID, "")
+
+	// ---------------------------
+	// Build grammar IR
+	// ---------------------------
+
+	children := make([]*syntaxa.Grammar[TToken], len(rules))
+	for i, rule := range rules {
+		children[i] = rule.GetGrammar()
+	}
+
+	grammar := syntaxa.Concat(grammarID, children...)
+
+	// ---------------------------
+	// Runtime execution
+	// ---------------------------
+
+	exec := func(ctx *syntaxa.ExecRuleContext[
+		TObservation, TToken, TTokenRole, TLexerState, TNodeKind,
+	]) Result[TObservation, TToken, TTokenRole, TNodeKind] {
+
+		node := ctx.Editor.NewNode(nodeKind)
+
+		for _, rule := range rules {
+			result := ctx.ExecuteRule(rule, syntaxa.ExecutionNormal)
+
+			if result.Failed() {
+				return r.sharedCore.buildSuccessRuleResult(node)
+			}
+
+			if result.Node != nil {
+				ctx.Editor.AttachChild(node, result.Node)
+			}
+		}
+
+		return r.sharedCore.buildSuccessRuleResult(node)
+	}
 
 	return r.sharedCore.constructRule(
 		identity,
 		r.sharedCore.createContract(mustConsume, true),
-		func(ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) Result[TObservation, TToken, TTokenRole, TNodeKind] {
-
-			node := ctx.Editor.NewNode(nodeKind)
-
-			for _, rule := range rules {
-				result := ctx.ExecuteRule(rule, syntaxa.ExecutionNormal)
-
-				if result.Failed() {
-					return r.sharedCore.buildSuccessRuleResult(node)
-				}
-
-				if result.Node != nil {
-					ctx.Editor.AttachChild(node, result.Node)
-				}
-			}
-
-			return r.sharedCore.buildSuccessRuleResult(node)
-		},
+		exec,
 		nil,
+		grammar,
 	)
 }
 
@@ -442,6 +560,7 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 	recovery []TToken,
 	rules ...Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 ) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
+
 	mustConsume := false
 	for i := range rules {
 		if rules[i].GetContract().MustConsume {
@@ -450,40 +569,58 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 		}
 	}
 
+	// ---------------------------
+	// Build grammar IR
+	// ---------------------------
+
+	children := make([]*syntaxa.Grammar[TToken], len(rules))
+	for i, rule := range rules {
+		children[i] = rule.GetGrammar()
+	}
+
+	grammar := syntaxa.Concat(identity.GrammarID, children...)
+
+	// ---------------------------
+	// Runtime execution
+	// ---------------------------
+
+	exec := func(ctx *syntaxa.ExecRuleContext[
+		TObservation, TToken, TTokenRole, TLexerState, TNodeKind,
+	]) Result[TObservation, TToken, TTokenRole, TNodeKind] {
+
+		results := make([]Result[TObservation, TToken, TTokenRole, TNodeKind], len(rules))
+
+		for i, rule := range rules {
+			result := ctx.ExecuteRule(rule, syntaxa.ExecutionNormal)
+
+			if result.Failed() {
+				if i == 0 && result.Kind == syntaxa.FailureNoMatch {
+					return r.sharedCore.buildFailureRuleResult(nil, syntaxa.FailureNoMatch)
+				}
+
+				return r.sharedCore.buildFailureRuleResult(nil, syntaxa.FailureError)
+			}
+
+			results[i] = result
+		}
+
+		node := ctx.Editor.NewNode(nodeKind)
+
+		for _, result := range results {
+			if result.Node != nil {
+				ctx.Editor.AttachChild(node, result.Node)
+			}
+		}
+
+		return r.sharedCore.buildSuccessRuleResult(node)
+	}
+
 	return r.sharedCore.constructRule(
 		identity,
 		r.sharedCore.createContract(mustConsume, true),
-		func(ctx *syntaxa.ExecRuleContext[
-			TObservation, TToken, TTokenRole, TLexerState, TNodeKind,
-		]) Result[TObservation, TToken, TTokenRole, TNodeKind] {
-
-			results := make([]Result[TObservation, TToken, TTokenRole, TNodeKind], len(rules))
-
-			for i, rule := range rules {
-				result := ctx.ExecuteRule(rule, syntaxa.ExecutionNormal)
-
-				if result.Failed() {
-					if i == 0 && result.Kind == syntaxa.FailureNoMatch {
-						return r.sharedCore.buildFailureRuleResult(nil, syntaxa.FailureNoMatch)
-					}
-
-					return r.sharedCore.buildFailureRuleResult(nil, syntaxa.FailureError)
-				}
-
-				results[i] = result
-			}
-
-			node := ctx.Editor.NewNode(nodeKind)
-
-			for _, result := range results {
-				if result.Node != nil {
-					ctx.Editor.AttachChild(node, result.Node)
-				}
-			}
-
-			return r.sharedCore.buildSuccessRuleResult(node)
-		},
+		exec,
 		recovery,
+		grammar,
 	)
 }
 
@@ -509,6 +646,8 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 	if min < 0 {
 		panic("NOrMore: min must be >= 0")
 	}
+
+	grammar := syntaxa.Repeat(grammarID, rule.GetGrammar(), min, nil)
 
 	name := r.sharedCore.createRuleName("NOrMore", grammarID)
 	identity := r.sharedCore.createRuleIdentity(name, grammarID, rule.GetExpectedLabel())
@@ -560,6 +699,7 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 			return r.sharedCore.buildSuccessRuleResult(node)
 		},
 		rule.GetRecoveryTokens(),
+		grammar,
 	)
 }
 
@@ -707,32 +847,60 @@ func (s *sharedCore[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) c
 	identity syntaxa.RuleIdentity,
 	execution syntaxa.ParserRuleExecutor[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	recovery []TToken,
+	grammar *syntaxa.Grammar[TToken],
 ) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
-	return s.constructRule(identity, s.createContract(true, true), execution, recovery)
+	return s.constructRule(
+		identity,
+		s.createContract(true, true),
+		execution,
+		recovery,
+		grammar,
+	)
 }
 
 func (s *sharedCore[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) constructSkippingRule(
 	identity syntaxa.RuleIdentity,
 	execution syntaxa.ParserRuleExecutor[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	recovery []TToken,
+	grammar *syntaxa.Grammar[TToken],
 ) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
-	return s.constructRule(identity, s.createContract(true, false), execution, recovery)
+	return s.constructRule(
+		identity,
+		s.createContract(true, false),
+		execution,
+		recovery,
+		grammar,
+	)
 }
 
 func (s *sharedCore[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) constructOptionalRule(
 	identity syntaxa.RuleIdentity,
 	execution syntaxa.ParserRuleExecutor[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	recovery []TToken,
+	grammar *syntaxa.Grammar[TToken],
 ) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
-	return s.constructRule(identity, s.createContract(false, false), execution, recovery)
+	return s.constructRule(
+		identity,
+		s.createContract(false, false),
+		execution,
+		recovery,
+		grammar,
+	)
 }
 
 func (s *sharedCore[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) constructVirtualRule(
 	identity syntaxa.RuleIdentity,
 	execution syntaxa.ParserRuleExecutor[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	recovery []TToken,
+	grammar *syntaxa.Grammar[TToken],
 ) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
-	return s.constructRule(identity, s.createContract(false, true), execution, recovery)
+	return s.constructRule(
+		identity,
+		s.createContract(false, true),
+		execution,
+		recovery,
+		grammar,
+	)
 }
 
 func (s *sharedCore[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) createContract(
@@ -749,11 +917,13 @@ func (s *sharedCore[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) c
 	ruleContract syntaxa.RuleContract,
 	execution syntaxa.ParserRuleExecutor[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	recovery []TToken,
+	grammar *syntaxa.Grammar[TToken],
 ) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
 	return syntaxa.ParserRuleCreate(
 		identity,
 		execution,
 		ruleContract,
 		recovery,
+		grammar,
 	)
 }
