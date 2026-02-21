@@ -115,6 +115,61 @@ type Grammar[TToken comparable] struct {
 }
 
 /*
+	IsRegular computes whether this grammar is regular.
+
+Given the current Grammar algebra, all grammars are regular by construction.
+This function exists for forward compatibility in case non-regular constructs
+(e.g. recursive nonterminals) are introduced in the future.
+*/
+func (g *Grammar[TToken]) IsRegular() bool {
+	if g == nil {
+		return true
+	}
+
+	// Defensive cycle guard in case future extensions introduce references
+	visited := make(map[*Grammar[TToken]]bool)
+
+	var walk func(*Grammar[TToken]) bool
+	walk = func(n *Grammar[TToken]) bool {
+		if n == nil {
+			return true
+		}
+
+		if visited[n] {
+			// Cycles alone do NOT make a grammar non-regular
+			// (Kleene star is cyclic by nature)
+			return true
+		}
+		visited[n] = true
+
+		switch n.Kind {
+		case GToken, GEpsilon:
+			return true
+
+		case GConcat, GChoice:
+			for _, c := range n.Children {
+				if !walk(c) {
+					return false
+				}
+			}
+			return true
+
+		case GRepeat, GOptional:
+			if len(n.Children) != 1 {
+				return false
+			}
+			return walk(n.Children[0])
+
+		default:
+			// Unknown grammar kind => not provably regular
+			return false
+		}
+	}
+
+	return walk(g)
+}
+
+/*
 Token constructs an atomic terminal grammar node that matches exactly one token.
 */
 func Token[TToken comparable](id string, tok TToken) *Grammar[TToken] {
