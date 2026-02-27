@@ -29,14 +29,14 @@ PathToGrammarID maps each node's path (NodeKey) to its GrammarID for debug displ
 so analysis dumps can show node names with path in parentheses, e.g. "PROGRAM (0)".
 */
 type GrammarPackage[TToken comparable] struct {
-	Name             string
-	Version          string
-	EntryRule        GrammarID
-	Rules            map[GrammarID]*Grammar[TToken]
-	TokensUsed       []TToken
-	Nests            []NestSpec[TToken]
-	Analysis         *GrammarAnalysis[TToken]
-	PathToGrammarID  map[NodeKey]GrammarID
+	Name            string
+	Version         string
+	EntryRule       GrammarID
+	Rules           map[GrammarID]*Grammar[TToken]
+	TokensUsed      []TToken
+	Nests           []NestSpec[TToken]
+	Analysis        *GrammarAnalysis[TToken]
+	PathToGrammarID map[NodeKey]GrammarID
 }
 
 /*
@@ -154,7 +154,7 @@ func collectAll[TToken comparable](
 		return
 	}
 
-	if g.RuleRoot {
+	if g.IsContextBoundary {
 		if _, exists := rules[g.GrammarID]; !exists {
 			rules[g.GrammarID] = g
 		}
@@ -269,7 +269,7 @@ func propagateFirst[TToken comparable](g *Grammar[TToken], currentRule GrammarID
 	if g == nil {
 		return false
 	}
-	if g.RuleRoot {
+	if g.IsContextBoundary {
 		currentRule = g.GrammarID
 	}
 
@@ -330,7 +330,7 @@ func propagateFollow[TToken comparable](
 	}
 
 	// 1. Update context if this node is an explicit Rule root
-	if g.RuleRoot {
+	if g.IsContextBoundary {
 		currentRule = g.GrammarID
 	}
 

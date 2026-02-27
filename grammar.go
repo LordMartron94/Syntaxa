@@ -153,8 +153,8 @@ type Grammar[TToken comparable] struct {
 	/* NodePath is assigned by FinalizeNodePaths; used as the key for analysis maps. */
 	NodePath *NodePath
 
-	/* RuleRoot is true only for the root node of a named production (e.g. from Rule.Root). Used by collectAll to populate the Rules map. */
-	RuleRoot bool
+	/* IsContextBoundary is true only for the root node of a named production (e.g. from Rule.Root). Used by collectAll to populate the Rules map. */
+	IsContextBoundary bool
 }
 
 /*
@@ -270,13 +270,13 @@ func (g *Grammar[TToken]) IsRegular() bool {
 }
 
 /*
-MarkAsRuleRoot marks the grammar node as the root of a named production.
+MarkAsContextBoundary marks the grammar node as the root of a named production.
 
 Called by the rule factory for nodes created by Rule.Root. collectAll uses this to decide which nodes to add to the Rules map.
 */
-func MarkAsRuleRoot[TToken comparable](g *Grammar[TToken]) {
+func MarkAsContextBoundary[TToken comparable](g *Grammar[TToken]) {
 	if g != nil {
-		g.RuleRoot = true
+		g.IsContextBoundary = true
 	}
 }
 

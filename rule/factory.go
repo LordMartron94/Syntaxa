@@ -250,6 +250,9 @@ func (t *tokenEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 	identity := t.sharedCore.createRuleIdentity(name, grammarID, "")
 	recovery := []TToken{listEndToken}
 
+	grammar := t.getListGrammar(grammarID, listOpenToken, elementToken, separatorToken, listEndToken, allowEmptyList, mode)
+	syntaxa.MarkAsContextBoundary(grammar)
+
 	return t.sharedCore.constructStructuralRule(
 		identity,
 		func(ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) Result[TObservation, TToken, TTokenRole, TNodeKind] {
@@ -272,7 +275,7 @@ func (t *tokenEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 			return t.runListAutomaton(ctx, name, node, elementToken, separatorToken, listEndToken, elementNodeKind, mode)
 		},
 		recovery,
-		t.getListGrammar(grammarID, listOpenToken, elementToken, separatorToken, listEndToken, allowEmptyList, mode),
+		grammar,
 	)
 }
 
@@ -597,7 +600,7 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 	}
 
 	grammar := syntaxa.Concat(grammarID, children...)
-	syntaxa.MarkAsRuleRoot(grammar)
+	syntaxa.MarkAsContextBoundary(grammar)
 
 	// ---------------------------
 	// Runtime execution
@@ -716,6 +719,7 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 	}
 
 	grammar := syntaxa.Concat(identity.GrammarID, children...)
+	syntaxa.MarkAsContextBoundary(grammar)
 
 	// ---------------------------
 	// Runtime execution
@@ -795,6 +799,7 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 	}
 
 	grammar := syntaxa.Repeat(grammarID, rule.GetGrammar(), min, nil)
+	syntaxa.MarkAsContextBoundary(grammar)
 
 	name := r.sharedCore.createRuleName("NOrMore", grammarID)
 	identity := r.sharedCore.createRuleIdentity(name, grammarID, rule.GetExpectedLabel())
@@ -920,6 +925,7 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 		closeToken,
 		innerRule.GetGrammar(),
 	)
+	syntaxa.MarkAsContextBoundary(grammar)
 
 	// ---------------------------
 	// Runtime execution
