@@ -9,12 +9,17 @@ import (
 // FORMATTER (semantic layer)
 // ============================================================
 
+/*
+GrammarDebugFormatter supplies string rendering for grammar debug dumps.
+
+FormatKind is required; the rest are optional. Color functions may be nil for plain text.
+*/
 type GrammarDebugFormatter[TToken comparable] struct {
 	/* REQUIRED */
 	FormatKind func(GrammarKind) string
 
 	/* Optional render hooks */
-	FormatGrammarID func(string) string
+	FormatGrammarID func(GrammarID) string
 	FormatToken     func(TToken) string
 	FormatRange     func(min int, max *int) string
 
@@ -47,6 +52,11 @@ type grammarDebugEdge[TToken comparable] struct {
 	node  *Grammar[TToken]
 }
 
+/*
+GrammarEdgeEnumerator defines how child edges of a grammar node are enumerated for debug dumps.
+
+Custom implementations can reorder or label edges; the default uses child order and "body" for repeat/optional.
+*/
 type GrammarEdgeEnumerator[TToken comparable] interface {
 	EdgesOf(node *Grammar[TToken]) []grammarDebugEdge[TToken]
 }
@@ -63,7 +73,7 @@ func (e defaultGrammarEdgeEnumerator[TToken]) EdgesOf(
 
 	switch g.Kind {
 
-	case GConcat, GChoice:
+	case GConcat, GChoice, GNest:
 		out := make([]grammarDebugEdge[TToken], len(g.Children))
 		for i, ch := range g.Children {
 			out[i] = grammarDebugEdge[TToken]{node: ch}
@@ -87,6 +97,11 @@ func (e defaultGrammarEdgeEnumerator[TToken]) EdgesOf(
 // RENDERER (layout + IO)
 // ============================================================
 
+/*
+GrammarDebugger renders a grammar tree to a human-readable dump (tree glyphs + formatted lines).
+
+Use NewGrammarDebugger to construct; then DumpTo or DumpString to produce output.
+*/
 type GrammarDebugger[TToken comparable] struct {
 	Formatter  GrammarDebugFormatter[TToken]
 	Enumerator GrammarEdgeEnumerator[TToken]
@@ -97,6 +112,11 @@ type GrammarDebugger[TToken comparable] struct {
 	GlyphBlank string
 }
 
+/*
+NewGrammarDebugger creates a GrammarDebugger with the given formatter and default tree glyphs.
+
+Panics if formatter.FormatKind is nil.
+*/
 func NewGrammarDebugger[TToken comparable](
 	formatter GrammarDebugFormatter[TToken],
 ) *GrammarDebugger[TToken] {
@@ -114,6 +134,11 @@ func NewGrammarDebugger[TToken comparable](
 	}
 }
 
+/*
+DumpTo writes the full debug dump of the grammar tree to w.
+
+Returns any write error. If root is nil, writes "<nil>\n".
+*/
 func (d *GrammarDebugger[TToken]) DumpTo(
 	w io.Writer,
 	root *Grammar[TToken],
@@ -139,6 +164,9 @@ func (d *GrammarDebugger[TToken]) DumpTo(
 	return nil
 }
 
+/*
+DumpString returns the full debug dump of the grammar tree as a string.
+*/
 func (d *GrammarDebugger[TToken]) DumpString(root *Grammar[TToken]) string {
 	var b strings.Builder
 	_ = d.DumpTo(&b, root)
@@ -288,6 +316,11 @@ func (d *GrammarDebugger[TToken]) writeNodeLine(
 // Grammar API convenience
 // ============================================================
 
+/*
+DebugDump produces a human-readable tree dump of the grammar using the given formatter.
+
+Convenience wrapper around NewGrammarDebugger and DumpString.
+*/
 func (g *Grammar[TToken]) DebugDump(
 	formatter GrammarDebugFormatter[TToken],
 ) string {

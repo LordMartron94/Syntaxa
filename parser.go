@@ -87,7 +87,7 @@ type ParseTraceEvent[TToken any] struct {
 	RuleSucceeded bool
 	Consumed      bool
 	NodeReturned  bool
-	RuleName      string
+	RuleName      RuleLabel
 }
 
 type ParseTrace[TToken any] struct {
@@ -308,7 +308,7 @@ func syntaxaParserExecuteRule[
 			if ruleResult.Kind == FailureError {
 				if bestPos, ok := ctx.Error.sink.currentBestPosition(); ok && bestPos == startPos {
 					ctx.Error.replaceBestErrorAt(
-						rule.GetName(),
+						string(rule.GetName()),
 						lexemePreRule,
 						fmt.Sprintf(
 							"unexpected %v, expected %s",

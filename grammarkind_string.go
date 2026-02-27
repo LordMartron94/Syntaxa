@@ -14,11 +14,12 @@ func _() {
 	_ = x[GRepeat-4]
 	_ = x[GOptional-5]
 	_ = x[GEpsilon-6]
+	_ = x[GNest-7]
 }
 
-const _GrammarKind_name = "GTokenGConcatGChoiceGRepeatGOptionalGEpsilon"
+const _GrammarKind_name = "GTokenGConcatGChoiceGRepeatGOptionalGEpsilonGNest"
 
-var _GrammarKind_index = [...]uint8{0, 6, 13, 20, 27, 36, 44}
+var _GrammarKind_index = [...]uint8{0, 6, 13, 20, 27, 36, 44, 49}
 
 func (i GrammarKind) String() string {
 	idx := int(i) - 1
