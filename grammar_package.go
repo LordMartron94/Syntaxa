@@ -49,6 +49,7 @@ type NestSpec[TToken comparable] struct {
 	Open      TToken
 	Close     TToken
 	OwnerRule GrammarID
+	Node      *Grammar[TToken]
 }
 
 /*
@@ -174,6 +175,7 @@ func collectAll[TToken comparable](
 			Open:      *g.OpenToken,
 			Close:     *g.CloseToken,
 			OwnerRule: g.GrammarID,
+			Node:      g,
 		})
 	}
 
