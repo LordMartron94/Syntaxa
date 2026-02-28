@@ -10,7 +10,7 @@
 //     then use RuleBuilder.Token for token-level rules and RuleBuilder.Rule for composite rules.
 //   - Token endpoint: Expect, ExpectVirtual, ExpectOneOf, List — match lexer tokens and optionally
 //     build AST nodes.
-//   - Rule endpoint: Sequence, Block, Optional, NOrMore, Nest, Root — combine rules and control
+//   - Rule endpoint: Sequence, Block, Optional, Required, NOrMore, Nest, Root — combine rules and control
 //     consumption and recovery.
 //
 // For behaviour not covered by these combinators, construct rules manually via

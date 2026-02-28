@@ -45,6 +45,8 @@ type RuleResult[TObservation cmp.Ordered, TToken, TTokenRole, TKind comparable] 
 	Succeeded bool
 
 	Kind FailureKind
+
+	IsFragment bool
 }
 
 func (r *RuleResult[TObservation, TToken, TTokenRole, TKind]) Failed() bool {
@@ -175,6 +177,10 @@ type ParserRule[
 	recoveryTokens []TToken
 
 	grammar *Grammar[TToken]
+}
+
+func (p *ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) GetIdentity() RuleIdentity {
+	return p.identity
 }
 
 func (p *ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) GetName() RuleLabel {

@@ -63,6 +63,21 @@ func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) NewNode(kind TKind) *Syntax
 	return node
 }
 
+/*
+NewTransientNode creates a detached AST node that bypasses global tracking.
+
+It does not receive a unique ID and is not added to the editor's created ledger.
+Use this strictly for temporary container nodes (Fragments) that will be unpacked
+and discarded before the parsing session ends.
+*/
+func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) NewTransientNode(kind TKind) *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind] {
+	e.ensureMutable()
+
+	return &SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]{
+		kind: kind,
+	}
+}
+
 func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) AttachChild(parent, child *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) {
 	e.ensureMutable()
 
