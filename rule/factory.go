@@ -660,7 +660,7 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 	// ---------------------------
 
 	children := r.grammarsFromRules(rules)
-	grammar   := syntaxa.Concat(grammarID, children...)
+	grammar := syntaxa.Concat(grammarID, children...)
 	syntaxa.MarkAsContextBoundary(grammar)
 
 	// ---------------------------
@@ -680,9 +680,7 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 				return r.sharedCore.buildSuccessRuleResult(node)
 			}
 
-			if result.Node != nil {
-				ctx.Editor.AttachChild(node, result.Node)
-			}
+			ctx.Editor.AttachResult(node, result)
 		}
 
 		return r.sharedCore.buildSuccessRuleResult(node)
@@ -777,7 +775,7 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 	// ---------------------------
 
 	children := r.grammarsFromRules(rules)
-	grammar  := syntaxa.Concat(identity.GrammarID, children...)
+	grammar := syntaxa.Concat(identity.GrammarID, children...)
 	syntaxa.MarkAsContextBoundary(grammar)
 
 	// ---------------------------
@@ -858,17 +856,7 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 	results []Result[TObservation, TToken, TTokenRole, TNodeKind],
 ) {
 	for _, result := range results {
-		if result.Node == nil {
-			continue
-		}
-		if result.IsFragment {
-			for _, child := range result.Node.Children() {
-				ctx.Editor.Detach(child)
-				ctx.Editor.AttachChild(parent, child)
-			}
-		} else {
-			ctx.Editor.AttachChild(parent, result.Node)
-		}
+		ctx.Editor.AttachResult(parent, result)
 	}
 }
 
@@ -884,13 +872,11 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 	container *syntaxa.SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind],
 ) (count int, errResult Result[TObservation, TToken, TTokenRole, TNodeKind], hasError bool) {
 	for {
-		before     := ctx.Token.PeekRaw(0)
-		result     := ctx.ExecuteRule(rule, syntaxa.ExecutionNormal)
+		before := ctx.Token.PeekRaw(0)
+		result := ctx.ExecuteRule(rule, syntaxa.ExecutionNormal)
 
 		if result.Succeeded {
-			if result.Node != nil {
-				ctx.Editor.AttachChild(container, result.Node)
-			}
+			ctx.Editor.AttachResult(container, result)
 			count++
 			continue
 		}
@@ -1132,10 +1118,7 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 
 		node := ctx.Editor.NewNode(nodeKind)
 
-		if innerResult.Node != nil {
-			ctx.Editor.AttachChild(node, innerResult.Node)
-		}
-
+		ctx.Editor.AttachResult(node, innerResult)
 		return r.sharedCore.buildSuccessRuleResult(node)
 	}
 

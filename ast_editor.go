@@ -101,6 +101,25 @@ func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) AttachChild(parent, child *
 	e.markDirtyCascade(parent)
 }
 
+func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) AttachResult(
+	parent *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind],
+	result RuleResult[TObs, TToken, TTokenRole, TKind],
+) {
+	if result.Node == nil {
+		return
+	}
+
+	if result.IsFragment {
+		children := result.Node.Children()
+		for _, child := range children {
+			e.Detach(child)
+			e.AttachChild(parent, child)
+		}
+	} else {
+		e.AttachChild(parent, result.Node)
+	}
+}
+
 func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) SetSlot(parent *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind], name string, child *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) {
 	e.ensureMutable()
 
