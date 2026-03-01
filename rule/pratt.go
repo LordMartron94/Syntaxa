@@ -12,11 +12,13 @@ PrattPrefixOp describes a prefix operator for Pratt expression parsing.
 
 RightBP is the binding power used when parsing the operand to the right.
 NodeKind is the LST node kind for the prefix operator node (one child: the operand).
+TokenGrammarID is the GrammarID for this operator's token in the grammar IR; required (panic if empty).
 */
 type PrattPrefixOp[TToken, TNodeKind comparable] struct {
-	Token   TToken
-	RightBP int
-	NodeKind TNodeKind
+	Token         TToken
+	RightBP       int
+	NodeKind      TNodeKind
+	TokenGrammarID syntaxa.GrammarID
 }
 
 /*
@@ -26,12 +28,14 @@ LeftBP and RightBP define precedence and associativity: when we have a left oper
 and see this operator, we consume it and parse the right operand with RightBP.
 Left-associative: use RightBP < LeftBP (e.g. RightBP = LeftBP - 1).
 Right-associative: use RightBP = LeftBP.
+TokenGrammarID is the GrammarID for this operator's token in the grammar IR; required (panic if empty).
 */
 type PrattInfixOp[TToken, TNodeKind comparable] struct {
-	Token    TToken
-	LeftBP   int
-	RightBP  int
-	NodeKind TNodeKind
+	Token          TToken
+	LeftBP         int
+	RightBP        int
+	NodeKind       TNodeKind
+	TokenGrammarID syntaxa.GrammarID
 }
 
 /*
@@ -126,10 +130,16 @@ func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 ) *syntaxa.Grammar[TToken] {
 	children := []*syntaxa.Grammar[TToken]{primary.GetGrammar()}
 	for _, op := range prefixOps {
-		children = append(children, syntaxa.Token(grammarID, op.Token))
+		if op.TokenGrammarID == "" {
+			panic("Pratt prefix op has empty TokenGrammarID; explicitness required")
+		}
+		children = append(children, syntaxa.Token(op.TokenGrammarID, op.Token))
 	}
 	for _, op := range infixOps {
-		children = append(children, syntaxa.Token(grammarID, op.Token))
+		if op.TokenGrammarID == "" {
+			panic("Pratt infix op has empty TokenGrammarID; explicitness required")
+		}
+		children = append(children, syntaxa.Token(op.TokenGrammarID, op.Token))
 	}
 	if len(children) == 1 {
 		return children[0]

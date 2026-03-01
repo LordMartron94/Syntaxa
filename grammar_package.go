@@ -487,17 +487,6 @@ func mergeInto[TToken comparable](
 // ============================================================
 
 /*
-mergeTokenSets adds all tokens from src into dst in place.
-
-Use when building first/follow sets by union.
-*/
-func mergeTokenSets[TToken comparable](dst, src TokenSet[TToken]) {
-	for t := range src {
-		dst[t] = struct{}{}
-	}
-}
-
-/*
 nodeKeyFromPath builds a NodeKey from a node path.
 
 NodePath is unique per node in the tree. Using path as the sole key ensures analysis maps
