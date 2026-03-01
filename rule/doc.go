@@ -11,7 +11,7 @@
 //     then use RuleBuilder.Token for token-level rules, RuleBuilder.Rule for composite rules,
 //     and RuleBuilder.Pratt for precedence-climbing expression rules.
 //   - Token endpoint: Expect, ExpectVirtual, ExpectOneOf, ExpectPair, List — match lexer tokens and optionally
-//     build AST nodes. ExpectPair expects two tokens in sequence and creates one node with both attached.
+//     build LST nodes. ExpectPair expects two tokens in sequence and creates one node with both attached.
 //   - Rule endpoint: Sequence, Block, Optional, OptionalPrefix, OptionalWhen, OptionalSuffix, Required, NOrMore, Nest, Root, Predict — combine rules and control
 //     consumption and recovery. OptionalSuffix runs a rule and, if the next token matches, consumes it and wraps the result in a new node.
 //     Predict runs a rule only when a lookahead predicate (on SelectRuleContext) returns true; otherwise it returns FailureNoMatch without consuming, so Choice can try the next alternative. Use Predict to resolve prefix overlap when two alternatives start with the same token.

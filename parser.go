@@ -9,7 +9,7 @@ import (
 // ------------------------------------------------------------- POST PROCESSOR
 
 /*
-NodePostProcessor is an optional hook invoked immediately after a non-nil AST node
+NodePostProcessor is an optional hook invoked immediately after a non-nil LST node
 has been constructed during rule execution.
 
 It is intended for local, syntactic-adjacent enrichment of newly created nodes,
@@ -29,7 +29,7 @@ associated tokens. It MUST NOT:
   - perform validation or semantic reasoning
 
 All context-dependent analysis and language semantics belong in explicit
-post-AST passes, not in this hook.
+post-LST passes, not in this hook.
 
 Violating these constraints will lead to fragile grammars, broken recovery,
 and tightly coupled compiler phases.
@@ -41,7 +41,7 @@ tokens). It must not be used to access or mutate global semantic structures.
 This hook is optional and has zero behavioral impact when unset.
 */
 type NodePostProcessor[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind comparable] func(
-	node *SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind],
+	node *SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind],
 	finalizationCTX *FinalizationCtx[TObservation, TToken, TTokenRole, TNodeKind],
 	ruleIdentity RuleIdentity,
 )
@@ -95,7 +95,7 @@ type ParseTrace[TToken any] struct {
 }
 
 type ParseResult[TObs cmp.Ordered, TToken, TTokenRole, TKind comparable] struct {
-	Root   *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]
+	Root   *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]
 	Errors *SyntaxErrors[TObs]
 	Trace  *ParseTrace[TToken]
 }
@@ -108,7 +108,7 @@ It imposes no parsing paradigm (LL, LR, Pratt, PEG, etc.).
 Responsibilities:
   - transactional rule execution
   - centralized error recovery
-  - AST assembly
+  - LST assembly
 */
 type SyntaxaParser[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind, TLexerState comparable] struct {
 	programRule ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
@@ -192,7 +192,7 @@ Typical use cases:
 This function guarantees:
   - transactional rule execution
   - centralized error recovery
-  - consistent AST assembly
+  - consistent LST assembly
 */
 func SyntaxaParserParseWithContext[
 	TObservation cmp.Ordered,
@@ -203,7 +203,7 @@ func SyntaxaParserParseWithContext[
 ](
 	parser *SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
 	ctx *ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
-) (*SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind], *ParseTrace[TToken], error) {
+) (*SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind], *ParseTrace[TToken], error) {
 	return parseWithContext(parser, ctx)
 }
 
@@ -218,7 +218,7 @@ func parseWithContext[
 ](
 	parser *SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
 	ctx *ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
-) (*SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind], *ParseTrace[TToken], error) {
+) (*SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind], *ParseTrace[TToken], error) {
 	editor := ctx.Editor
 
 	if parser.freezeAfterParse {
@@ -263,7 +263,7 @@ func syntaxaParserExecuteRule[
 	startSnap := ctx.save()
 	startPos := startSnap.tokenIndex
 
-	startASTNodeCreationIdx := len(ctx.Editor.created)
+	startLSTNodeCreationIdx := len(ctx.Editor.created)
 
 	lexemePreRule := ctx.Token.Peek(0)
 	lexemePreRuleRaw := ctx.Token.PeekRaw(0)
@@ -302,7 +302,7 @@ func syntaxaParserExecuteRule[
 	// ============================================================
 	if !success {
 		ctx.restore(startSnap)
-		ctx.Editor.created = ctx.Editor.created[:startASTNodeCreationIdx]
+		ctx.Editor.created = ctx.Editor.created[:startLSTNodeCreationIdx]
 
 		if mode == ExecutionNormal {
 			if ruleResult.Kind == FailureError {
@@ -359,7 +359,7 @@ func syntaxaParserExecuteRule[
 		panic(err)
 	}
 
-	newNodes := ctx.Editor.created[startASTNodeCreationIdx:]
+	newNodes := ctx.Editor.created[startLSTNodeCreationIdx:]
 
 	if parser.postProcessor != nil {
 		for _, node := range newNodes {

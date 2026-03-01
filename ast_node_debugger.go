@@ -14,7 +14,7 @@ import (
 // FORMATTER (semantic layer)
 // ============================================================
 
-type ASTDebugFormatter[TObs cmp.Ordered, TToken, TTokenRole, TKind comparable] struct {
+type LSTDebugFormatter[TObs cmp.Ordered, TToken, TTokenRole, TKind comparable] struct {
 	/* REQUIRED */
 	FormatKind func(TKind) string
 
@@ -42,14 +42,14 @@ type ASTDebugFormatter[TObs cmp.Ordered, TToken, TTokenRole, TKind comparable] s
 	SlotPrefix string // e.g. "@", "#", "slot:"
 }
 
-func (f ASTDebugFormatter[TObs, TToken, TTokenRole, TKind]) validate() {
+func (f LSTDebugFormatter[TObs, TToken, TTokenRole, TKind]) validate() {
 	if f.FormatKind == nil {
-		panic("ASTDebugFormatter: FormatKind is required")
+		panic("LSTDebugFormatter: FormatKind is required")
 	}
 	// SlotPrefix is optional; empty is allowed.
 }
 
-func (f ASTDebugFormatter[TObs, TToken, TTokenRole, TKind]) applyColor(s string, colorFn func(string) string) string {
+func (f LSTDebugFormatter[TObs, TToken, TTokenRole, TKind]) applyColor(s string, colorFn func(string) string) string {
 	if colorFn == nil {
 		return s
 	}
@@ -60,22 +60,22 @@ func (f ASTDebugFormatter[TObs, TToken, TTokenRole, TKind]) applyColor(s string,
 // ENUMERATION (structural layer)
 // ============================================================
 
-type astDebugEdge[TObs cmp.Ordered, TToken, TTokenRole, TKind comparable] struct {
+type lstDebugEdge[TObs cmp.Ordered, TToken, TTokenRole, TKind comparable] struct {
 	isSlot bool
 	name   string
-	node   *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]
+	node   *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]
 }
 
-type ASTEdgeEnumerator[TObs cmp.Ordered, TToken, TTokenRole, TKind comparable] interface {
-	EdgesOf(node *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) []astDebugEdge[TObs, TToken, TTokenRole, TKind]
+type LSTEdgeEnumerator[TObs cmp.Ordered, TToken, TTokenRole, TKind comparable] interface {
+	EdgesOf(node *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) []lstDebugEdge[TObs, TToken, TTokenRole, TKind]
 }
 
 // Default behavior: children in their existing order, slots sorted by key.
-type defaultASTEdgeEnumerator[TObs cmp.Ordered, TToken, TTokenRole, TKind comparable] struct{}
+type defaultLSTEdgeEnumerator[TObs cmp.Ordered, TToken, TTokenRole, TKind comparable] struct{}
 
-func (e defaultASTEdgeEnumerator[TObs, TToken, TTokenRole, TKind]) EdgesOf(
-	cur *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind],
-) []astDebugEdge[TObs, TToken, TTokenRole, TKind] {
+func (e defaultLSTEdgeEnumerator[TObs, TToken, TTokenRole, TKind]) EdgesOf(
+	cur *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind],
+) []lstDebugEdge[TObs, TToken, TTokenRole, TKind] {
 
 	total := len(cur.children)
 	if cur.slots != nil {
@@ -85,18 +85,18 @@ func (e defaultASTEdgeEnumerator[TObs, TToken, TTokenRole, TKind]) EdgesOf(
 		return nil
 	}
 
-	out := make([]astDebugEdge[TObs, TToken, TTokenRole, TKind], 0, total)
+	out := make([]lstDebugEdge[TObs, TToken, TTokenRole, TKind], 0, total)
 
 	// Children (stable order as stored)
 	for _, ch := range cur.children {
-		out = append(out, astDebugEdge[TObs, TToken, TTokenRole, TKind]{node: ch})
+		out = append(out, lstDebugEdge[TObs, TToken, TTokenRole, TKind]{node: ch})
 	}
 
 	// Slots (sorted by name)
 	if cur.slots != nil {
-		pairs := make([]extensions.KeyValuePair[string, *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]], 0, len(cur.slots))
+		pairs := make([]extensions.KeyValuePair[string, *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]], 0, len(cur.slots))
 		for k, v := range cur.slots {
-			pairs = append(pairs, extensions.KeyValuePair[string, *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]]{Key: k, Value: v})
+			pairs = append(pairs, extensions.KeyValuePair[string, *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]]{Key: k, Value: v})
 		}
 		sort.Slice(pairs, func(i, j int) bool { return pairs[i].Key < pairs[j].Key })
 
@@ -104,7 +104,7 @@ func (e defaultASTEdgeEnumerator[TObs, TToken, TTokenRole, TKind]) EdgesOf(
 			if p.Value == nil {
 				continue
 			}
-			out = append(out, astDebugEdge[TObs, TToken, TTokenRole, TKind]{
+			out = append(out, lstDebugEdge[TObs, TToken, TTokenRole, TKind]{
 				isSlot: true,
 				name:   p.Key,
 				node:   p.Value,
@@ -119,9 +119,9 @@ func (e defaultASTEdgeEnumerator[TObs, TToken, TTokenRole, TKind]) EdgesOf(
 // RENDERER (layout + IO)
 // ============================================================
 
-type ASTDebugger[TObs cmp.Ordered, TToken, TTokenRole, TKind comparable] struct {
-	Formatter  ASTDebugFormatter[TObs, TToken, TTokenRole, TKind]
-	Enumerator ASTEdgeEnumerator[TObs, TToken, TTokenRole, TKind]
+type LSTDebugger[TObs cmp.Ordered, TToken, TTokenRole, TKind comparable] struct {
+	Formatter  LSTDebugFormatter[TObs, TToken, TTokenRole, TKind]
+	Enumerator LSTEdgeEnumerator[TObs, TToken, TTokenRole, TKind]
 
 	// Override if you want different glyphs later.
 	GlyphMid   string // "├─ "
@@ -130,15 +130,15 @@ type ASTDebugger[TObs cmp.Ordered, TToken, TTokenRole, TKind comparable] struct 
 	GlyphBlank string // "   "
 }
 
-func NewASTDebugger[TObs cmp.Ordered, TToken, TTokenRole, TKind comparable](
-	formatter ASTDebugFormatter[TObs, TToken, TTokenRole, TKind],
-) *ASTDebugger[TObs, TToken, TTokenRole, TKind] {
+func NewLSTDebugger[TObs cmp.Ordered, TToken, TTokenRole, TKind comparable](
+	formatter LSTDebugFormatter[TObs, TToken, TTokenRole, TKind],
+) *LSTDebugger[TObs, TToken, TTokenRole, TKind] {
 
 	formatter.validate()
 
-	return &ASTDebugger[TObs, TToken, TTokenRole, TKind]{
+	return &LSTDebugger[TObs, TToken, TTokenRole, TKind]{
 		Formatter:  formatter,
-		Enumerator: defaultASTEdgeEnumerator[TObs, TToken, TTokenRole, TKind]{},
+		Enumerator: defaultLSTEdgeEnumerator[TObs, TToken, TTokenRole, TKind]{},
 
 		GlyphMid:   "├─ ",
 		GlyphLast:  "└─ ",
@@ -147,9 +147,9 @@ func NewASTDebugger[TObs cmp.Ordered, TToken, TTokenRole, TKind comparable](
 	}
 }
 
-func (d *ASTDebugger[TObs, TToken, TTokenRole, TKind]) DumpTo(
+func (d *LSTDebugger[TObs, TToken, TTokenRole, TKind]) DumpTo(
 	w io.Writer,
-	root *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind],
+	root *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind],
 ) error {
 
 	if root == nil {
@@ -173,8 +173,8 @@ func (d *ASTDebugger[TObs, TToken, TTokenRole, TKind]) DumpTo(
 	return nil
 }
 
-func (d *ASTDebugger[TObs, TToken, TTokenRole, TKind]) DumpString(
-	root *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind],
+func (d *LSTDebugger[TObs, TToken, TTokenRole, TKind]) DumpString(
+	root *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind],
 ) string {
 	var b strings.Builder
 	_ = d.DumpTo(&b, root)
@@ -185,17 +185,17 @@ func (d *ASTDebugger[TObs, TToken, TTokenRole, TKind]) DumpString(
 // internal helpers
 // ------------------------------------------------------------
 
-func (d *ASTDebugger[TObs, TToken, TTokenRole, TKind]) edgesOf(
-	n *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind],
-) []astDebugEdge[TObs, TToken, TTokenRole, TKind] {
+func (d *LSTDebugger[TObs, TToken, TTokenRole, TKind]) edgesOf(
+	n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind],
+) []lstDebugEdge[TObs, TToken, TTokenRole, TKind] {
 	if d.Enumerator == nil {
 		// Safe fallback
-		return defaultASTEdgeEnumerator[TObs, TToken, TTokenRole, TKind]{}.EdgesOf(n)
+		return defaultLSTEdgeEnumerator[TObs, TToken, TTokenRole, TKind]{}.EdgesOf(n)
 	}
 	return d.Enumerator.EdgesOf(n)
 }
 
-func (d *ASTDebugger[TObs, TToken, TTokenRole, TKind]) writePrefix(
+func (d *LSTDebugger[TObs, TToken, TTokenRole, TKind]) writePrefix(
 	w io.Writer,
 	prefix string,
 	isLast bool,
@@ -212,7 +212,7 @@ func (d *ASTDebugger[TObs, TToken, TTokenRole, TKind]) writePrefix(
 	return err
 }
 
-func (d *ASTDebugger[TObs, TToken, TTokenRole, TKind]) nextPrefix(prefix string, isLast bool, depth int) string {
+func (d *LSTDebugger[TObs, TToken, TTokenRole, TKind]) nextPrefix(prefix string, isLast bool, depth int) string {
 	if depth == 0 {
 		return ""
 	}
@@ -222,9 +222,9 @@ func (d *ASTDebugger[TObs, TToken, TTokenRole, TKind]) nextPrefix(prefix string,
 	return prefix + d.GlyphVert
 }
 
-func (d *ASTDebugger[TObs, TToken, TTokenRole, TKind]) walkEdge(
+func (d *LSTDebugger[TObs, TToken, TTokenRole, TKind]) walkEdge(
 	w io.Writer,
-	e astDebugEdge[TObs, TToken, TTokenRole, TKind],
+	e lstDebugEdge[TObs, TToken, TTokenRole, TKind],
 	prefix string,
 	isLast bool,
 	depth int,
@@ -263,9 +263,9 @@ func (d *ASTDebugger[TObs, TToken, TTokenRole, TKind]) walkEdge(
 	return d.walkChildren(w, e.node, childPrefix, depth+1)
 }
 
-func (d *ASTDebugger[TObs, TToken, TTokenRole, TKind]) walkChildren(
+func (d *LSTDebugger[TObs, TToken, TTokenRole, TKind]) walkChildren(
 	w io.Writer,
-	parent *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind],
+	parent *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind],
 	prefix string,
 	depth int,
 ) error {
@@ -280,9 +280,9 @@ func (d *ASTDebugger[TObs, TToken, TTokenRole, TKind]) walkChildren(
 	return nil
 }
 
-func (d *ASTDebugger[TObs, TToken, TTokenRole, TKind]) writeNodeLine(
+func (d *LSTDebugger[TObs, TToken, TTokenRole, TKind]) writeNodeLine(
 	w io.Writer,
-	node *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind],
+	node *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind],
 ) error {
 
 	f := d.Formatter
@@ -378,12 +378,12 @@ func (d *ASTDebugger[TObs, TToken, TTokenRole, TKind]) writeNodeLine(
 }
 
 // ============================================================
-// AST API convenience (thin wrapper)
+// LST API convenience (thin wrapper)
 // ============================================================
 
-func (n *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) DebugDump(
-	formatter ASTDebugFormatter[TObs, TToken, TTokenRole, TKind],
+func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) DebugDump(
+	formatter LSTDebugFormatter[TObs, TToken, TTokenRole, TKind],
 ) string {
-	dbg := NewASTDebugger[TObs, TToken, TTokenRole, TKind](formatter)
+	dbg := NewLSTDebugger[TObs, TToken, TTokenRole, TKind](formatter)
 	return dbg.DumpString(n)
 }

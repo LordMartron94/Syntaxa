@@ -257,8 +257,8 @@ type ExecRuleContext[
 	/* ExecuteRule routes a rule through the parser for invariant detection. */
 	ExecuteRule func(rule ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind], mode RuleExecutionMode) RuleResult[TObservation, TToken, TTokenRole, TNodeKind]
 
-	// Specific AST/State helpers
-	Editor *ASTEditor[TObservation, TToken, TTokenRole, TNodeKind]
+	// Specific LST/State helpers
+	Editor *LSTEditor[TObservation, TToken, TTokenRole, TNodeKind]
 
 	/* SetLexerState alters the lexer state for languages with multiple lexer states. */
 	SetLexerState func(TLexerState)
@@ -267,7 +267,7 @@ type ExecRuleContext[
 	Finalization *FinalizationCtx[TObservation, TToken, TTokenRole, TNodeKind]
 
 	lastLexingError func() *lexarch.LexingError[TObservation, TToken]
-	createErrorNode func(string) *SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind]
+	createErrorNode func(string) *SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind]
 
 	trace *ParseTrace[TToken]
 
@@ -288,16 +288,16 @@ func (s *SelectRuleContext[TObservation, TToken, TTokenRole]) PeekRaw(n int) lex
 }
 
 type FinalizationCtx[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind comparable] struct {
-	editor *ASTEditor[TObservation, TToken, TTokenRole, TNodeKind]
+	editor *LSTEditor[TObservation, TToken, TTokenRole, TNodeKind]
 }
 
 /* SetAttribute sets a named attribute for the node, overriding any attribute with the same name if existent.*/
-func (f *FinalizationCtx[TObservation, TToken, TTokenRole, TNodeKind]) SetAttribute(node *SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind], attributeName string, value any) {
+func (f *FinalizationCtx[TObservation, TToken, TTokenRole, TNodeKind]) SetAttribute(node *SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind], attributeName string, value any) {
 	f.editor.SetAttribute(node, attributeName, value)
 }
 
 /* DeleteAttribute deletes a named attribute for the node.*/
-func (f *FinalizationCtx[TObservation, TToken, TTokenRole, TNodeKind]) DeleteAttribute(node *SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind], attributeName string) {
+func (f *FinalizationCtx[TObservation, TToken, TTokenRole, TNodeKind]) DeleteAttribute(node *SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind], attributeName string) {
 	f.editor.DeleteAttribute(node, attributeName)
 }
 
@@ -462,8 +462,8 @@ func buildBaseContext[
 	rCore.setDefaultRecovery(parser.eofToken)
 	eCore := &errorCore[TObservation, TToken, TTokenRole]{sink: errors, ts: tStream}
 
-	editor := &ASTEditor[TObservation, TToken, TTokenRole, TNodeKind]{
-		created: make([]*SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind], 0),
+	editor := &LSTEditor[TObservation, TToken, TTokenRole, TNodeKind]{
+		created: make([]*SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind], 0),
 	}
 
 	selectCtx := &SelectRuleContext[TObservation, TToken, TTokenRole]{
@@ -481,7 +481,7 @@ func buildBaseContext[
 		Skip:     sCore,
 		Error:    eCore,
 		Editor:   editor,
-		createErrorNode: func(message string) *SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind] {
+		createErrorNode: func(message string) *SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind] {
 			n := editor.NewNode(parser.errorNodeKind)
 			editor.SetAttribute(n, "error", message)
 			return n

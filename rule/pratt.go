@@ -11,7 +11,7 @@ import (
 PrattPrefixOp describes a prefix operator for Pratt expression parsing.
 
 RightBP is the binding power used when parsing the operand to the right.
-NodeKind is the AST node kind for the prefix operator node (one child: the operand).
+NodeKind is the LST node kind for the prefix operator node (one child: the operand).
 */
 type PrattPrefixOp[TToken, TNodeKind comparable] struct {
 	Token   TToken
@@ -165,7 +165,6 @@ func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 		}
 		nodeKind := inf.nodeKind
 		opNode := ctx.Editor.NewNode(nodeKind)
-		ctx.Editor.AddToken(opNode, opLex)
 		ctx.Editor.AttachChild(opNode, left)
 		ctx.Editor.AttachChild(opNode, right)
 		left = opNode
@@ -193,7 +192,6 @@ func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 		}
 		nodeKind := info.nodeKind
 		opNode := ctx.Editor.NewNode(nodeKind)
-		ctx.Editor.AddToken(opNode, opLex)
 		ctx.Editor.AttachChild(opNode, operand)
 		return p.sharedCore.buildSuccessRuleResult(opNode)
 	}

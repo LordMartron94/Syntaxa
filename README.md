@@ -1,16 +1,18 @@
 # Syntaxa
 
-Generic, grammar-agnostic parsing engine for building ASTs from token streams with transactional execution, error recovery, and grammar introspection.
+Generic, grammar-agnostic parsing engine for building lossless syntax trees (LSTs) from token streams with transactional execution, error recovery, and grammar introspection.
 
 ## Overview
 
-Syntaxa provides a parsing runtime that executes **parser rules** over a token stream and builds an **abstract syntax tree (AST)**. It does not impose a specific parsing paradigm (LL, LR, PEG, etc.); instead, you supply rules built from a small **grammar IR** (Token, Concat, Choice, Repeat, Optional, Nest) and the engine handles transactional execution, rollback on failure, centralized error reporting, and recovery at configurable sync points.
+Syntaxa provides a parsing runtime that executes **parser rules** over a token stream and builds a **lossless syntax tree (LST)**. It does not impose a specific parsing paradigm (LL, LR, PEG, etc.); instead, you supply rules built from a small **grammar IR** (Token, Concat, Choice, Repeat, Optional, Nest) and the engine handles transactional execution, rollback on failure, centralized error reporting, and recovery at configurable sync points.
+
+**LST (lossless syntax tree)**: The tree shape is driven by semantic node creation; tokens and spans are preserved for tooling and diffing. The tree is grammar-informed but must not be "grammar-shaped"—no nodes that exist only due to combinators (use transparent rules for structural grouping). See **Node Creation Policy** below.
 
 Key features:
 
-- **Generic type support**: Observation type, token type, token role, lexer state, and AST node kind are all type parameters.
+- **Generic type support**: Observation type, token type, token role, lexer state, and LST node kind are all type parameters.
 - **Rule factory**: The `syntaxa/rule` package provides composable builders (Expect, Sequence, Block, Optional, NOrMore, Nest, Root, List) so most grammars can be expressed without touching the low-level IR.
-- **Transactional execution**: Rule failure rolls back token consumption and AST mutations; only committed successes affect state.
+- **Transactional execution**: Rule failure rolls back token consumption and LST mutations; only committed successes affect state.
 - **Execution modes**: Normal (committed, report errors) vs Probe (speculative, no diagnostics) for optionals and choice.
 - **Recovery**: Rules declare recovery tokens; on FailureError the engine consumes until a sync token (e.g. `}`, `)`) before continuing.
 - **Grammar package**: Root grammar can be turned into a `GrammarPackage` with nullable/first/follow analysis for tooling and diagnostics.
@@ -19,16 +21,16 @@ Key features:
 ## Design Philosophy
 
 - **Data and execution separate**: Rules are values; the parser is a function that takes a rule and a context. No methods on rules for core logic (except where required by interfaces).
-- **Core vs factory**: The `syntaxa` package holds the engine, grammar IR, AST, and context types. The `syntaxa/rule` package is a preset factory for common patterns; advanced users can build rules manually with `ParserRuleCreate` and the grammar IR.
+- **Core vs factory**: The `syntaxa` package holds the engine, grammar IR, LST, and context types. The `syntaxa/rule` package is a preset factory for common patterns; advanced users can build rules manually with `ParserRuleCreate` and the grammar IR.
 - **Explicit contracts**: Each rule has a `RuleContract` (MustConsume, MustReturnNode). The engine validates these on success and panics on violation.
 - **Recovery as sync sets**: Recovery is defined per rule as a set of tokens; the engine does not interpret grammar structure for recovery beyond using those sets.
 
 ## Performance Characteristics
 
 - **Hot path**: Rule execution is function calls and slice/index operations; no reflection. Token stream is either a slice index (slice context) or lexer calls (session/streaming).
-- **Rollback**: Implemented by snapshot/restore of token position and trimming the AST editor’s created list; no per-node copy.
+- **Rollback**: Implemented by snapshot/restore of token position and trimming the LST editor’s created list; no per-node copy.
 - **Grammar analysis**: Nullable/first/follow are computed once when building a `GrammarPackage`; fixed-point iteration over the grammar tree.
-- **Allocations**: AST nodes and rule results are allocated during parsing; rule construction (factory or manual) allocates grammar nodes and closures.
+- **Allocations**: LST nodes and rule results are allocated during parsing; rule construction (factory or manual) allocates grammar nodes and closures.
 
 ## Integration
 
@@ -51,7 +53,7 @@ syntaxa
 - **Rules**: `ParserRule` (identity, executor, contract, recovery tokens, grammar). Created with `ParserRuleCreate`. Executed by the engine; never called directly by the user.
 - **Context**: `ExecRuleContext` exposes `Token` (stream), `Recovery`, `Skip`, `Error`, `ExecuteRule`, `Editor`, `SetLexerState`, `Select`, `Finalization`. Built via `BuildExecRuleContextFromSlice`, `BuildExecRuleContextFromLexerSession`, or `BuildExecRuleContextFromStreamingSession`.
 - **Parser**: `SyntaxaParser` holds the program rule, post-processor, EOF token, root/error node kinds, and options. `SyntaxaParserCreate` builds it; `SyntaxaParserParseWithContext(parser, ctx)` runs the parse.
-- **AST**: `SyntaxaASTNode` (kind, parent, children, tokens, attributes, span). `ASTEditor` is the only way to create/mutate nodes during parsing (`NewNode`, `NewTransientNode`, `AttachChild`, `Detach`, etc.).
+- **LST**: `SyntaxaLSTNode` (kind, parent, children, tokens, attributes, span). `LSTEditor` is the only way to create/mutate nodes during parsing (`NewNode`, `NewTransientNode`, `AttachChild`, `Detach`, etc.).
 - **Grammar package**: `Grammar.ProducePackage(name, version)` returns `GrammarPackage` (entry rule, rules map, tokens, nests, analysis). Analysis contains nullable, first, and follow sets keyed by `NodeKey` (from `NodePath`).
 
 ### `syntaxa/rule` (rule factory)
@@ -149,7 +151,7 @@ rule := syntaxa.ParserRuleCreate(identity, exec, syntaxa.RuleContract{MustConsum
 
 ## Use Cases
 
-- **Compilers and interpreters**: Parse source into an AST with clear node kinds and source spans.
+- **Compilers and interpreters**: Parse source into an LST with clear node kinds and source spans.
 - **DSLs and config parsers**: Use the rule factory for lists, optionals, and nesting without writing recursive-descent by hand.
 - **Editors and IDEs**: Integrate with lexarch for streaming or slice-based input; use grammar package for nullable/first/follow in tooling.
 - **Structured data parsers**: Combine token expectations and sequences for formats that are not fully context-free (e.g. indentation-sensitive) by driving the parser from a custom context.
@@ -159,7 +161,7 @@ rule := syntaxa.ParserRuleCreate(identity, exec, syntaxa.RuleContract{MustConsum
 1. **Rule contracts**: If a rule declares `MustConsume` or `MustReturnNode`, the engine panics on success when the contract is violated. Ensure your rule bodies match the contract you pass to `ParserRuleCreate` or the factory.
 2. **Context lifetime**: Do not use an `ExecRuleContext` after the parse that built it; the editor and token stream are tied to that parse.
 3. **Recovery tokens**: Recovery tokens should be tokens that appear at structural boundaries (e.g. closing delimiter). The engine consumes until it sees one of them; ensure they are correct for your grammar.
-4. **Lexeme lifetime**: With slice-based context, `Lexeme.Raw` is a slice into the caller’s buffer; keep that buffer valid for the duration of the parse and any AST use that touches token text.
+4. **Lexeme lifetime**: With slice-based context, `Lexeme.Raw` is a slice into the caller’s buffer; keep that buffer valid for the duration of the parse and any LST use that touches token text.
 5. **Skip roles**: If you use `SetDefaultSkips`, skipped tokens are not visible to `Peek`/`Consume` in the logical stream; they are still consumed internally. Use for whitespace/comments.
 6. **Probe vs normal**: Rules run in ExecutionProbe do not report errors and do not run recovery; use for optional or choice branches. First successful branch in a sequence commits; later failures are syntax errors (ExecutionNormal).
 
@@ -168,3 +170,9 @@ rule := syntaxa.ParserRuleCreate(identity, exec, syntaxa.RuleContract{MustConsum
 - **Failure kinds**: `FailureNoMatch` means the production did not match (e.g. wrong token); no diagnostic is required. `FailureError` means a syntax error was detected; the engine may run recovery and then continue.
 - **Fragments**: A rule can return a result with `IsFragment: true`. The factory uses this for `TransparentNOrMore` / `TransparentZeroOrMore` so that the caller (e.g. Sequence) unpacks the temporary container’s children instead of attaching the container itself.
 - **Context boundary**: Grammar nodes created by `Rule.Root` (and similar) are marked as context boundaries so that `ProducePackage` collects them as named rules and analysis uses them for first/follow context.
+
+## Node Creation Policy
+
+- **Every non-transparent rule that creates a node must correspond to a domain/semantic construct.** Do not create nodes for grammar glue (e.g. a wrapper that exists only because of Nest + Sequence).
+- Use **TransparentSequence**, **TransparentNest**, **TransparentNOrMore** when the grouping is structural only (no extra semantic node).
+- Prune only when the node adds no semantic distinction, has exactly one meaningful child, or exists only due to Sequence/Nest layering. Do not over-prune: preserve anchors for incremental diffing and transforms.

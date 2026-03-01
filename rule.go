@@ -41,7 +41,7 @@ func (f FailureKind) String() string {
 
 /* RuleResult encapsulates the return value of a parser rule. */
 type RuleResult[TObservation cmp.Ordered, TToken, TTokenRole, TKind comparable] struct {
-	Node      *SyntaxaASTNode[TObservation, TToken, TTokenRole, TKind]
+	Node      *SyntaxaLSTNode[TObservation, TToken, TTokenRole, TKind]
 	Succeeded bool
 
 	Kind FailureKind

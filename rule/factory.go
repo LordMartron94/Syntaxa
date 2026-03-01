@@ -21,7 +21,7 @@ type Rule[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind c
 /*
 Result is an alias for syntaxa.RuleResult.
 
-It is the return type of rule execution: success/failure, optional AST node, and failure kind.
+It is the return type of rule execution: success/failure, optional LST node, and failure kind.
 */
 type Result[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind comparable] = syntaxa.RuleResult[TObservation, TToken, TTokenRole, TNodeKind]
 
@@ -41,16 +41,16 @@ type tokenEndpoint[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TN
 /*
 Expect matches a single token at the current position.
 
-On success: consumes the token, creates an AST node of outputNodeKind, and attaches the lexeme as the node's token.
+On success: consumes the token, creates an LST node of outputNodeKind, and attaches the lexeme as the node's token.
 On failure: reports a syntax error and returns FailureError (no rollback of other state beyond the engine's snapshot).
 
 Use cases:
 - Matching keywords, operators, or punctuation.
-- Building AST nodes for terminals when the node kind is significant.
+- Building LST nodes for terminals when the node kind is significant.
 
 Prerequisites:
 - grammarID identifies this production for error messages and grammar IR.
-- outputNodeKind is the AST node kind to create on success.
+- outputNodeKind is the LST node kind to create on success.
 - token is the exact token value to match.
 
 Edge cases:
@@ -65,13 +65,13 @@ func (t *tokenEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 }
 
 /*
-ExpectVirtual matches a single token without creating an AST node.
+ExpectVirtual matches a single token without creating an LST node.
 
 On success: consumes the token and returns success with a nil node.
 On failure: reports a syntax error and returns FailureError.
 
 Use cases:
-- Skipping punctuation or keywords that do not need a dedicated AST node.
+- Skipping punctuation or keywords that do not need a dedicated LST node.
 - Matching structure (e.g. closing delimiter) where only the presence matters.
 
 Prerequisites:
@@ -92,16 +92,16 @@ func (t *tokenEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 /*
 ExpectOneOf matches one of several tokens at the current position.
 
-On success: consumes the token, creates an AST node of outputNodeKind, and attaches the lexeme.
+On success: consumes the token, creates an LST node of outputNodeKind, and attaches the lexeme.
 On failure: reports a syntax error listing the expected tokens.
 
 Use cases:
-- Matching a set of keywords or operators that share the same AST node kind.
+- Matching a set of keywords or operators that share the same LST node kind.
 - Union of terminals without building a full choice of sub-rules.
 
 Prerequisites:
 - grammarID identifies this production.
-- outputNodeKind is the AST node kind to create on success.
+- outputNodeKind is the LST node kind to create on success.
 - tokens must contain at least one token.
 
 Edge cases:
@@ -117,7 +117,7 @@ func (t *tokenEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 }
 
 /*
-ExpectPair expects two tokens in sequence and creates a single AST node with both lexemes attached.
+ExpectPair expects two tokens in sequence and creates a single LST node with both lexemes attached.
 
 On success: consumes firstToken then secondToken, creates a node of outputNodeKind, and attaches
 both lexemes to that node. On failure: first-token mismatch yields FailureNoMatch; second-token
@@ -125,11 +125,11 @@ mismatch after consuming the first yields a diagnostic and FailureError.
 
 Use cases:
 - Variable reference: $ followed by identifier (one node with two tokens).
-- Any two-token construct that should be represented as one AST node.
+- Any two-token construct that should be represented as one LST node.
 
 Prerequisites:
 - grammarID identifies this production.
-- outputNodeKind is the AST node kind for the single node.
+- outputNodeKind is the LST node kind for the single node.
 - firstToken and secondToken are the exact token values in order.
 */
 func (t *tokenEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) ExpectPair(
@@ -350,7 +350,7 @@ When this result is attached to a parent via the editor, the fragment is unpacke
 children are attached directly to that parent.
 
 Use cases:
-- Grouping rules logically in the grammar without creating "middle-man" nodes in the AST.
+- Grouping rules logically in the grammar without creating "middle-man" nodes in the LST.
 - Breaking down complex productions into smaller, reusable sequences that shouldn't appear in the final tree.
 
 Prerequisites:
@@ -468,7 +468,7 @@ listEndToken. Enforces trailing separator mode and reports diagnostics on mismat
 func (t *tokenEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) runListAutomaton(
 	ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	name syntaxa.RuleLabel,
-	parentNode *syntaxa.SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind],
+	parentNode *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind],
 	elementToken, separatorToken, listEndToken TToken,
 	elementNodeKind TNodeKind,
 	mode TrailingSeparatorMode,
@@ -550,7 +550,7 @@ otherwise reports an error and returns failure.
 func (t *tokenEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) handleEmptyList(
 	ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	name syntaxa.RuleLabel,
-	node *syntaxa.SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind],
+	node *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind],
 	peek lexarch.Lexeme[TObservation, TToken, TTokenRole],
 	allowEmpty bool,
 ) Result[TObservation, TToken, TTokenRole, TNodeKind] {
@@ -563,11 +563,11 @@ func (t *tokenEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 }
 
 /*
-addChildElement creates a new AST node of kind, attaches the lexeme as its token, and appends it as a child of parent.
+addChildElement creates a new LST node of kind, attaches the lexeme as its token, and appends it as a child of parent.
 */
 func (t *tokenEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) addChildElement(
 	ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
-	parent *syntaxa.SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind],
+	parent *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind],
 	kind TNodeKind,
 	lexeme lexarch.Lexeme[TObservation, TToken, TTokenRole],
 ) {
@@ -751,7 +751,7 @@ Use cases:
 
 Prerequisites:
 - grammarID identifies this production.
-- wrapNodeKind is the AST node kind for the wrapper when the suffix is present.
+- wrapNodeKind is the LST node kind for the wrapper when the suffix is present.
 - rule must be a valid parser rule that returns a node on success.
 - suffixToken is the token that triggers wrapping when present after rule success.
 */
@@ -853,7 +853,7 @@ Use cases:
 
 Prerequisites:
 - grammarID identifies this production.
-- nodeKind is the AST kind for the root node.
+- nodeKind is the LST kind for the root node.
 - mustConsume: if true, success requires at least one token consumed across the rules.
 
 Edge cases:
@@ -922,7 +922,7 @@ Use cases:
 
 Prerequisites:
 - grammarID identifies this production.
-- nodeKind is the AST kind for the container node.
+- nodeKind is the LST kind for the container node.
 - rules must not be empty (empty sequence is not useful).
 
 Edge cases:
@@ -1104,7 +1104,7 @@ Fragment results are unpacked: their children are detached and attached directly
 */
 func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) attachResultsToNode(
 	ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
-	parent *syntaxa.SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind],
+	parent *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind],
 	results []Result[TObservation, TToken, TTokenRole, TNodeKind],
 ) {
 	for _, result := range results {
@@ -1121,7 +1121,7 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 	ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	rule Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	min int,
-	container *syntaxa.SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind],
+	container *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind],
 ) (count int, errResult Result[TObservation, TToken, TTokenRole, TNodeKind], hasError bool) {
 	for {
 		before := ctx.Token.PeekRaw(0)
@@ -1156,8 +1156,8 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 	grammarID syntaxa.GrammarID,
 	min int,
 	rule Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
-	makeContainer func(ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) *syntaxa.SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind],
-	onSuccess func(container *syntaxa.SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind]) Result[TObservation, TToken, TTokenRole, TNodeKind],
+	makeContainer func(ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind],
+	onSuccess func(container *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind]) Result[TObservation, TToken, TTokenRole, TNodeKind],
 ) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
 	ensureMinNonNegative(min, ruleName)
 
@@ -1203,7 +1203,7 @@ Use cases:
 
 Prerequisites:
 - grammarID identifies this production.
-- nodeKind is the AST kind for the container node.
+- nodeKind is the LST kind for the container node.
 - min must be >= 0 (panics otherwise).
 - rule must be a valid parser rule.
 
@@ -1222,10 +1222,10 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 		grammarID,
 		min,
 		rule,
-		func(ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) *syntaxa.SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind] {
+		func(ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind] {
 			return ctx.Editor.NewNode(nodeKind)
 		},
-		func(container *syntaxa.SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind]) Result[TObservation, TToken, TTokenRole, TNodeKind] {
+		func(container *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind]) Result[TObservation, TToken, TTokenRole, TNodeKind] {
 			return r.sharedCore.buildSuccessRuleResult(container)
 		},
 	)
@@ -1268,10 +1268,10 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 		grammarID,
 		min,
 		rule,
-		func(ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) *syntaxa.SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind] {
+		func(ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind] {
 			return ctx.Editor.NewTransientNode(zeroKind)
 		},
-		func(container *syntaxa.SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind]) Result[TObservation, TToken, TTokenRole, TNodeKind] {
+		func(container *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind]) Result[TObservation, TToken, TTokenRole, TNodeKind] {
 			return r.sharedCore.buildFragmentRuleResult(container)
 		},
 	)
@@ -1296,11 +1296,11 @@ Semantics:
 
 Use cases:
 - Parenthesized expressions, braced blocks, or any balanced delimiter pair.
-- Grouping without changing the inner rule's AST shape beyond wrapping.
+- Grouping without changing the inner rule's LST shape beyond wrapping.
 
 Prerequisites:
 - grammarID identifies this production.
-- nodeKind is the AST kind for the wrapper node.
+- nodeKind is the LST kind for the wrapper node.
 - openToken and closeToken are the delimiter pair.
 - innerRule is the rule for the content between the delimiters.
 
@@ -1506,7 +1506,7 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 Prefixed matches a specific prefix token, discards it, and returns the result of the inner rule.
 
 Use cases:
-- Matching virtual prefixes where the AST node is entirely defined by the inner rule.
+- Matching virtual prefixes where the LST node is entirely defined by the inner rule.
 */
 func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) Prefixed(
 	grammarID syntaxa.GrammarID,
@@ -1773,7 +1773,7 @@ func (s *sharedCore[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) f
 }
 
 func (s *sharedCore[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) buildSuccessRuleResult(
-	node *syntaxa.SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind],
+	node *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind],
 ) Result[TObservation, TToken, TTokenRole, TNodeKind] {
 	return Result[TObservation, TToken, TTokenRole, TNodeKind]{
 		Node:      node,
@@ -1782,7 +1782,7 @@ func (s *sharedCore[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) b
 }
 
 func (s *sharedCore[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) buildFailureRuleResult(
-	node *syntaxa.SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind],
+	node *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind],
 	failureKind syntaxa.FailureKind,
 ) Result[TObservation, TToken, TTokenRole, TNodeKind] {
 	return Result[TObservation, TToken, TTokenRole, TNodeKind]{
@@ -1793,7 +1793,7 @@ func (s *sharedCore[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) b
 }
 
 func (s *sharedCore[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) buildFragmentRuleResult(
-	node *syntaxa.SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind],
+	node *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind],
 ) Result[TObservation, TToken, TTokenRole, TNodeKind] {
 	return Result[TObservation, TToken, TTokenRole, TNodeKind]{
 		Node:       node,

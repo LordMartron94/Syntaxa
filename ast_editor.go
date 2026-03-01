@@ -7,33 +7,33 @@ import (
 )
 
 /*
-ASTEditor is the exclusive authority for creating and mutating
-AST structure.
+LSTEditor is the exclusive authority for creating and mutating
+LST (lossless syntax tree) structure.
 
 All topology changes are invariant-checked and automatically
 propagate span and incremental revision updates.
 
-Once frozen, the AST becomes immutable.
+Once frozen, the LST becomes immutable.
 */
-type ASTEditor[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind comparable] struct {
+type LSTEditor[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind comparable] struct {
 	nextID uint64
-	root   *SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind]
+	root   *SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind]
 	frozen bool
 
-	created []*SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind]
+	created []*SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind]
 
 	inUse atomic.Bool
 }
 
-func (e *ASTEditor[TObservation, TToken, TTokenRole, TNodeKind]) begin() {
+func (e *LSTEditor[TObservation, TToken, TTokenRole, TNodeKind]) begin() {
 	if e.inUse.Load() {
-		panic("ASTEditor reused concurrently or across parses")
+		panic("LSTEditor reused concurrently or across parses")
 	}
 
 	e.inUse.Store(true)
 }
 
-func (e *ASTEditor[TObservation, TToken, TTokenRole, TNodeKind]) end() {
+func (e *LSTEditor[TObservation, TToken, TTokenRole, TNodeKind]) end() {
 	e.root = nil
 	e.nextID = 0
 	e.frozen = false
@@ -41,19 +41,19 @@ func (e *ASTEditor[TObservation, TToken, TTokenRole, TNodeKind]) end() {
 	e.inUse.Store(false)
 }
 
-func (e *ASTEditor[TObservation, TToken, TTokenRole, TNodeKind]) setRoot(root *SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind]) {
+func (e *LSTEditor[TObservation, TToken, TTokenRole, TNodeKind]) setRoot(root *SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind]) {
 	e.root = root
 }
 
 /*
-NewNode creates a detached AST node of the specified kind.
+NewNode creates a detached LST node of the specified kind.
 */
-func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) NewNode(kind TKind) *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind] {
+func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) NewNode(kind TKind) *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind] {
 	e.ensureMutable()
 
 	e.nextID++
 
-	node := &SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]{
+	node := &SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]{
 		id:   e.nextID,
 		kind: kind,
 	}
@@ -70,15 +70,15 @@ It does not receive a unique ID and is not added to the editor's created ledger.
 Use this strictly for temporary container nodes (Fragments) that will be unpacked
 and discarded before the parsing session ends.
 */
-func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) NewTransientNode(kind TKind) *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind] {
+func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) NewTransientNode(kind TKind) *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind] {
 	e.ensureMutable()
 
-	return &SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]{
+	return &SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]{
 		kind: kind,
 	}
 }
 
-func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) AttachChild(parent, child *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) {
+func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) AttachChild(parent, child *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) {
 	e.ensureMutable()
 
 	if child == nil {
@@ -86,12 +86,12 @@ func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) AttachChild(parent, child *
 	}
 
 	if child.parent != nil {
-		panic("AST invariant: node already has parent")
+		panic("LST invariant: node already has parent")
 	}
 
 	for p := parent; p != nil; p = p.parent {
 		if p == child {
-			panic("AST invariant: cycle detected")
+			panic("LST invariant: cycle detected")
 		}
 	}
 
@@ -101,8 +101,8 @@ func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) AttachChild(parent, child *
 	e.markDirtyCascade(parent)
 }
 
-func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) AttachResult(
-	parent *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind],
+func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) AttachResult(
+	parent *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind],
 	result RuleResult[TObs, TToken, TTokenRole, TKind],
 ) {
 	if result.Node == nil {
@@ -120,15 +120,15 @@ func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) AttachResult(
 	}
 }
 
-func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) SetSlot(parent *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind], name string, child *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) {
+func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) SetSlot(parent *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind], name string, child *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) {
 	e.ensureMutable()
 
 	if child.parent != nil {
-		panic("AST invariant: node already has parent")
+		panic("LST invariant: node already has parent")
 	}
 
 	if parent.slots == nil {
-		parent.slots = make(map[string]*SyntaxaASTNode[TObs, TToken, TTokenRole, TKind])
+		parent.slots = make(map[string]*SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind])
 	}
 
 	if old := parent.slots[name]; old != nil {
@@ -141,7 +141,7 @@ func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) SetSlot(parent *SyntaxaASTN
 	e.markDirtyCascade(parent)
 }
 
-func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) Replace(oldNode, newNode *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) {
+func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) Replace(oldNode, newNode *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) {
 	e.ensureMutable()
 
 	parent := oldNode.parent
@@ -176,7 +176,7 @@ func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) Replace(oldNode, newNode *S
 	panic("node not owned by parent")
 }
 
-func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) Detach(node *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) {
+func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) Detach(node *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) {
 	e.ensureMutable()
 
 	parent := node.parent
@@ -203,7 +203,7 @@ func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) Detach(node *SyntaxaASTNode
 	}
 }
 
-func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) SetAttribute(node *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind], key string, value any) {
+func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) SetAttribute(node *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind], key string, value any) {
 	e.ensureMutable()
 
 	if node.attributes == nil {
@@ -213,7 +213,7 @@ func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) SetAttribute(node *SyntaxaA
 	e.markDirtyCascade(node)
 }
 
-func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) DeleteAttribute(node *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind], key string) {
+func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) DeleteAttribute(node *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind], key string) {
 	e.ensureMutable()
 
 	if node.attributes == nil {
@@ -223,8 +223,8 @@ func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) DeleteAttribute(node *Synta
 	e.markDirtyCascade(node)
 }
 
-func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) AddToken(
-	node *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind],
+func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) AddToken(
+	node *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind],
 	tok lexarch.Lexeme[TObs, TToken, TTokenRole],
 ) {
 	e.ensureMutable()
@@ -232,7 +232,7 @@ func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) AddToken(
 	e.markDirtyCascade(node)
 }
 
-func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) SetTokens(node *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind], toks []lexarch.Lexeme[TObs, TToken, TTokenRole]) {
+func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) SetTokens(node *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind], toks []lexarch.Lexeme[TObs, TToken, TTokenRole]) {
 	e.ensureMutable()
 
 	node.tokens = make([]lexarch.Lexeme[TObs, TToken, TTokenRole], len(toks))
@@ -241,8 +241,8 @@ func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) SetTokens(node *SyntaxaASTN
 	e.markDirtyCascade(node)
 }
 
-func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) SetSpan(
-	node *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind],
+func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) SetSpan(
+	node *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind],
 	start, end int,
 ) {
 	e.ensureMutable()
@@ -253,8 +253,8 @@ func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) SetSpan(
 	e.markDirtyCascade(node)
 }
 
-func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) SetLineSpan(
-	node *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind],
+func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) SetLineSpan(
+	node *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind],
 	sl, sc, el, ec int,
 ) {
 	e.ensureMutable()
@@ -267,7 +267,7 @@ func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) SetLineSpan(
 	e.markDirtyCascade(node)
 }
 
-func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) markDirtyCascade(n *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) {
+func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) markDirtyCascade(n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) {
 	for cur := n; cur != nil; cur = cur.parent {
 		cur.revision++
 		cur.spanValid = false
@@ -311,7 +311,7 @@ func merge(base span, next span, isEmpty bool) span {
 }
 
 func spanFromNode[TObs cmp.Ordered, TToken, TTokenRole, TKind comparable](
-	n *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind],
+	n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind],
 ) span {
 	return span{
 		start: n.start,
@@ -336,8 +336,8 @@ func spanFromToken[TObs cmp.Ordered, TToken, TTokenRole comparable](
 	}
 }
 
-func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) ensureSpanValid(
-	n *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind],
+func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) ensureSpanValid(
+	n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind],
 ) {
 	if n.spanValid {
 		return
@@ -379,7 +379,7 @@ func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) ensureSpanValid(
 }
 
 /* ComputeSpans should be called to ensure all spans inside the tree are valid. */
-func (e *ASTEditor[TObservation, TToken, TTokenRole, TNodeKind]) ComputeSpans() {
+func (e *LSTEditor[TObservation, TToken, TTokenRole, TNodeKind]) ComputeSpans() {
 	if e.root == nil {
 		panic("editor does not have root set yet")
 	}
@@ -388,7 +388,7 @@ func (e *ASTEditor[TObservation, TToken, TTokenRole, TNodeKind]) ComputeSpans() 
 }
 
 /* Freeze calls editor.end because this is the only place the editor session actually ends. */
-func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) Freeze() {
+func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) Freeze() {
 	if e.root != nil {
 		e.ensureSpanValid(e.root)
 	}
@@ -397,8 +397,8 @@ func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) Freeze() {
 	e.end()
 }
 
-func (e *ASTEditor[TObs, TToken, TTokenRole, TKind]) ensureMutable() {
+func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) ensureMutable() {
 	if e.frozen {
-		panic("AST is frozen and immutable")
+		panic("LST is frozen and immutable")
 	}
 }
