@@ -2,6 +2,7 @@ package syntaxa
 
 import (
 	"cmp"
+	"fmt"
 	"lexarch"
 	"strings"
 	"structarch"
@@ -223,6 +224,10 @@ func (n *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind]) Walk(
 		node *SyntaxaASTNode[TObs, TToken, TTokenRole, TKind],
 	) (skipSubtree, stopWalk bool),
 ) error {
+	if n == nil {
+		return fmt.Errorf("Walk called on a nil node")
+	}
+
 	return structarch.StructArchWalk(
 		structarch.WalkConfig[
 			*SyntaxaASTNode[TObs, TToken, TTokenRole, TKind],

@@ -788,15 +788,15 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 
 		results := make([]Result[TObservation, TToken, TTokenRole, TNodeKind], len(rules))
 
+		startMarker := ctx.Token.PeekRaw(0).TokenNumber
+
 		for i, rule := range rules {
 			result := ctx.ExecuteRule(rule, syntaxa.ExecutionNormal)
 
 			if result.Failed() {
-				if i == 0 && result.Kind == syntaxa.FailureNoMatch {
-					return r.sharedCore.buildFailureRuleResult(nil, syntaxa.FailureNoMatch)
-				}
-
-				return r.sharedCore.buildFailureRuleResult(nil, syntaxa.FailureError)
+				currentMarker := ctx.Token.PeekRaw(0).TokenNumber
+				effectiveKind := sequenceCommitmentFailureKind(startMarker, currentMarker, result.Kind)
+				return r.sharedCore.buildFailureRuleResult(nil, effectiveKind)
 			}
 
 			results[i] = result
@@ -830,6 +830,23 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 		}
 	}
 	return false
+}
+
+/*
+sequenceCommitmentFailureKind returns the failure kind to surface when a sub-rule fails in a sequence or committed context.
+
+Commitment is determined by whether the lexer progressed: if the token position did not advance (startTokenNumber == currentTokenNumber) and the failure was NoMatch, the sequence is not committed and FailureNoMatch is returned. Otherwise the sequence is committed and FailureError is returned.
+
+Use this whenever a production has logically "started" (e.g. after consuming a token or running a sub-rule that could consume) and a subsequent failure must be classified as grammar boundary (NoMatch) vs syntax error (Error). Do not use rule indices to infer commitment; use token position.
+*/
+func sequenceCommitmentFailureKind(
+	startTokenNumber, currentTokenNumber int,
+	failureKind syntaxa.FailureKind,
+) syntaxa.FailureKind {
+	if failureKind == syntaxa.FailureNoMatch && startTokenNumber == currentTokenNumber {
+		return syntaxa.FailureNoMatch
+	}
+	return syntaxa.FailureError
 }
 
 /*
@@ -1092,9 +1109,12 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 
 		// ---- Execute inner rule ----
 
+		startMarker := ctx.Token.PeekRaw(0).TokenNumber
 		innerResult := ctx.ExecuteRule(innerRule, syntaxa.ExecutionNormal)
 		if innerResult.Failed() {
-			return innerResult
+			currentMarker := ctx.Token.PeekRaw(0).TokenNumber
+			effectiveKind := sequenceCommitmentFailureKind(startMarker, currentMarker, innerResult.Kind)
+			return r.sharedCore.buildFailureRuleResult(nil, effectiveKind)
 		}
 
 		// ---- Expect CLOSE token ----
@@ -1151,9 +1171,12 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 			return r.sharedCore.buildFailureRuleResult(nil, syntaxa.FailureNoMatch)
 		}
 
+		startMarker := ctx.Token.PeekRaw(0).TokenNumber
 		innerResult := ctx.ExecuteRule(innerRule, syntaxa.ExecutionNormal)
 		if innerResult.Failed() {
-			return innerResult
+			currentMarker := ctx.Token.PeekRaw(0).TokenNumber
+			effectiveKind := sequenceCommitmentFailureKind(startMarker, currentMarker, innerResult.Kind)
+			return r.sharedCore.buildFailureRuleResult(nil, effectiveKind)
 		}
 
 		if !r.enforceToken(ctx, name, closeToken) {
