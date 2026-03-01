@@ -95,7 +95,7 @@ func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 	name     := p.sharedCore.createRuleName("Expression", grammarID)
 	identity := p.sharedCore.createRuleIdentity(name, grammarID, "expression")
 
-	grammar := p.buildPrattGrammar(grammarID, primary, config.PrefixOps)
+	grammar := p.buildPrattGrammar(grammarID, primary, config.PrefixOps, config.InfixOps)
 	syntaxa.MarkAsContextBoundary(grammar)
 
 	exec := func(ctx *syntaxa.ExecRuleContext[
@@ -122,9 +122,13 @@ func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 	grammarID syntaxa.GrammarID,
 	primary Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	prefixOps []PrattPrefixOp[TToken, TNodeKind],
+	infixOps []PrattInfixOp[TToken, TNodeKind],
 ) *syntaxa.Grammar[TToken] {
 	children := []*syntaxa.Grammar[TToken]{primary.GetGrammar()}
 	for _, op := range prefixOps {
+		children = append(children, syntaxa.Token(grammarID, op.Token))
+	}
+	for _, op := range infixOps {
 		children = append(children, syntaxa.Token(grammarID, op.Token))
 	}
 	if len(children) == 1 {
