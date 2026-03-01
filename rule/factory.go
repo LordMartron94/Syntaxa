@@ -116,6 +116,69 @@ func (t *tokenEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 	return t.expectCore("ExpectOneOf", grammarID, outputNodeKind, true, tokens...)
 }
 
+/*
+ExpectPair expects two tokens in sequence and creates a single AST node with both lexemes attached.
+
+On success: consumes firstToken then secondToken, creates a node of outputNodeKind, and attaches
+both lexemes to that node. On failure: first-token mismatch yields FailureNoMatch; second-token
+mismatch after consuming the first yields a diagnostic and FailureError.
+
+Use cases:
+- Variable reference: $ followed by identifier (one node with two tokens).
+- Any two-token construct that should be represented as one AST node.
+
+Prerequisites:
+- grammarID identifies this production.
+- outputNodeKind is the AST node kind for the single node.
+- firstToken and secondToken are the exact token values in order.
+*/
+func (t *tokenEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) ExpectPair(
+	grammarID syntaxa.GrammarID,
+	outputNodeKind TNodeKind,
+	firstToken, secondToken TToken,
+) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
+	name     := t.sharedCore.createRuleName("ExpectPair", grammarID)
+	identity := t.sharedCore.createRuleIdentity(
+		name,
+		grammarID,
+		t.sharedCore.formatTokensAsList(" then ", firstToken, secondToken),
+	)
+	grammar := syntaxa.Concat(
+		grammarID,
+		syntaxa.Token(grammarID, firstToken),
+		syntaxa.Token(grammarID, secondToken),
+	)
+	syntaxa.MarkAsContextBoundary(grammar)
+	rule := func(ctx *syntaxa.ExecRuleContext[
+		TObservation, TToken, TTokenRole, TLexerState, TNodeKind,
+	]) Result[TObservation, TToken, TTokenRole, TNodeKind] {
+		peek := ctx.Token.Peek(0)
+		if peek.Token != firstToken {
+			return t.sharedCore.buildFailureRuleResult(nil, syntaxa.FailureNoMatch)
+		}
+		firstLex := ctx.Token.Consume()
+		next := ctx.Token.Peek(0)
+		if next.Token != secondToken {
+			ctx.Error.ReportAt(
+				string(name),
+				next,
+				fmt.Sprintf(
+					"unexpected %s, wanted %s",
+					t.sharedCore.tokenFormatter(next.Token),
+					t.sharedCore.tokenFormatter(secondToken),
+				),
+			)
+			return t.sharedCore.buildFailureRuleResult(nil, syntaxa.FailureError)
+		}
+		secondLex := ctx.Token.Consume()
+		node := ctx.Editor.NewNode(outputNodeKind)
+		ctx.Editor.AddToken(node, firstLex)
+		ctx.Editor.AddToken(node, secondLex)
+		return t.sharedCore.buildSuccessRuleResult(node)
+	}
+	return t.sharedCore.constructStructuralRule(identity, rule, nil, grammar)
+}
+
 func (t *tokenEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) expectCore(
 	ruleName string,
 	grammarID syntaxa.GrammarID,
@@ -631,6 +694,104 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 		},
 		rule.GetRecoveryTokens(),
 		syntaxa.Optional(rule.GetGrammarID(), rule.GetGrammar()),
+	)
+}
+
+/*
+Predict runs the inner rule only when the predicate returns true on the current token stream.
+
+Before running the rule, the predicate is called with the select context (read-only lookahead).
+If the predicate returns false, Predict returns FailureNoMatch without consuming any token, so
+the caller (e.g. Choice) can try the next alternative. If the predicate returns true, the
+inner rule is executed in ExecutionNormal and its result is returned.
+
+The predicate must only inspect the token stream (e.g. ctx.Peek(0), ctx.Peek(1)); it must not
+consume. Use Predict to resolve prefix overlap in Choice: wrap an alternative that shares a
+prefix with another so it runs only when lookahead disambiguates (e.g. run range only when
+Peek(1) is the range operator).
+
+Prerequisites:
+- rule must be a valid parser rule.
+- predicate must be pure lookahead (no consumption).
+*/
+func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) Predict(
+	rule Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+	predicate func(ctx *syntaxa.SelectRuleContext[TObservation, TToken, TTokenRole]) bool,
+) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
+	name     := syntaxa.RuleLabel(fmt.Sprintf("Predict(%s)", rule.GetName()))
+	identity := r.sharedCore.createRuleIdentity(name, rule.GetGrammarID(), rule.GetExpectedLabel())
+	exec := func(ctx *syntaxa.ExecRuleContext[
+		TObservation, TToken, TTokenRole, TLexerState, TNodeKind,
+	]) Result[TObservation, TToken, TTokenRole, TNodeKind] {
+		if !predicate(ctx.Select) {
+			return r.sharedCore.buildFailureRuleResult(nil, syntaxa.FailureNoMatch)
+		}
+		return ctx.ExecuteRule(rule, syntaxa.ExecutionNormal)
+	}
+	return r.sharedCore.constructRule(
+		identity,
+		rule.GetContract(),
+		exec,
+		rule.GetRecoveryTokens(),
+		rule.GetGrammar(),
+	)
+}
+
+/*
+OptionalSuffix runs the inner rule and, on success, optionally consumes suffixToken.
+
+If the inner rule succeeds and the current token equals suffixToken, the suffix is consumed and
+a new node of wrapNodeKind is created with the suffix lexeme attached and the inner rule's
+node attached as its only child; that wrapper node is returned. Otherwise the inner rule's
+result is returned unchanged. Inner rule failure is propagated.
+
+Use cases:
+- Postfix operators: segment followed by optional * (e.g. regex star).
+- Optional trailing token that wraps the preceding result in a new node.
+
+Prerequisites:
+- grammarID identifies this production.
+- wrapNodeKind is the AST node kind for the wrapper when the suffix is present.
+- rule must be a valid parser rule that returns a node on success.
+- suffixToken is the token that triggers wrapping when present after rule success.
+*/
+func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) OptionalSuffix(
+	grammarID syntaxa.GrammarID,
+	wrapNodeKind TNodeKind,
+	rule Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+	suffixToken TToken,
+) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
+	name     := r.sharedCore.createRuleName("OptionalSuffix", grammarID)
+	identity := r.sharedCore.createRuleIdentity(name, grammarID, rule.GetExpectedLabel())
+	grammar  := syntaxa.Concat(
+		grammarID,
+		rule.GetGrammar(),
+		syntaxa.Optional(grammarID, syntaxa.Token(grammarID, suffixToken)),
+	)
+	syntaxa.MarkAsContextBoundary(grammar)
+	exec := func(ctx *syntaxa.ExecRuleContext[
+		TObservation, TToken, TTokenRole, TLexerState, TNodeKind,
+	]) Result[TObservation, TToken, TTokenRole, TNodeKind] {
+		result := ctx.ExecuteRule(rule, syntaxa.ExecutionNormal)
+		if result.Failed() {
+			return result
+		}
+		innerNode := result.Node
+		if ctx.Token.Peek(0).Token != suffixToken {
+			return result
+		}
+		suffixLex := ctx.Token.Consume()
+		wrapper := ctx.Editor.NewNode(wrapNodeKind)
+		ctx.Editor.AddToken(wrapper, suffixLex)
+		ctx.Editor.AttachChild(wrapper, innerNode)
+		return r.sharedCore.buildSuccessRuleResult(wrapper)
+	}
+	return r.sharedCore.constructRule(
+		identity,
+		r.sharedCore.createContract(rule.GetContract().MustConsume, true),
+		exec,
+		rule.GetRecoveryTokens(),
+		grammar,
 	)
 }
 
@@ -1488,9 +1649,9 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 // ------------------------------------------------------------- RULEBUILDER
 
 /*
-RuleBuilder is the rule factory entry point: it provides Token and Rule endpoints for building parser rules.
+RuleBuilder is the rule factory entry point: it provides Token, Rule, and Pratt endpoints for building parser rules.
 
-Use Token for rules that match lexer tokens (Expect, ExpectVirtual, ExpectOneOf, List). Use Rule for rules that combine other rules (Sequence, Block, Optional, NOrMore, Nest, Root). Both endpoints share the same type parameters and token formatter; rules from either can be composed together.
+Use Token for rules that match lexer tokens (Expect, ExpectVirtual, ExpectOneOf, List). Use Rule for rules that combine other rules (Sequence, Block, Optional, NOrMore, Nest, Root). Use Pratt for precedence-climbing expression rules (Expression). All endpoints share the same type parameters and token formatter; rules from any can be composed together.
 
 For common grammar patterns, build rules via this type. For behaviour not covered by the factory, build rules manually with syntaxa.ParserRuleCreate and the syntaxa grammar IR.
 */
@@ -1501,13 +1662,16 @@ type RuleBuilder[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNod
 	/* Rule exposes composite rules: Sequence, Block, Optional, Required, NOrMore, Nest, Root, etc. */
 	Rule *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 
+	/* Pratt exposes Pratt-style expression rules: Expression (precedence-climbing). */
+	Pratt *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
+
 	sharedCore *sharedCore[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 }
 
 /*
 RuleBuilderCreate allocates and returns a new RuleBuilder with the given token formatter.
 
-The tokenFormatter is used when building error messages that mention token values (e.g. "expected one of ID, COMMA"). It should return a short, readable string for each token (e.g. token ID or name). The returned RuleBuilder is ready to use: RuleBuilder.Token and RuleBuilder.Rule are non-nil.
+The tokenFormatter is used when building error messages that mention token values (e.g. "expected one of ID, COMMA"). It should return a short, readable string for each token (e.g. token ID or name). The returned RuleBuilder is ready to use: RuleBuilder.Token, RuleBuilder.Rule, and RuleBuilder.Pratt are non-nil.
 
 Prerequisites:
 - tokenFormatter must not be nil; it is used for diagnostics and expected-label formatting.
@@ -1531,9 +1695,14 @@ func RuleBuilderCreate[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState
 		token:      tokenEndpoint,
 	}
 
+	prattEndpoint := &prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]{
+		sharedCore: sharedCore,
+	}
+
 	return &RuleBuilder[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]{
 		Token:      tokenEndpoint,
 		Rule:       ruleEndpoint,
+		Pratt:      prattEndpoint,
 		sharedCore: sharedCore,
 	}
 }

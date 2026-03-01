@@ -34,7 +34,7 @@ Key features:
 
 ```text
 syntaxa
-├── syntaxa/rule   (rule factory: RuleBuilder, Token, Rule endpoints)
+├── syntaxa/rule   (rule factory: RuleBuilder, Token, Rule, Pratt endpoints)
 ├── lexarch        (Lexeme, LexerSession, StreamingLexerSession for token input)
 └── (caller)       (BuildExecRuleContextFromSlice / FromLexerSession / FromStreamingSession,
                     SyntaxaParserParseWithContext)
@@ -56,9 +56,10 @@ syntaxa
 
 ### `syntaxa/rule` (rule factory)
 
-- **RuleBuilder**: Entry point. `RuleBuilderCreate(tokenFormatter)` returns a builder with `Token` and `Rule` endpoints. Both share the same type parameters; rules from either can be composed.
+- **RuleBuilder**: Entry point. `RuleBuilderCreate(tokenFormatter)` returns a builder with `Token`, `Rule`, and `Pratt` endpoints. All share the same type parameters; rules from any can be composed.
 - **Token endpoint**: `Expect`, `ExpectVirtual`, `ExpectOneOf`, `List` (open/element/separator/close, trailing mode, empty-list option).
-- **Rule endpoint**: `Optional`, `OptionalPrefix`, `OptionalWhen`, `Required`, `Root`, `Sequence`, `Block`, `NOrMore`, `ZeroOrMore`, `OneOrMore`, `TransparentNOrMore`, `TransparentZeroOrMore`, `Nest`, `TransparentNest`, `RecoverSync`.
+- **Rule endpoint**: `Optional`, `OptionalPrefix`, `OptionalWhen`, `OptionalSuffix`, `Predict`, `Required`, `Root`, `Sequence`, `Block`, `NOrMore`, `ZeroOrMore`, `OneOrMore`, `TransparentNOrMore`, `TransparentZeroOrMore`, `Nest`, `TransparentNest`, `RecoverSync`. `OptionalSuffix` runs a rule then optionally consumes a suffix token and wraps the result. `Predict` runs a rule only when a lookahead predicate holds (false yields FailureNoMatch for Choice); use to resolve prefix overlap.
+- **Pratt endpoint**: `Expression(grammarID, PrattConfig)` — precedence-climbing expression rule. Config holds `Primary` (atom rule), `PrefixOps` (token, right binding power, node kind), `InfixOps` (token, left/right binding power, node kind), and optional `RecoveryTokens`. Binding power: higher = tighter binding; left-assoc uses `RightBP < LeftBP`, right-assoc uses `RightBP = LeftBP`. Returns a Rule that composes with Sequence, Choice, etc.
 - **Types**: `Rule` and `Result` are aliases for `syntaxa.ParserRule` and `syntaxa.RuleResult`. `Lexeme` is an alias for `lexarch.Lexeme`.
 - **TrailingSeparatorMode**: `TrailingForbidden`, `TrailingOptional`, `TrailingRequired` for list rules.
 
