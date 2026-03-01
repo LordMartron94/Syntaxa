@@ -280,6 +280,66 @@ func (t *tokenEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 }
 
 /*
+TransparentSequence matches a strict sequence of rules but does not create a new parent node.
+
+On success, it returns a fragment result containing all non-nil nodes produced by the sub-rules.
+When this result is attached to a parent via the editor, the fragment is unpacked, and its
+children are attached directly to that parent.
+
+Use cases:
+- Grouping rules logically in the grammar without creating "middle-man" nodes in the AST.
+- Breaking down complex productions into smaller, reusable sequences that shouldn't appear in the final tree.
+
+Prerequisites:
+- grammarID identifies this production.
+- rules must not be empty.
+*/
+func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) TransparentSequence(
+	grammarID syntaxa.GrammarID,
+	rules ...Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
+	name := r.sharedCore.createRuleName("TransparentSequence", grammarID)
+	identity := r.sharedCore.createRuleIdentity(name, grammarID, "")
+
+	mustConsume := r.listCoreMustConsume(rules)
+	grammar := r.buildConcatGrammarFromRules(grammarID, rules)
+
+	exec := func(ctx *syntaxa.ExecRuleContext[
+		TObservation, TToken, TTokenRole, TLexerState, TNodeKind,
+	]) Result[TObservation, TToken, TTokenRole, TNodeKind] {
+
+		results := make([]Result[TObservation, TToken, TTokenRole, TNodeKind], len(rules))
+		startMarker := ctx.Token.PeekRaw(0).TokenNumber
+
+		for i, rule := range rules {
+			result := ctx.ExecuteRule(rule, syntaxa.ExecutionNormal)
+
+			if result.Failed() {
+				currentMarker := ctx.Token.PeekRaw(0).TokenNumber
+				effectiveKind := sequenceCommitmentFailureKind(startMarker, currentMarker, result.Kind)
+				return r.sharedCore.buildFailureRuleResult(nil, effectiveKind)
+			}
+			results[i] = result
+		}
+
+		// Create a transient node to hold the fragment children
+		var zeroKind TNodeKind
+		fragmentNode := ctx.Editor.NewTransientNode(zeroKind)
+		r.attachResultsToNode(ctx, fragmentNode, results)
+
+		return r.sharedCore.buildFragmentRuleResult(fragmentNode)
+	}
+
+	return r.sharedCore.constructRule(
+		identity,
+		r.sharedCore.createContract(mustConsume, false),
+		exec,
+		nil,
+		grammar,
+	)
+}
+
+/*
 getListGrammar builds the grammar IR for a list production: open, (elem sep)* elem?, close,
 with optional empty list and configurable trailing separator mode.
 */
@@ -943,8 +1003,8 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 	grammar := syntaxa.Repeat(grammarID, rule.GetGrammar(), min, nil)
 	syntaxa.MarkAsContextBoundary(grammar)
 
-	name        := r.sharedCore.createRuleName(ruleName, grammarID)
-	identity    := r.sharedCore.createRuleIdentity(name, grammarID, rule.GetExpectedLabel())
+	name := r.sharedCore.createRuleName(ruleName, grammarID)
+	identity := r.sharedCore.createRuleIdentity(name, grammarID, rule.GetExpectedLabel())
 	mustConsume := min > 0 && rule.GetContract().MustConsume
 
 	return r.sharedCore.constructRule(
@@ -1279,6 +1339,150 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 
 	ctx.Error.ReportAt(string(ruleName), found, r.sharedCore.formatUnexpectedExpected(found.Token, expected))
 	return false
+}
+
+/*
+Prefixed matches a specific prefix token, discards it, and returns the result of the inner rule.
+
+Use cases:
+- Matching virtual prefixes where the AST node is entirely defined by the inner rule.
+*/
+func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) Prefixed(
+	grammarID syntaxa.GrammarID,
+	prefixToken TToken,
+	innerRule Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
+	name := r.sharedCore.createRuleName("Prefixed", grammarID)
+	identity := r.sharedCore.createRuleIdentity(name, grammarID, innerRule.GetExpectedLabel())
+
+	grammar := syntaxa.Concat(
+		grammarID,
+		syntaxa.Token(grammarID, prefixToken),
+		innerRule.GetGrammar(),
+	)
+	syntaxa.MarkAsContextBoundary(grammar)
+
+	return r.sharedCore.constructRule(
+		identity,
+		r.sharedCore.createContract(true, innerRule.GetContract().MustReturnNode),
+		r.executePrefixedRule(prefixToken, innerRule),
+		innerRule.GetRecoveryTokens(),
+		grammar,
+	)
+}
+
+func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) executePrefixedRule(
+	prefixToken TToken,
+	innerRule Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+) syntaxa.ParserRuleExecutor[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
+
+	return func(ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) Result[TObservation, TToken, TTokenRole, TNodeKind] {
+		if !r.consumeIfMatch(ctx, prefixToken) {
+			return r.sharedCore.buildFailureRuleResult(nil, syntaxa.FailureNoMatch)
+		}
+
+		return r.executeInnerWithCommitmentFailure(ctx, innerRule)
+	}
+}
+
+/*
+Choice tries a series of rules in order and returns the result of the first successful one.
+
+Semantics:
+- Executes rules sequentially in ExecutionNormal mode.
+- If a rule succeeds, Choice succeeds immediately and returns that rule's result.
+- If a rule fails with FailureNoMatch, it proceeds to the next rule (backtracking).
+- If a rule fails with FailureError (a committed syntax error), Choice fails immediately and propagates the error.
+- If all rules fail with FailureNoMatch, Choice fails with FailureNoMatch.
+
+Use cases:
+- Alternation in productions (e.g., matching different types of statements or expressions).
+
+Prerequisites:
+- grammarID identifies this production.
+- rules must contain at least one valid parser rule.
+*/
+func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) Choice(
+	grammarID syntaxa.GrammarID,
+	rules ...Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
+
+	name := r.sharedCore.createRuleName("Choice", grammarID)
+	identity := r.sharedCore.createRuleIdentity(name, grammarID, "")
+
+	grammar := r.buildChoiceGrammarFromRules(grammarID, rules)
+
+	exec := func(ctx *syntaxa.ExecRuleContext[
+		TObservation, TToken, TTokenRole, TLexerState, TNodeKind,
+	]) Result[TObservation, TToken, TTokenRole, TNodeKind] {
+		return r.executeChoiceLoop(ctx, rules)
+	}
+
+	mustConsume := r.choiceMustConsume(rules)
+
+	return r.sharedCore.constructRule(
+		identity,
+		r.sharedCore.createContract(mustConsume, false),
+		exec,
+		nil,
+		grammar,
+	)
+}
+
+/*
+buildChoiceGrammarFromRules builds a Choice grammar from the given rules and marks it as a context boundary.
+*/
+func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) buildChoiceGrammarFromRules(
+	grammarID syntaxa.GrammarID,
+	rules []Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+) *syntaxa.Grammar[TToken] {
+	children := r.grammarsFromRules(rules)
+	grammar := syntaxa.Choice(grammarID, children...)
+	syntaxa.MarkAsContextBoundary(grammar)
+	return grammar
+}
+
+/*
+executeChoiceLoop iterates through the rules, handling match successes, benign mismatches, and fatal errors.
+Extracted to enforce strict single-level nesting and low cognitive complexity.
+*/
+func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) executeChoiceLoop(
+	ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+	rules []Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+) Result[TObservation, TToken, TTokenRole, TNodeKind] {
+	for _, rule := range rules {
+		result := ctx.ExecuteRule(rule, syntaxa.ExecutionNormal)
+
+		if result.Succeeded {
+			return result
+		}
+
+		if result.Kind == syntaxa.FailureError {
+			return result
+		}
+	}
+
+	return r.sharedCore.buildFailureRuleResult(nil, syntaxa.FailureNoMatch)
+}
+
+/*
+choiceMustConsume verifies if the overall Choice rule is guaranteed to consume a token.
+It returns true only if every single sub-rule strictly requires consumption.
+*/
+func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) choiceMustConsume(
+	rules []Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+) bool {
+	if len(rules) == 0 {
+		return false
+	}
+
+	for _, rule := range rules {
+		if !rule.GetContract().MustConsume {
+			return false
+		}
+	}
+
+	return true
 }
 
 // ------------------------------------------------------------- RULEBUILDER
