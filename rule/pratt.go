@@ -165,6 +165,7 @@ func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 		}
 		nodeKind := inf.nodeKind
 		opNode := ctx.Editor.NewNode(nodeKind)
+		ctx.Editor.AddToken(opNode, opLex)
 		ctx.Editor.AttachChild(opNode, left)
 		ctx.Editor.AttachChild(opNode, right)
 		left = opNode
@@ -192,6 +193,7 @@ func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 		}
 		nodeKind := info.nodeKind
 		opNode := ctx.Editor.NewNode(nodeKind)
+		ctx.Editor.AddToken(opNode, opLex)
 		ctx.Editor.AttachChild(opNode, operand)
 		return p.sharedCore.buildSuccessRuleResult(opNode)
 	}
