@@ -85,6 +85,35 @@ func (g *Grammar[TToken]) WalkBreadth(
 }
 
 /*
+GrammarWalkPreWithContext traverses the grammar tree in pre-order, passing inherited context
+from each node to its children. The callback receives (node, ctx) and returns the context
+to pass to children plus skip/stop. Cycle-safe. Use when traversal logic depends on
+context accumulated from ancestors (e.g. recovery tokens, repeat nesting).
+*/
+func GrammarWalkPreWithContext[TToken comparable, TContext any](
+	g *Grammar[TToken],
+	initial TContext,
+	callback func(node *Grammar[TToken], ctx TContext) (childCtx TContext, skipSubtree, stopWalk bool),
+) error {
+	if g == nil {
+		return fmt.Errorf("GrammarWalkPreWithContext called on a nil grammar node")
+	}
+	return structarch.StructArchWalkWithContext(
+		structarch.WalkConfigWithContext[*Grammar[TToken], *Grammar[TToken], TContext]{
+			ID: func(n *Grammar[TToken]) *Grammar[TToken] {
+				return n
+			},
+			Children: func(n *Grammar[TToken]) []*Grammar[TToken] {
+				return grammarWalkChildren(n)
+			},
+			Callback: callback,
+		},
+		g,
+		initial,
+	)
+}
+
+/*
 FindFirst returns the first node in pre-order for which predicate returns true.
 
 Returns nil if no node matches or if the receiver is nil.

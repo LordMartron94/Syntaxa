@@ -55,6 +55,7 @@ syntaxa
 - **Parser**: `SyntaxaParser` holds the program rule, post-processor, EOF token, root/error node kinds, and options. `SyntaxaParserCreate` builds it; `SyntaxaParserParseWithContext(parser, ctx)` runs the parse.
 - **LST**: `SyntaxaLSTNode` (kind, parent, children, tokens, attributes, span). `LSTEditor` is the only way to create/mutate nodes during parsing (`NewNode`, `NewTransientNode`, `AttachChild`, `Detach`, etc.).
 - **Grammar package**: `Grammar.ProducePackage(name, version)` returns `GrammarPackage` (entry rule, rules map, tokens, nests, analysis). Analysis contains nullable, first, and follow sets keyed by `NodeKey` (from `NodePath`).
+- **Grammar traversal**: `Walk`, `WalkPre`, `WalkPost`, `WalkBreadth` for strategy-based walks; `GrammarWalkPreWithContext` for pre-order with inherited context (e.g. sync tokens, repeat nesting).
 
 ### `syntaxa/rule` (rule factory)
 
