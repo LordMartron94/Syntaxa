@@ -21,7 +21,7 @@ Use for custom token or rule ID display (e.g. to match a GrammarDebugFormatter).
 type GrammarPackageDebugFormatter[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind, TLexerState comparable] struct {
 	FormatPackageName func(name string) string
 	FormatVersion     func(version string) string
-	FormatGrammarID   func(GrammarID) string
+	FormatGrammarLabel func(GrammarLabel) string
 	FormatToken       func(TToken) string
 	FormatNodeKey     func(NodeKey) string
 	FormatTokenSet    func(TokenSet[TToken]) string
@@ -42,11 +42,11 @@ func (f GrammarPackageDebugFormatter[TObservation, TToken, TTokenRole, TNodeKind
 	return version
 }
 
-func (f GrammarPackageDebugFormatter[TObservation, TToken, TTokenRole, TNodeKind, TLexerState]) grammarID(id GrammarID) string {
-	if f.FormatGrammarID != nil {
-		return f.FormatGrammarID(id)
+func (f GrammarPackageDebugFormatter[TObservation, TToken, TTokenRole, TNodeKind, TLexerState]) grammarLabel(label GrammarLabel) string {
+	if f.FormatGrammarLabel != nil {
+		return f.FormatGrammarLabel(label)
 	}
-	return string(id)
+	return string(label)
 }
 
 func (f GrammarPackageDebugFormatter[TObservation, TToken, TTokenRole, TNodeKind, TLexerState]) token(t TToken) string {
@@ -64,14 +64,14 @@ func (f GrammarPackageDebugFormatter[TObservation, TToken, TTokenRole, TNodeKind
 }
 
 /*
-nodeKeyForAnalysis returns a display string for an analysis map key: "GrammarID (path)" when
-PathToGrammarID is available, otherwise the raw key (path) or FormatNodeKey result.
+nodeKeyForAnalysis returns a display string for an analysis map key: "GrammarLabel (path)" when
+PathToGrammarLabel is available, otherwise the raw key (path) or FormatNodeKey result.
 Call from the debugger when rendering nullable/first/follow so nodes are shown by name with path in parentheses.
 */
 func (f GrammarPackageDebugFormatter[TObservation, TToken, TTokenRole, TNodeKind, TLexerState]) nodeKeyForAnalysis(pkg *GrammarPackage[TObservation, TToken, TTokenRole, TNodeKind, TLexerState], k NodeKey) string {
-	if pkg != nil && pkg.PathToGrammarID != nil {
-		if id, ok := pkg.PathToGrammarID[k]; ok {
-			return f.grammarID(id) + " (" + string(k) + ")"
+	if pkg != nil && pkg.PathToGrammarLabel != nil {
+		if label, ok := pkg.PathToGrammarLabel[k]; ok {
+			return f.grammarLabel(label) + " (" + string(k) + ")"
 		}
 	}
 	return f.nodeKey(k)
@@ -97,7 +97,7 @@ func (f GrammarPackageDebugFormatter[TObservation, TToken, TTokenRole, TNodeKind
 		return f.FormatNestSpec(n)
 	}
 	return fmt.Sprintf("%s open=%s close=%s owner=%s",
-		f.grammarID(n.ID), f.token(n.Open), f.token(n.Close), f.grammarID(n.OwnerRule))
+		f.grammarLabel(n.ID), f.token(n.Open), f.token(n.Close), f.grammarLabel(n.OwnerRule))
 }
 
 // ============================================================
@@ -149,7 +149,7 @@ func (d *GrammarPackageDebugger[TObservation, TToken, TTokenRole, TNodeKind, TLe
 	if _, err := fmt.Fprintf(w, "  version: %s\n", f.version(pkg.Version)); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(w, "  entry: %s\n\n", f.grammarID(pkg.EntryRule)); err != nil {
+	if _, err := fmt.Fprintf(w, "  entry: %s\n\n", f.grammarLabel(pkg.EntryRule)); err != nil {
 		return err
 	}
 
@@ -159,13 +159,13 @@ func (d *GrammarPackageDebugger[TObservation, TToken, TTokenRole, TNodeKind, TLe
 	if _, err := fmt.Fprintf(w, "  count: %d\n", len(pkg.Rules)); err != nil {
 		return err
 	}
-	ruleIDs := make([]GrammarID, 0, len(pkg.Rules))
-	for id := range pkg.Rules {
-		ruleIDs = append(ruleIDs, id)
+	ruleLabels := make([]GrammarLabel, 0, len(pkg.Rules))
+	for label := range pkg.Rules {
+		ruleLabels = append(ruleLabels, label)
 	}
-	sort.Slice(ruleIDs, func(i, j int) bool { return ruleIDs[i] < ruleIDs[j] })
-	for _, id := range ruleIDs {
-		if _, err := fmt.Fprintf(w, "  - %s\n", f.grammarID(id)); err != nil {
+	sort.Slice(ruleLabels, func(i, j int) bool { return ruleLabels[i] < ruleLabels[j] })
+	for _, label := range ruleLabels {
+		if _, err := fmt.Fprintf(w, "  - %s\n", f.grammarLabel(label)); err != nil {
 			return err
 		}
 	}

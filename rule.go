@@ -162,7 +162,7 @@ type ParserRuleExecutor[
 
 type RuleIdentity struct {
 	RuleName      RuleLabel
-	GrammarID     GrammarID
+	GrammarLabel  GrammarLabel
 	ExpectedLabel string
 }
 
@@ -221,8 +221,8 @@ func (p *ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) G
 	return p.identity.ExpectedLabel
 }
 
-func (p *ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) GetGrammarID() GrammarID {
-	return p.identity.GrammarID
+func (p *ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) GetGrammarLabel() GrammarLabel {
+	return p.identity.GrammarLabel
 }
 
 func (p *ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) GetGrammar() *Grammar[TToken] {

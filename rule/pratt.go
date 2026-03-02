@@ -12,13 +12,13 @@ PrattPrefixOp describes a prefix operator for Pratt expression parsing.
 
 RightBP is the binding power used when parsing the operand to the right.
 NodeKind is the LST node kind for the prefix operator node (one child: the operand).
-TokenGrammarID is the GrammarID for this operator's token in the grammar IR; required (panic if empty).
+TokenGrammarLabel is the GrammarLabel for this operator's token in the grammar IR; required (panic if empty).
 */
 type PrattPrefixOp[TToken, TNodeKind comparable] struct {
-	Token         TToken
-	RightBP       int
-	NodeKind      TNodeKind
-	TokenGrammarID syntaxa.GrammarID
+	Token             TToken
+	RightBP           int
+	NodeKind          TNodeKind
+	TokenGrammarLabel syntaxa.GrammarLabel
 }
 
 /*
@@ -28,14 +28,14 @@ LeftBP and RightBP define precedence and associativity: when we have a left oper
 and see this operator, we consume it and parse the right operand with RightBP.
 Left-associative: use RightBP < LeftBP (e.g. RightBP = LeftBP - 1).
 Right-associative: use RightBP = LeftBP.
-TokenGrammarID is the GrammarID for this operator's token in the grammar IR; required (panic if empty).
+TokenGrammarLabel is the GrammarLabel for this operator's token in the grammar IR; required (panic if empty).
 */
 type PrattInfixOp[TToken, TNodeKind comparable] struct {
-	Token          TToken
-	LeftBP         int
-	RightBP        int
-	NodeKind       TNodeKind
-	TokenGrammarID syntaxa.GrammarID
+	Token             TToken
+	LeftBP            int
+	RightBP           int
+	NodeKind          TNodeKind
+	TokenGrammarLabel syntaxa.GrammarLabel
 }
 
 /*
@@ -79,7 +79,7 @@ Missing operand after prefix/infix or unknown operator in expression context yie
 FailureError with diagnostics. Recovery uses config.RecoveryTokens.
 */
 func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) Expression(
-	grammarID syntaxa.GrammarID,
+	grammarLabel syntaxa.GrammarLabel,
 	config PrattConfig[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 ) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
 	primary := config.Primary
@@ -96,10 +96,10 @@ func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 		}
 	}
 
-	name     := p.sharedCore.createRuleName("Expression", grammarID)
-	identity := p.sharedCore.createRuleIdentity(name, grammarID, "expression")
+	name     := p.sharedCore.createRuleName("Expression", grammarLabel)
+	identity := p.sharedCore.createRuleIdentity(name, grammarLabel, "expression")
 
-	grammar := p.buildPrattGrammar(grammarID, primary, config.PrefixOps, config.InfixOps)
+	grammar := p.buildPrattGrammar(grammarLabel, primary, config.PrefixOps, config.InfixOps)
 	syntaxa.MarkAsContextBoundary(grammar)
 
 	exec := func(ctx *syntaxa.ExecRuleContext[
@@ -124,28 +124,28 @@ func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 }
 
 func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) buildPrattGrammar(
-	grammarID syntaxa.GrammarID,
+	grammarLabel syntaxa.GrammarLabel,
 	primary Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	prefixOps []PrattPrefixOp[TToken, TNodeKind],
 	infixOps []PrattInfixOp[TToken, TNodeKind],
 ) *syntaxa.Grammar[TToken] {
 	children := []*syntaxa.Grammar[TToken]{primary.GetGrammar()}
 	for _, op := range prefixOps {
-		if op.TokenGrammarID == "" {
-			panic("Pratt prefix op has empty TokenGrammarID; explicitness required")
+		if op.TokenGrammarLabel == "" {
+			panic("Pratt prefix op has empty TokenGrammarLabel; explicitness required")
 		}
-		children = append(children, syntaxa.Token(op.TokenGrammarID, op.Token))
+		children = append(children, syntaxa.Token(op.TokenGrammarLabel, op.Token))
 	}
 	for _, op := range infixOps {
-		if op.TokenGrammarID == "" {
-			panic("Pratt infix op has empty TokenGrammarID; explicitness required")
+		if op.TokenGrammarLabel == "" {
+			panic("Pratt infix op has empty TokenGrammarLabel; explicitness required")
 		}
-		children = append(children, syntaxa.Token(op.TokenGrammarID, op.Token))
+		children = append(children, syntaxa.Token(op.TokenGrammarLabel, op.Token))
 	}
 	if len(children) == 1 {
 		return children[0]
 	}
-	return syntaxa.Choice(grammarID, children...)
+	return syntaxa.Choice(grammarLabel, children...)
 }
 
 func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) runPrattExpression(

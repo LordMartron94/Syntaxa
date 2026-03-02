@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"fmt"
 	"foundation/formatting"
+	"foundation/hash"
 	"sort"
 )
 
@@ -15,7 +16,7 @@ import (
 NodeKey uniquely identifies a grammar node for analysis (nullable, first, follow).
 
 Canonical key is the node's NodePath (path from tree root). Use nodeKeyFromPath to build keys
-so that analysis maps are consistent regardless of GrammarID reuse across nodes.
+so that analysis maps are consistent regardless of GrammarLabel reuse across nodes.
 */
 type NodeKey string
 
@@ -32,36 +33,37 @@ GrammarPackage is the flattened, analyzed form of a grammar tree.
 It contains the rule map, tokens used, nest specs, and computed nullable/first/follow analysis.
 Produced by ProducePackage from a root Grammar node.
 
-PathToGrammarID maps each node's path (NodeKey) to its GrammarID for debug display,
-so analysis dumps can show node names with path in parentheses, e.g. "PROGRAM (0)".
+PathToGrammarLabel maps each node's path (NodeKey) to its GrammarLabel for debug display.
+NodeByGrammarKey is 1:1 unique instance lookup. NodesByGrammarLabel is 1:N by semantic type.
 
 EntryRuleParserRule is the executable rule for the entry production; set when producing
-a package for the parser. The parser accepts a GrammarPackage and runs this rule.
-Nil when the package is produced for analysis only (e.g. debug dumps).
+a package for the parser. Nil when the package is produced for analysis only (e.g. debug dumps).
 */
 type GrammarPackage[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind, TLexerState comparable] struct {
-	Name                 string
-	Version              string
-	EntryRule            GrammarID
-	Rules                map[GrammarID]*Grammar[TToken]
-	TokensUsed           []TToken
-	Nests                []NestSpec[TToken]
+	Name                  string
+	Version               string
+	EntryRule             GrammarLabel
+	Rules                 map[GrammarLabel]*Grammar[TToken]
+	TokensUsed            []TToken
+	Nests                 []NestSpec[TToken]
 	Analysis              *GrammarAnalysis[TToken]
-	PathToGrammarID       map[NodeKey]GrammarID
-	TokenNodeByID        map[GrammarID]*Grammar[TToken]
-	EntryRuleParserRule  *ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
+	PathToGrammarLabel    map[NodeKey]GrammarLabel
+	NodeByGrammarKey      map[GrammarKey]*Grammar[TToken]
+	NodesByGrammarLabel   map[GrammarLabel][]*Grammar[TToken]
+	EntryRuleParserRule   *ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 }
 
 /*
 NestSpec describes one bracketed (GNest) production: open token, close token, and owning rule.
 
 Used by the parser for balanced delimiter matching and error recovery.
+ID and OwnerRule are GrammarLabels (context-boundary nodes; unique per nest).
 */
 type NestSpec[TToken comparable] struct {
-	ID        GrammarID
+	ID        GrammarLabel
 	Open      TToken
 	Close     TToken
-	OwnerRule GrammarID
+	OwnerRule GrammarLabel
 	Node      *Grammar[TToken]
 }
 
@@ -83,9 +85,9 @@ type GrammarAnalysis[TToken comparable] struct {
 /*
 ProducePackage builds a GrammarPackage from the root grammar tree.
 
-Walks the tree to collect rules, tokens, and nest specs; assigns node paths if needed;
-then computes nullable, first, and follow sets. Panics if the root grammar is nil.
-Duplicate rule-root GrammarIDs panic (engine error).
+Walks the tree to assign GrammarKey from NodePath (XXH3), collect rules, tokens, nest specs,
+and populate NodeByGrammarKey and NodesByGrammarLabel. Then computes nullable, first, follow.
+Panics if the root grammar is nil. Panics only on duplicate GrammarLabel among context-boundary nodes.
 
 entryRule is the executable parser rule for the entry production; pass it when the
 package will be used to create a parser. Pass nil for analysis-only use (e.g. debug dumps).
@@ -97,33 +99,32 @@ func ProducePackage[
 	TNodeKind,
 	TLexerState comparable,
 ](
-	g *Grammar[TToken],
+	root *Grammar[TToken],
 	name string,
 	version string,
 	entryRule *ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 ) GrammarPackage[TObservation, TToken, TTokenRole, TNodeKind, TLexerState] {
-	if g == nil {
+	if root == nil {
 		panic("ProducePackage: root grammar is nil")
 	}
 
-	// Ensure node paths assigned once for entire tree
-	if g.NodePath == nil {
-		g.FinalizeNodePaths()
+	if root.NodePath == nil {
+		root.FinalizeNodePaths()
 	}
 
-	rules := make(map[GrammarID]*Grammar[TToken])
+	hasher := hash.XXH3HasherCreateWithSeed(0)
+	rules := make(map[GrammarLabel]*Grammar[TToken])
 	tokenSet := make(TokenSet[TToken])
 	nests := make([]NestSpec[TToken], 0)
-	tokenNodeByID := make(map[GrammarID]*Grammar[TToken])
-	seenGrammarIDs := make(map[GrammarID]struct{})
-	duplicateIDs := make(map[GrammarID]struct{})
+	nodeByGrammarKey := make(map[GrammarKey]*Grammar[TToken])
+	nodesByGrammarLabel := make(map[GrammarLabel][]*Grammar[TToken])
+	duplicateContextBoundaryLabels := make(map[GrammarLabel]struct{})
 
-	// Single unified walk
-	collectAll(g, rules, tokenSet, &nests, tokenNodeByID, seenGrammarIDs, duplicateIDs)
+	collectAll(hasher, root, rules, tokenSet, &nests, nodeByGrammarKey, nodesByGrammarLabel, duplicateContextBoundaryLabels)
 
-	if len(duplicateIDs) > 0 {
-		ids := make([]string, 0, len(duplicateIDs))
-		for id := range duplicateIDs {
+	if len(duplicateContextBoundaryLabels) > 0 {
+		ids := make([]string, 0, len(duplicateContextBoundaryLabels))
+		for id := range duplicateContextBoundaryLabels {
 			ids = append(ids, string(id))
 		}
 		sort.Strings(ids)
@@ -131,7 +132,7 @@ func ProducePackage[
 			Separator: ", ",
 			Quote:     true,
 		})
-		panic(fmt.Sprintf("syntaxa: duplicate grammar IDs in grammar package (engine error): %s", list))
+		panic(fmt.Sprintf("syntaxa: duplicate grammar labels among context-boundary nodes (engine error): %s", list))
 	}
 
 	tokensUsed := make([]TToken, 0, len(tokenSet))
@@ -139,41 +140,42 @@ func ProducePackage[
 		tokensUsed = append(tokensUsed, t)
 	}
 
-	analysis := computeAnalysisSingleTree(g)
-	pathToGrammarID := buildPathToGrammarID(g)
+	analysis := computeAnalysisSingleTree(root)
+	pathToGrammarLabel := buildPathToGrammarLabel(root)
 
 	return GrammarPackage[TObservation, TToken, TTokenRole, TNodeKind, TLexerState]{
-		Name:                name,
-		Version:             version,
-		EntryRule:           g.GrammarID,
-		Rules:               rules,
-		TokensUsed:          tokensUsed,
-		Nests:               nests,
-		Analysis:            analysis,
-		PathToGrammarID:     pathToGrammarID,
-		TokenNodeByID:       tokenNodeByID,
-		EntryRuleParserRule: entryRule,
+		Name:                 name,
+		Version:              version,
+		EntryRule:            root.GrammarLabel,
+		Rules:                rules,
+		TokensUsed:           tokensUsed,
+		Nests:                nests,
+		Analysis:             analysis,
+		PathToGrammarLabel:   pathToGrammarLabel,
+		NodeByGrammarKey:     nodeByGrammarKey,
+		NodesByGrammarLabel:  nodesByGrammarLabel,
+		EntryRuleParserRule:  entryRule,
 	}
 }
 
 /*
-buildPathToGrammarID walks the grammar tree and builds a map from each node's path (NodeKey) to its GrammarID.
-Used by the debugger to display analysis entries as "GrammarID (path)" instead of path alone.
+buildPathToGrammarLabel walks the grammar tree and builds a map from each node's path (NodeKey) to its GrammarLabel.
+Used by the debugger to display analysis entries as "GrammarLabel (path)" instead of path alone.
 */
-func buildPathToGrammarID[TToken comparable](g *Grammar[TToken]) map[NodeKey]GrammarID {
-	out := make(map[NodeKey]GrammarID)
-	buildPathToGrammarIDRec(g, out)
+func buildPathToGrammarLabel[TToken comparable](g *Grammar[TToken]) map[NodeKey]GrammarLabel {
+	out := make(map[NodeKey]GrammarLabel)
+	buildPathToGrammarLabelRec(g, out)
 	return out
 }
 
-func buildPathToGrammarIDRec[TToken comparable](g *Grammar[TToken], out map[NodeKey]GrammarID) {
+func buildPathToGrammarLabelRec[TToken comparable](g *Grammar[TToken], out map[NodeKey]GrammarLabel) {
 	if g == nil || g.NodePath == nil {
 		return
 	}
 	key := nodeKeyFromPath(*g.NodePath)
-	out[key] = g.GrammarID
+	out[key] = g.GrammarLabel
 	for _, c := range g.Children {
-		buildPathToGrammarIDRec(c, out)
+		buildPathToGrammarLabelRec(c, out)
 	}
 }
 
@@ -193,64 +195,57 @@ func NestSpecsOpenTokenCounts[TToken comparable](nests []NestSpec[TToken]) map[T
 // ============================================================
 
 /*
-collectAll walks the grammar tree and populates rules, tokenSet, nests, and tokenNodeByID.
-
-Every node's GrammarID must be unique across the whole tree (empty IDs are ignored).
-Duplicate IDs are recorded in duplicateIDs; caller panics once after the walk with all duplicates.
-Only nodes marked as rule roots (e.g. from Rule.Root) are added to rules. Tokens from GToken
-and GNest are added to tokenSet; GNest nodes are appended to nests. For GToken nodes, the first
-node per GrammarID is stored in tokenNodeByID (if non-nil).
+collectAll walks the grammar tree: assigns GrammarKey from NodePath (XXH3), populates rules,
+tokenSet, nests, NodeByGrammarKey, and NodesByGrammarLabel. When two distinct context-boundary
+nodes share the same GrammarLabel, that label is recorded in duplicateContextBoundaryLabels (caller panics).
 */
 func collectAll[TToken comparable](
+	hasher *hash.XXH3Hasher,
 	g *Grammar[TToken],
-	rules map[GrammarID]*Grammar[TToken],
+	rules map[GrammarLabel]*Grammar[TToken],
 	tokenSet TokenSet[TToken],
 	nests *[]NestSpec[TToken],
-	tokenNodeByID map[GrammarID]*Grammar[TToken],
-	seenGrammarIDs map[GrammarID]struct{},
-	duplicateIDs map[GrammarID]struct{},
+	nodeByGrammarKey map[GrammarKey]*Grammar[TToken],
+	nodesByGrammarLabel map[GrammarLabel][]*Grammar[TToken],
+	duplicateContextBoundaryLabels map[GrammarLabel]struct{},
 ) {
 	if g == nil {
 		return
 	}
 
-	if g.GrammarID != "" {
-		if _, seen := seenGrammarIDs[g.GrammarID]; seen {
-			duplicateIDs[g.GrammarID] = struct{}{}
-		} else {
-			seenGrammarIDs[g.GrammarID] = struct{}{}
-		}
+	if g.NodePath != nil {
+		pathBytes := []byte(string(*g.NodePath))
+		k := GrammarKey(hash.XXH3HasherHash64(hasher, pathBytes))
+		g.GrammarKey = k
+		nodeByGrammarKey[k] = g
 	}
-
+	if g.GrammarLabel != "" {
+		nodesByGrammarLabel[g.GrammarLabel] = append(nodesByGrammarLabel[g.GrammarLabel], g)
+	}
 	if g.IsContextBoundary {
-		rules[g.GrammarID] = g
+		if existing, seen := rules[g.GrammarLabel]; seen && existing != g {
+			duplicateContextBoundaryLabels[g.GrammarLabel] = struct{}{}
+		}
+		rules[g.GrammarLabel] = g
 	}
 
 	switch g.Kind {
-
 	case GToken:
 		tokenSet[g.Token] = struct{}{}
-		if tokenNodeByID != nil {
-			if _, exists := tokenNodeByID[g.GrammarID]; !exists {
-				tokenNodeByID[g.GrammarID] = g
-			}
-		}
-
 	case GNest:
 		tokenSet[*g.OpenToken] = struct{}{}
 		tokenSet[*g.CloseToken] = struct{}{}
-
 		*nests = append(*nests, NestSpec[TToken]{
-			ID:        g.GrammarID,
+			ID:        g.GrammarLabel,
 			Open:      *g.OpenToken,
 			Close:     *g.CloseToken,
-			OwnerRule: g.GrammarID,
+			OwnerRule: g.GrammarLabel,
 			Node:      g,
 		})
 	}
 
 	for _, child := range g.Children {
-		collectAll(child, rules, tokenSet, nests, tokenNodeByID, seenGrammarIDs, duplicateIDs)
+		collectAll(hasher, child, rules, tokenSet, nests, nodeByGrammarKey, nodesByGrammarLabel, duplicateContextBoundaryLabels)
 	}
 }
 
@@ -261,7 +256,7 @@ func collectAll[TToken comparable](
 /*
 computeAnalysisSingleTree runs nullable, first, and follow analysis on the grammar tree.
 
-Returns a GrammarAnalysis with maps keyed by NodeKey. The root's GrammarID is used
+Returns a GrammarAnalysis with maps keyed by NodeKey. The root's GrammarLabel is used
 as the current rule when descending; nested rule roots switch the current rule.
 */
 func computeAnalysisSingleTree[TToken comparable](root *Grammar[TToken]) *GrammarAnalysis[TToken] {
@@ -270,18 +265,18 @@ func computeAnalysisSingleTree[TToken comparable](root *Grammar[TToken]) *Gramma
 	follow := make(map[NodeKey]TokenSet[TToken])
 
 	// 1. Nullable (Bottom-up pass)
-	computeNullable(root, root.GrammarID, nullable)
+	computeNullable(root, root.GrammarLabel, nullable)
 
 	// 2. First Sets (Fixed-point iteration)
 	// Must repeat until no more tokens can be added to any set
 	for changed := true; changed; {
-		changed = propagateFirst(root, root.GrammarID, nullable, first)
+		changed = propagateFirst(root, root.GrammarLabel, nullable, first)
 	}
 
 	// 3. Follow Sets (Fixed-point iteration)
-	initializeFollow(root, root.GrammarID, follow)
+	initializeFollow(root, root.GrammarLabel, follow)
 	for changed := true; changed; {
-		changed = propagateFollow(root, root.GrammarID, nullable, first, follow)
+		changed = propagateFollow(root, root.GrammarLabel, nullable, first, follow)
 	}
 
 	return &GrammarAnalysis[TToken]{Nullable: nullable, First: first, Follow: follow}
@@ -298,7 +293,7 @@ Fills the out map keyed by NodeKey. Returns true if the current node is nullable
 GEpsilon and GOptional are nullable; GToken and GNest are not; GRepeat is nullable if Min is 0;
 GConcat is nullable iff all children are; GChoice is nullable iff any child is.
 */
-func computeNullable[TToken comparable](g *Grammar[TToken], currentRule GrammarID, out map[NodeKey]bool) bool {
+func computeNullable[TToken comparable](g *Grammar[TToken], currentRule GrammarLabel, out map[NodeKey]bool) bool {
 	key := nodeKeyFromPath(*g.NodePath)
 
 	var res bool
@@ -337,12 +332,12 @@ func computeNullable[TToken comparable](g *Grammar[TToken], currentRule GrammarI
 // FIRST
 // ============================================================
 
-func propagateFirst[TToken comparable](g *Grammar[TToken], currentRule GrammarID, nullable map[NodeKey]bool, out map[NodeKey]TokenSet[TToken]) bool {
+func propagateFirst[TToken comparable](g *Grammar[TToken], currentRule GrammarLabel, nullable map[NodeKey]bool, out map[NodeKey]TokenSet[TToken]) bool {
 	if g == nil {
 		return false
 	}
 	if g.IsContextBoundary {
-		currentRule = g.GrammarID
+		currentRule = g.GrammarLabel
 	}
 
 	key := nodeKeyFromPath(*g.NodePath)
@@ -392,7 +387,7 @@ func propagateFirst[TToken comparable](g *Grammar[TToken], currentRule GrammarID
 
 func propagateFollow[TToken comparable](
 	g *Grammar[TToken],
-	currentRule GrammarID,
+	currentRule GrammarLabel,
 	nullable map[NodeKey]bool,
 	first map[NodeKey]TokenSet[TToken],
 	follow map[NodeKey]TokenSet[TToken],
@@ -403,7 +398,7 @@ func propagateFollow[TToken comparable](
 
 	// 1. Update context if this node is an explicit Rule root
 	if g.IsContextBoundary {
-		currentRule = g.GrammarID
+		currentRule = g.GrammarLabel
 	}
 
 	changed := false
@@ -521,11 +516,11 @@ func getOrInit[TToken comparable](m map[NodeKey]TokenSet[TToken], key NodeKey) T
 
 func initializeFollow[TToken comparable](
 	g *Grammar[TToken],
-	currentRule GrammarID,
+	currentRule GrammarLabel,
 	follow map[NodeKey]TokenSet[TToken],
 ) {
-	if g.GrammarID != currentRule {
-		currentRule = g.GrammarID
+	if g.GrammarLabel != currentRule {
+		currentRule = g.GrammarLabel
 	}
 
 	key := nodeKeyFromPath(*g.NodePath)
@@ -560,7 +555,7 @@ func mergeInto[TToken comparable](
 nodeKeyFromPath builds a NodeKey from a node path.
 
 NodePath is unique per node in the tree. Using path as the sole key ensures analysis maps
-(nullable, first, follow) are consistent when multiple nodes share the same GrammarID.
+(nullable, first, follow) are consistent when multiple nodes share the same GrammarLabel.
 */
 func nodeKeyFromPath(path NodePath) NodeKey {
 	return NodeKey(path)

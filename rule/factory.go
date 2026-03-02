@@ -57,7 +57,7 @@ Edge cases:
 - If the current token does not match, a diagnostic is reported and the rule fails.
 */
 func (t *tokenEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) Expect(
-	grammarID syntaxa.GrammarID,
+	grammarID syntaxa.GrammarLabel,
 	outputNodeKind TNodeKind,
 	token TToken,
 ) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
@@ -82,7 +82,7 @@ Edge cases:
 - Same as Expect for mismatch; no node is ever produced.
 */
 func (t *tokenEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) ExpectVirtual(
-	grammarID syntaxa.GrammarID,
+	grammarID syntaxa.GrammarLabel,
 	token TToken,
 ) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
 	var zeroKind TNodeKind
@@ -109,7 +109,7 @@ Edge cases:
 - Error message includes a formatted list of expected tokens via the builder's tokenFormatter.
 */
 func (t *tokenEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) ExpectOneOf(
-	grammarID syntaxa.GrammarID,
+	grammarID syntaxa.GrammarLabel,
 	outputNodeKind TNodeKind,
 	tokens ...TToken,
 ) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
@@ -133,7 +133,7 @@ Prerequisites:
 - firstToken and secondToken are the exact token values in order.
 */
 func (t *tokenEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) ExpectPair(
-	grammarID syntaxa.GrammarID,
+	grammarID syntaxa.GrammarLabel,
 	outputNodeKind TNodeKind,
 	firstToken, secondToken TToken,
 ) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
@@ -186,9 +186,9 @@ three separate nodes (construct, first token, second token) for override/metasco
 Same LST shape and execution semantics as ExpectPair.
 */
 func (t *tokenEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) ExpectPairWithChildGrammarIDs(
-	concatID syntaxa.GrammarID,
-	firstTokenID syntaxa.GrammarID,
-	secondTokenID syntaxa.GrammarID,
+	concatID syntaxa.GrammarLabel,
+	firstTokenID syntaxa.GrammarLabel,
+	secondTokenID syntaxa.GrammarLabel,
 	outputNodeKind TNodeKind,
 	firstToken, secondToken TToken,
 ) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
@@ -203,7 +203,6 @@ func (t *tokenEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 		syntaxa.Token(firstTokenID, firstToken),
 		syntaxa.Token(secondTokenID, secondToken),
 	)
-	syntaxa.MarkAsContextBoundary(grammar)
 	rule := func(ctx *syntaxa.ExecRuleContext[
 		TObservation, TToken, TTokenRole, TLexerState, TNodeKind,
 	]) Result[TObservation, TToken, TTokenRole, TNodeKind] {
@@ -236,7 +235,7 @@ func (t *tokenEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 
 func (t *tokenEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) expectCore(
 	ruleName string,
-	grammarID syntaxa.GrammarID,
+	grammarID syntaxa.GrammarLabel,
 	outputNodeKind TNodeKind,
 	addNode bool,
 	tokens ...TToken,
@@ -349,7 +348,7 @@ Edge cases:
 - TrailingForbidden with a trailing separator reports an error at the separator.
 */
 func (t *tokenEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) List(
-	grammarID syntaxa.GrammarID,
+	grammarID syntaxa.GrammarLabel,
 	listOpenToken, elementToken, separatorToken, listEndToken TToken,
 	listNodeKind, elementNodeKind TNodeKind,
 	allowEmptyList bool,
@@ -405,7 +404,7 @@ Prerequisites:
 - rules must not be empty.
 */
 func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) TransparentSequence(
-	grammarID syntaxa.GrammarID,
+	grammarID syntaxa.GrammarLabel,
 	rules ...Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 ) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
 	name := r.sharedCore.createRuleName("TransparentSequence", grammarID)
@@ -455,7 +454,7 @@ getListGrammar builds the grammar IR for a list production: open, (elem sep)* el
 with optional empty list and configurable trailing separator mode.
 */
 func (t *tokenEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) getListGrammar(
-	grammarID syntaxa.GrammarID,
+	grammarID syntaxa.GrammarLabel,
 	listOpenToken, elementToken, separatorToken, listEndToken TToken,
 	allowEmptyList bool,
 	mode TrailingSeparatorMode,
@@ -664,7 +663,7 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 	rule Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 ) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
 	name := syntaxa.RuleLabel(fmt.Sprintf("Optional(%s)", rule.GetName()))
-	identity := r.sharedCore.createRuleIdentity(name, rule.GetGrammarID(), rule.GetExpectedLabel())
+	identity := r.sharedCore.createRuleIdentity(name, rule.GetGrammarLabel(), rule.GetExpectedLabel())
 	return r.sharedCore.constructOptionalRule(
 		identity,
 		func(ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) Result[TObservation, TToken, TTokenRole, TNodeKind] {
@@ -676,7 +675,7 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 			return result
 		},
 		rule.GetRecoveryTokens(),
-		syntaxa.Optional(rule.GetGrammarID(), rule.GetGrammar()),
+		syntaxa.Optional(rule.GetGrammarLabel(), rule.GetGrammar()),
 	)
 }
 
@@ -729,7 +728,7 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 	shouldStart func(ctx *syntaxa.SelectRuleContext[TObservation, TToken, TTokenRole]) bool,
 ) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
 	name := syntaxa.RuleLabel(fmt.Sprintf("OptionalWhen(%s)", rule.GetName()))
-	identity := r.sharedCore.createRuleIdentity(name, rule.GetGrammarID(), rule.GetExpectedLabel())
+	identity := r.sharedCore.createRuleIdentity(name, rule.GetGrammarLabel(), rule.GetExpectedLabel())
 
 	return r.sharedCore.constructOptionalRule(
 		identity,
@@ -741,7 +740,7 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 			return ctx.ExecuteRule(rule, syntaxa.ExecutionNormal)
 		},
 		rule.GetRecoveryTokens(),
-		syntaxa.Optional(rule.GetGrammarID(), rule.GetGrammar()),
+		syntaxa.Optional(rule.GetGrammarLabel(), rule.GetGrammar()),
 	)
 }
 
@@ -767,7 +766,7 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 	predicate func(ctx *syntaxa.SelectRuleContext[TObservation, TToken, TTokenRole]) bool,
 ) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
 	name := syntaxa.RuleLabel(fmt.Sprintf("Predict(%s)", rule.GetName()))
-	identity := r.sharedCore.createRuleIdentity(name, rule.GetGrammarID(), rule.GetExpectedLabel())
+	identity := r.sharedCore.createRuleIdentity(name, rule.GetGrammarLabel(), rule.GetExpectedLabel())
 	exec := func(ctx *syntaxa.ExecRuleContext[
 		TObservation, TToken, TTokenRole, TLexerState, TNodeKind,
 	]) Result[TObservation, TToken, TTokenRole, TNodeKind] {
@@ -805,7 +804,7 @@ Prerequisites:
 - suffixToken is the token that triggers wrapping when present after rule success.
 */
 func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) OptionalSuffix(
-	grammarID syntaxa.GrammarID,
+	grammarID syntaxa.GrammarLabel,
 	wrapNodeKind TNodeKind,
 	rule Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	suffixToken TToken,
@@ -871,7 +870,7 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 ) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
 	identity := r.sharedCore.createRuleIdentity(
 		syntaxa.RuleLabel(fmt.Sprintf("Required(%s)", rule.GetName())),
-		rule.GetGrammarID(),
+		rule.GetGrammarLabel(),
 		rule.GetExpectedLabel(),
 	)
 
@@ -912,7 +911,7 @@ Edge cases:
 - Later rule failure: failure is propagated unchanged so diagnostics (e.g. expected semicolon) are reported.
 */
 func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) Root(
-	grammarID syntaxa.GrammarID,
+	grammarID syntaxa.GrammarLabel,
 	nodeKind TNodeKind,
 	mustConsume bool,
 	rules ...Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
@@ -987,7 +986,7 @@ Edge cases:
 - Any rule FailureError or later FailureNoMatch: Sequence fails with FailureError.
 */
 func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) Sequence(
-	grammarID syntaxa.GrammarID,
+	grammarID syntaxa.GrammarLabel,
 	nodeKind TNodeKind,
 	rules ...Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 ) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
@@ -1013,7 +1012,7 @@ Edge cases:
 - Same as Sequence for success/failure; recovery attempts will consider blockEndToken.
 */
 func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) Block(
-	grammarID syntaxa.GrammarID,
+	grammarID syntaxa.GrammarLabel,
 	nodeKind TNodeKind,
 	blockEndToken TToken,
 	rules ...Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
@@ -1044,7 +1043,7 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 	// Build grammar IR
 	// ---------------------------
 
-	grammar := r.buildConcatGrammarFromRules(identity.GrammarID, rules)
+	grammar := r.buildConcatGrammarFromRules(identity.GrammarLabel, rules)
 
 	// ---------------------------
 	// Runtime execution
@@ -1150,7 +1149,7 @@ buildConcatGrammarFromRules builds a Concat grammar from the given rules' gramma
 Used by Root and listCore.
 */
 func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) buildConcatGrammarFromRules(
-	grammarID syntaxa.GrammarID,
+	grammarID syntaxa.GrammarLabel,
 	rules []Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 ) *syntaxa.Grammar[TToken] {
 	children := r.grammarsFromRules(rules)
@@ -1230,7 +1229,7 @@ Shared by NOrMore and TransparentNOrMore to avoid duplicated grammar setup and l
 */
 func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) constructNOrMoreRule(
 	ruleName string,
-	grammarID syntaxa.GrammarID,
+	grammarID syntaxa.GrammarLabel,
 	min int,
 	rule Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	makeContainer func(ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind],
@@ -1290,7 +1289,7 @@ Edge cases:
 - After FailureError, progress is checked via token position; no progress means immediate propagation.
 */
 func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) NOrMore(
-	grammarID syntaxa.GrammarID,
+	grammarID syntaxa.GrammarLabel,
 	nodeKind TNodeKind,
 	min int,
 	rule Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
@@ -1315,7 +1314,7 @@ ZeroOrMore matches the rule zero or more times.
 It is equivalent to NOrMore(grammarID, nodeKind, 0, rule). On success, a node of nodeKind is created and each successful match's node is attached; zero matches yields an empty container node.
 */
 func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) ZeroOrMore(
-	grammarID syntaxa.GrammarID,
+	grammarID syntaxa.GrammarLabel,
 	nodeKind TNodeKind,
 	rule Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 ) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
@@ -1328,7 +1327,7 @@ OneOrMore matches the rule one or more times.
 It is equivalent to NOrMore(grammarID, nodeKind, 1, rule). Fails with FailureNoMatch if the rule does not match at least once.
 */
 func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) OneOrMore(
-	grammarID syntaxa.GrammarID,
+	grammarID syntaxa.GrammarLabel,
 	nodeKind TNodeKind,
 	rule Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 ) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
@@ -1336,7 +1335,7 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 }
 
 func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) TransparentNOrMore(
-	grammarID syntaxa.GrammarID,
+	grammarID syntaxa.GrammarLabel,
 	min int,
 	rule Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 ) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
@@ -1356,7 +1355,7 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 }
 
 func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) TransparentZeroOrMore(
-	grammarID syntaxa.GrammarID,
+	grammarID syntaxa.GrammarLabel,
 	rule Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 ) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
 	return r.TransparentNOrMore(grammarID, 0, rule)
@@ -1387,7 +1386,7 @@ Edge cases:
 - closeToken mismatch after inner success: syntax error and FailureError.
 */
 func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) Nest(
-	grammarID syntaxa.GrammarID,
+	grammarID syntaxa.GrammarLabel,
 	nodeKind TNodeKind,
 	openToken, closeToken TToken,
 	innerRule Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
@@ -1466,7 +1465,7 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 }
 
 func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) TransparentNest(
-	grammarID syntaxa.GrammarID,
+	grammarID syntaxa.GrammarLabel,
 	openToken, closeToken TToken,
 	innerRule Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 ) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
@@ -1617,7 +1616,7 @@ Use cases:
 - Matching virtual prefixes where the LST node is entirely defined by the inner rule.
 */
 func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) Prefixed(
-	grammarID syntaxa.GrammarID,
+	grammarID syntaxa.GrammarLabel,
 	prefixToken TToken,
 	innerRule Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 ) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
@@ -1673,7 +1672,7 @@ Prerequisites:
 - rules must contain at least one valid parser rule.
 */
 func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) Choice(
-	grammarID syntaxa.GrammarID,
+	grammarID syntaxa.GrammarLabel,
 	rules ...Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 ) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
 
@@ -1704,7 +1703,7 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 buildChoiceGrammarFromRules builds a Choice grammar from the given rules and marks it as a context boundary.
 */
 func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) buildChoiceGrammarFromRules(
-	grammarID syntaxa.GrammarID,
+	grammarID syntaxa.GrammarLabel,
 	rules []Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 ) *syntaxa.Grammar[TToken] {
 	children := r.grammarsFromRules(rules)
@@ -1915,19 +1914,19 @@ func (s *sharedCore[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) b
 
 func (s *sharedCore[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) createRuleName(
 	rule string,
-	grammarID syntaxa.GrammarID,
+	grammarID syntaxa.GrammarLabel,
 ) syntaxa.RuleLabel {
 	return syntaxa.RuleLabel(fmt.Sprintf("Rule %s (id:%s)", rule, grammarID))
 }
 
 func (s *sharedCore[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) createRuleIdentity(
 	name syntaxa.RuleLabel,
-	grammarID syntaxa.GrammarID,
+	grammarID syntaxa.GrammarLabel,
 	expectedLabel string,
 ) syntaxa.RuleIdentity {
 	return syntaxa.RuleIdentity{
 		RuleName:      name,
-		GrammarID:     grammarID,
+		GrammarLabel:     grammarID,
 		ExpectedLabel: expectedLabel,
 	}
 }

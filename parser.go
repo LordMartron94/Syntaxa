@@ -316,7 +316,7 @@ func syntaxaParserExecuteRule[
 
 		if mode == ExecutionNormal {
 			if ruleResult.Kind == FailureError {
-				isProgramRule := rule.GetGrammarID() == parser.programRule.GetGrammarID()
+				isProgramRule := rule.GetGrammarLabel() == parser.programRule.GetGrammarLabel()
 				if !isProgramRule && !ctx.Recovery.IsRecoveryToken(lexemePreRule.Token) {
 					wouldBeEmpty := ctx.Error.sink.currentFrameWouldBeEmptyOnPop()
 					bestPos, ok := ctx.Error.sink.currentBestPosition()

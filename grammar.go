@@ -59,16 +59,25 @@ const (
 /*
 RuleLabel is an optional human-readable label for a grammar rule.
 
-Used for diagnostics and tooling; the canonical identifier for a rule is GrammarID.
+Used for diagnostics and tooling; the semantic type of a rule is GrammarLabel.
 */
 type RuleLabel string
 
 /*
-GrammarID uniquely identifies a grammar rule within a grammar package.
+GrammarLabel identifies the kind of production (e.g. PATTERN CHAR LITERAL, LEX RULE).
 
-Used as the key in Rules maps and to reference the entry rule and nest owners.
+Semantic type; may appear on multiple nodes. Used for configuration, debug, and as the
+Rules map key for context-boundary nodes (where it must be unique).
 */
-type GrammarID string
+type GrammarLabel string
+
+/*
+GrammarKey uniquely identifies a grammar node instance (topological address).
+
+Derived from NodePath via XXH3 hash during package production. Used for 1:1 maps and
+DAG traversal. Zero until set by ProducePackage.
+*/
+type GrammarKey uint64
 
 /*
 NodePath is a dot-separated path from the rule root to a node (e.g. "0", "0.1", "0.2.0").
@@ -115,7 +124,7 @@ Field semantics depend on Kind:
     Min and Max are unused.
 
   - Common
-    GrammarID identifies the rule. RuleLabel is optional. NodePath is filled by FinalizeNodePaths.
+    GrammarLabel identifies the kind of production. GrammarKey is set from NodePath during package production. RuleLabel is optional. NodePath is filled by FinalizeNodePaths.
 
   - Recovery (optional, for rule-root nodes)
     RecoveryTokens and NoConsumeOnRecoveryTokens describe the recovery boundaries for the rule
@@ -135,7 +144,8 @@ pattern derivation, and parser execution from a single authoritative grammar
 definition.
 */
 type Grammar[TToken comparable] struct {
-	GrammarID GrammarID
+	GrammarLabel GrammarLabel
+	GrammarKey   GrammarKey
 
 	/* Kind defines the grammar combinator represented by this node. */
 	Kind GrammarKind
@@ -302,11 +312,11 @@ func MarkAsContextBoundary[TToken comparable](g *Grammar[TToken]) {
 /*
 Token constructs an atomic terminal grammar node that matches exactly one token.
 */
-func Token[TToken comparable](id GrammarID, tok TToken) *Grammar[TToken] {
+func Token[TToken comparable](label GrammarLabel, tok TToken) *Grammar[TToken] {
 	return &Grammar[TToken]{
-		GrammarID: id,
-		Kind:      GToken,
-		Token:     tok,
+		GrammarLabel: label,
+		Kind:         GToken,
+		Token:        tok,
 	}
 }
 
@@ -316,15 +326,15 @@ Concat constructs a sequential composition of grammar nodes.
 All children must match in order for the production to succeed.
 At least one child must be provided.
 */
-func Concat[TToken comparable](id GrammarID, children ...*Grammar[TToken]) *Grammar[TToken] {
+func Concat[TToken comparable](label GrammarLabel, children ...*Grammar[TToken]) *Grammar[TToken] {
 	if len(children) == 0 {
 		panic("Concat: at least one child grammar required")
 	}
 
 	return &Grammar[TToken]{
-		GrammarID: id,
-		Kind:      GConcat,
-		Children:  children,
+		GrammarLabel: label,
+		Kind:         GConcat,
+		Children:     children,
 	}
 }
 
@@ -347,13 +357,13 @@ Prerequisites:
 Edge cases:
 - Panics if body is nil
 */
-func Nest[TToken comparable](id GrammarID, openToken TToken, closeToken TToken, body *Grammar[TToken]) *Grammar[TToken] {
+func Nest[TToken comparable](label GrammarLabel, openToken TToken, closeToken TToken, body *Grammar[TToken]) *Grammar[TToken] {
 	return &Grammar[TToken]{
-		GrammarID:  id,
-		Kind:       GNest,
-		Children:   []*Grammar[TToken]{body},
-		OpenToken:  &openToken,
-		CloseToken: &closeToken,
+		GrammarLabel: label,
+		Kind:         GNest,
+		Children:     []*Grammar[TToken]{body},
+		OpenToken:    &openToken,
+		CloseToken:   &closeToken,
 	}
 }
 
@@ -363,15 +373,15 @@ Choice constructs an alternation between grammar nodes.
 Exactly one of the children must match.
 At least one child must be provided.
 */
-func Choice[TToken comparable](id GrammarID, children ...*Grammar[TToken]) *Grammar[TToken] {
+func Choice[TToken comparable](label GrammarLabel, children ...*Grammar[TToken]) *Grammar[TToken] {
 	if len(children) == 0 {
 		panic("Choice: at least one child grammar required")
 	}
 
 	return &Grammar[TToken]{
-		GrammarID: id,
-		Kind:      GChoice,
-		Children:  children,
+		GrammarLabel: label,
+		Kind:         GChoice,
+		Children:     children,
 	}
 }
 
@@ -387,7 +397,7 @@ Invariants:
   - min must be >= 0
   - if max != nil, *max must be >= min
 */
-func Repeat[TToken comparable](id GrammarID, body *Grammar[TToken], min int, max *int) *Grammar[TToken] {
+func Repeat[TToken comparable](label GrammarLabel, body *Grammar[TToken], min int, max *int) *Grammar[TToken] {
 	if body == nil {
 		panic("Repeat: body grammar must not be nil")
 	}
@@ -399,11 +409,11 @@ func Repeat[TToken comparable](id GrammarID, body *Grammar[TToken], min int, max
 	}
 
 	return &Grammar[TToken]{
-		GrammarID: id,
-		Kind:      GRepeat,
-		Children:  []*Grammar[TToken]{body},
-		Min:       min,
-		Max:       max,
+		GrammarLabel: label,
+		Kind:         GRepeat,
+		Children:     []*Grammar[TToken]{body},
+		Min:          min,
+		Max:          max,
 	}
 }
 
@@ -412,15 +422,15 @@ Optional constructs an optional grammar node.
 
 Equivalent to Repeat(body, 0, 1) but preserved explicitly for semantic clarity.
 */
-func Optional[TToken comparable](id GrammarID, body *Grammar[TToken]) *Grammar[TToken] {
+func Optional[TToken comparable](label GrammarLabel, body *Grammar[TToken]) *Grammar[TToken] {
 	if body == nil {
 		panic("Optional: body grammar must not be nil")
 	}
 
 	return &Grammar[TToken]{
-		GrammarID: id,
-		Kind:      GOptional,
-		Children:  []*Grammar[TToken]{body},
+		GrammarLabel: label,
+		Kind:         GOptional,
+		Children:     []*Grammar[TToken]{body},
 	}
 }
 
@@ -429,10 +439,10 @@ Epsilon constructs an empty production grammar node.
 
 This always succeeds without consuming input.
 */
-func Epsilon[TToken comparable](id GrammarID) *Grammar[TToken] {
+func Epsilon[TToken comparable](label GrammarLabel) *Grammar[TToken] {
 	return &Grammar[TToken]{
-		GrammarID: id,
-		Kind:      GEpsilon,
+		GrammarLabel: label,
+		Kind:         GEpsilon,
 	}
 }
 
@@ -455,8 +465,8 @@ Prerequisites:
 Edge cases:
 - Can succeed without consuming input (zero repetitions)
 */
-func ZeroOrMore[TToken comparable](id GrammarID, body *Grammar[TToken]) *Grammar[TToken] {
-	return Repeat(id, body, 0, nil)
+func ZeroOrMore[TToken comparable](label GrammarLabel, body *Grammar[TToken]) *Grammar[TToken] {
+	return Repeat(label, body, 0, nil)
 }
 
 /*
@@ -478,8 +488,8 @@ Prerequisites:
 Edge cases:
 - Fails if no occurrence of body matches (unlike ZeroOrMore)
 */
-func OneOrMore[TToken comparable](id GrammarID, body *Grammar[TToken]) *Grammar[TToken] {
-	return Repeat(id, body, 1, nil)
+func OneOrMore[TToken comparable](label GrammarLabel, body *Grammar[TToken]) *Grammar[TToken] {
+	return Repeat(label, body, 1, nil)
 }
 
 /*
@@ -503,9 +513,9 @@ Edge cases:
 - Panics if body is nil or n < 0 (via Repeat)
 - Fails if fewer or more than n matches occur
 */
-func Exactly[TToken comparable](id GrammarID, body *Grammar[TToken], n int) *Grammar[TToken] {
+func Exactly[TToken comparable](label GrammarLabel, body *Grammar[TToken], n int) *Grammar[TToken] {
 	max := n
-	return Repeat(id, body, n, &max)
+	return Repeat(label, body, n, &max)
 }
 
 /*
@@ -529,8 +539,8 @@ Edge cases:
 - Panics if body is nil or max < 0 (via Repeat)
 - Succeeds with zero matches; fails only if more than max matches would be required
 */
-func AtMost[TToken comparable](id GrammarID, body *Grammar[TToken], max int) *Grammar[TToken] {
-	return Repeat(id, body, 0, &max)
+func AtMost[TToken comparable](label GrammarLabel, body *Grammar[TToken], max int) *Grammar[TToken] {
+	return Repeat(label, body, 0, &max)
 }
 
 /*
@@ -555,9 +565,9 @@ Edge cases:
 - Panics if body is nil, min < 0, or max < min (via Repeat)
 - Fails if fewer than min or more than max matches occur
 */
-func Between[TToken comparable](id GrammarID, body *Grammar[TToken], min, max int) *Grammar[TToken] {
+func Between[TToken comparable](label GrammarLabel, body *Grammar[TToken], min, max int) *Grammar[TToken] {
 	m := max
-	return Repeat(id, body, min, &m)
+	return Repeat(label, body, min, &m)
 }
 
 /*
