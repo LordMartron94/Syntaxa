@@ -52,9 +52,9 @@ syntaxa
 - **Grammar IR**: `Grammar[TToken]` with kinds GToken, GConcat, GChoice, GRepeat, GOptional, GEpsilon, GNest. Constructors: `Token`, `Concat`, `Choice`, `Repeat`, `Optional`, `ZeroOrMore`, `OneOrMore`, `Nest`, etc.
 - **Rules**: `ParserRule` (identity, executor, contract, recovery tokens, grammar). Created with `ParserRuleCreate`. Executed by the engine; never called directly by the user.
 - **Context**: `ExecRuleContext` exposes `Token` (stream), `Recovery`, `Skip`, `Error`, `ExecuteRule`, `Editor`, `SetLexerState`, `Select`, `Finalization`. Built via `BuildExecRuleContextFromSlice`, `BuildExecRuleContextFromLexerSession`, or `BuildExecRuleContextFromStreamingSession`.
-- **Parser**: `SyntaxaParser` holds the program rule, post-processor, EOF token, root/error node kinds, and options. `SyntaxaParserCreate` builds it; `SyntaxaParserParseWithContext(parser, ctx)` runs the parse.
+- **Parser**: `SyntaxaParser` is built from a grammar package (with entry rule set). `SyntaxaParserCreate(grammarPackage, ...)` takes a `GrammarPackage`; the package must have been produced with an entry rule so the parser can run it. `SyntaxaParserParseWithContext(parser, ctx)` runs the parse.
 - **LST**: `SyntaxaLSTNode` (kind, parent, children, tokens, attributes, span). `LSTEditor` is the only way to create/mutate nodes during parsing (`NewNode`, `NewTransientNode`, `AttachChild`, `Detach`, etc.).
-- **Grammar package**: `Grammar.ProducePackage(name, version)` returns `GrammarPackage` (entry rule, rules map, tokens, nests, analysis). Analysis contains nullable, first, and follow sets keyed by `NodeKey` (from `NodePath`).
+- **Grammar package**: `ProducePackage(rootGrammar, name, version, entryRule)` builds a `GrammarPackage` (entry rule ID, rules map, tokens, nests, analysis, and optionally the entry `ParserRule` for the parser). Pass a non-nil `entryRule` when the package will be used to create a parser; pass nil for analysis-only use. Duplicate rule-root GrammarIDs panic. Analysis contains nullable, first, and follow sets keyed by `NodeKey` (from `NodePath`).
 - **Grammar traversal**: `Walk`, `WalkPre`, `WalkPost`, `WalkBreadth` for strategy-based walks; `GrammarWalkPreWithContext` for pre-order with inherited context (e.g. sync tokens, repeat nesting).
 
 ### `syntaxa/rule` (rule factory)

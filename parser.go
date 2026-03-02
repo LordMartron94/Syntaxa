@@ -111,7 +111,8 @@ Responsibilities:
   - LST assembly
 */
 type SyntaxaParser[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind, TLexerState comparable] struct {
-	programRule ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
+	grammarPackage *GrammarPackage[TObservation, TToken, TTokenRole, TNodeKind, TLexerState]
+	programRule    ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 
 	postProcessor NodePostProcessor[TObservation, TToken, TTokenRole, TNodeKind]
 
@@ -130,12 +131,14 @@ type SyntaxaParser[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind, TLex
 }
 
 /*
-SyntaxaParserCreate constructs a new parser instance.
+SyntaxaParserCreate constructs a new parser instance from a grammar package.
 
+The package must have been produced with an entry rule (ProducePackage(..., &programRule));
+panics if grammarPackage.EntryRuleParserRule is nil.
 nodePostProcessor is optional and allowed to be nil.
 */
 func SyntaxaParserCreate[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind, TLexerState comparable](
-	programRule ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+	grammarPackage *GrammarPackage[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
 	tokenFormatter func(token TToken) string,
 	observationFormatter lexarch.ObservationFormatter[TObservation],
 	nodePostProcessor NodePostProcessor[TObservation, TToken, TTokenRole, TNodeKind],
@@ -143,8 +146,12 @@ func SyntaxaParserCreate[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind
 	rootNodeKind, errorNodeKind TNodeKind,
 	freezeAfterParse bool,
 ) *SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TLexerState] {
+	if grammarPackage == nil || grammarPackage.EntryRuleParserRule == nil {
+		panic("SyntaxaParserCreate: grammar package must have EntryRuleParserRule set (produce package with entry rule)")
+	}
 	return &SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TLexerState]{
-		programRule:          programRule,
+		grammarPackage:       grammarPackage,
+		programRule:          *grammarPackage.EntryRuleParserRule,
 		tokenFormatter:       tokenFormatter,
 		observationFormatter: observationFormatter,
 		postProcessor:        nodePostProcessor,

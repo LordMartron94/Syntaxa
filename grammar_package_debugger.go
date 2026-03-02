@@ -1,6 +1,7 @@
 package syntaxa
 
 import (
+	"cmp"
 	"fmt"
 	"io"
 	"sort"
@@ -17,7 +18,7 @@ GrammarPackageDebugFormatter supplies string rendering for grammar package debug
 All hooks are optional; missing ones fall back to default formatting (e.g. fmt.Sprintf).
 Use for custom token or rule ID display (e.g. to match a GrammarDebugFormatter).
 */
-type GrammarPackageDebugFormatter[TToken comparable] struct {
+type GrammarPackageDebugFormatter[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind, TLexerState comparable] struct {
 	FormatPackageName func(name string) string
 	FormatVersion     func(version string) string
 	FormatGrammarID   func(GrammarID) string
@@ -27,35 +28,35 @@ type GrammarPackageDebugFormatter[TToken comparable] struct {
 	FormatNestSpec    func(NestSpec[TToken]) string
 }
 
-func (f GrammarPackageDebugFormatter[TToken]) packageName(name string) string {
+func (f GrammarPackageDebugFormatter[TObservation, TToken, TTokenRole, TNodeKind, TLexerState]) packageName(name string) string {
 	if f.FormatPackageName != nil {
 		return f.FormatPackageName(name)
 	}
 	return name
 }
 
-func (f GrammarPackageDebugFormatter[TToken]) version(version string) string {
+func (f GrammarPackageDebugFormatter[TObservation, TToken, TTokenRole, TNodeKind, TLexerState]) version(version string) string {
 	if f.FormatVersion != nil {
 		return f.FormatVersion(version)
 	}
 	return version
 }
 
-func (f GrammarPackageDebugFormatter[TToken]) grammarID(id GrammarID) string {
+func (f GrammarPackageDebugFormatter[TObservation, TToken, TTokenRole, TNodeKind, TLexerState]) grammarID(id GrammarID) string {
 	if f.FormatGrammarID != nil {
 		return f.FormatGrammarID(id)
 	}
 	return string(id)
 }
 
-func (f GrammarPackageDebugFormatter[TToken]) token(t TToken) string {
+func (f GrammarPackageDebugFormatter[TObservation, TToken, TTokenRole, TNodeKind, TLexerState]) token(t TToken) string {
 	if f.FormatToken != nil {
 		return f.FormatToken(t)
 	}
 	return fmt.Sprintf("%v", t)
 }
 
-func (f GrammarPackageDebugFormatter[TToken]) nodeKey(k NodeKey) string {
+func (f GrammarPackageDebugFormatter[TObservation, TToken, TTokenRole, TNodeKind, TLexerState]) nodeKey(k NodeKey) string {
 	if f.FormatNodeKey != nil {
 		return f.FormatNodeKey(k)
 	}
@@ -67,7 +68,7 @@ nodeKeyForAnalysis returns a display string for an analysis map key: "GrammarID 
 PathToGrammarID is available, otherwise the raw key (path) or FormatNodeKey result.
 Call from the debugger when rendering nullable/first/follow so nodes are shown by name with path in parentheses.
 */
-func (f GrammarPackageDebugFormatter[TToken]) nodeKeyForAnalysis(pkg *GrammarPackage[TToken], k NodeKey) string {
+func (f GrammarPackageDebugFormatter[TObservation, TToken, TTokenRole, TNodeKind, TLexerState]) nodeKeyForAnalysis(pkg *GrammarPackage[TObservation, TToken, TTokenRole, TNodeKind, TLexerState], k NodeKey) string {
 	if pkg != nil && pkg.PathToGrammarID != nil {
 		if id, ok := pkg.PathToGrammarID[k]; ok {
 			return f.grammarID(id) + " (" + string(k) + ")"
@@ -76,7 +77,7 @@ func (f GrammarPackageDebugFormatter[TToken]) nodeKeyForAnalysis(pkg *GrammarPac
 	return f.nodeKey(k)
 }
 
-func (f GrammarPackageDebugFormatter[TToken]) tokenSet(ts TokenSet[TToken]) string {
+func (f GrammarPackageDebugFormatter[TObservation, TToken, TTokenRole, TNodeKind, TLexerState]) tokenSet(ts TokenSet[TToken]) string {
 	if f.FormatTokenSet != nil {
 		return f.FormatTokenSet(ts)
 	}
@@ -91,7 +92,7 @@ func (f GrammarPackageDebugFormatter[TToken]) tokenSet(ts TokenSet[TToken]) stri
 	return "{" + strings.Join(tokens, ", ") + "}"
 }
 
-func (f GrammarPackageDebugFormatter[TToken]) nestSpec(n NestSpec[TToken]) string {
+func (f GrammarPackageDebugFormatter[TObservation, TToken, TTokenRole, TNodeKind, TLexerState]) nestSpec(n NestSpec[TToken]) string {
 	if f.FormatNestSpec != nil {
 		return f.FormatNestSpec(n)
 	}
@@ -109,17 +110,17 @@ GrammarPackageDebugger renders a GrammarPackage to a human-readable dump.
 Output includes package metadata, rule IDs, tokens used, nest specs, and
 nullable/first/follow analysis. Use NewGrammarPackageDebugger to construct.
 */
-type GrammarPackageDebugger[TToken comparable] struct {
-	Formatter GrammarPackageDebugFormatter[TToken]
+type GrammarPackageDebugger[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind, TLexerState comparable] struct {
+	Formatter GrammarPackageDebugFormatter[TObservation, TToken, TTokenRole, TNodeKind, TLexerState]
 }
 
 /*
 NewGrammarPackageDebugger creates a GrammarPackageDebugger with the given formatter.
 */
-func NewGrammarPackageDebugger[TToken comparable](
-	formatter GrammarPackageDebugFormatter[TToken],
-) *GrammarPackageDebugger[TToken] {
-	return &GrammarPackageDebugger[TToken]{Formatter: formatter}
+func NewGrammarPackageDebugger[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind, TLexerState comparable](
+	formatter GrammarPackageDebugFormatter[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
+) *GrammarPackageDebugger[TObservation, TToken, TTokenRole, TNodeKind, TLexerState] {
+	return &GrammarPackageDebugger[TObservation, TToken, TTokenRole, TNodeKind, TLexerState]{Formatter: formatter}
 }
 
 /*
@@ -128,9 +129,9 @@ DumpTo writes the full debug dump of the grammar package to w.
 Sections: package info, rules, tokens, nests, analysis (nullable, first, follow).
 Returns any write error.
 */
-func (d *GrammarPackageDebugger[TToken]) DumpTo(
+func (d *GrammarPackageDebugger[TObservation, TToken, TTokenRole, TNodeKind, TLexerState]) DumpTo(
 	w io.Writer,
-	pkg *GrammarPackage[TToken],
+	pkg *GrammarPackage[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
 ) error {
 	if pkg == nil {
 		_, err := io.WriteString(w, "<nil>\n")
@@ -254,7 +255,7 @@ func (d *GrammarPackageDebugger[TToken]) DumpTo(
 /*
 DumpString returns the full debug dump of the grammar package as a string.
 */
-func (d *GrammarPackageDebugger[TToken]) DumpString(pkg *GrammarPackage[TToken]) string {
+func (d *GrammarPackageDebugger[TObservation, TToken, TTokenRole, TNodeKind, TLexerState]) DumpString(pkg *GrammarPackage[TObservation, TToken, TTokenRole, TNodeKind, TLexerState]) string {
 	var b strings.Builder
 	_ = d.DumpTo(&b, pkg)
 	return b.String()
@@ -287,8 +288,8 @@ DebugDump produces a human-readable dump of the grammar package using the given 
 
 Convenience wrapper around NewGrammarPackageDebugger and DumpString.
 */
-func (p *GrammarPackage[TToken]) DebugDump(
-	formatter GrammarPackageDebugFormatter[TToken],
+func (p *GrammarPackage[TObservation, TToken, TTokenRole, TNodeKind, TLexerState]) DebugDump(
+	formatter GrammarPackageDebugFormatter[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
 ) string {
 	dbg := NewGrammarPackageDebugger(formatter)
 	return dbg.DumpString(p)

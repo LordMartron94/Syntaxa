@@ -1,5 +1,10 @@
 package syntaxa
 
+import (
+	"cmp"
+	"fmt"
+)
+
 // ============================================================
 // TYPES
 // ============================================================
@@ -23,23 +28,26 @@ type TokenSet[TToken comparable] map[TToken]struct{}
 GrammarPackage is the flattened, analyzed form of a grammar tree.
 
 It contains the rule map, tokens used, nest specs, and computed nullable/first/follow analysis.
-Produced by Grammar.ProducePackage from a root Grammar node.
+Produced by ProducePackage from a root Grammar node.
 
 PathToGrammarID maps each node's path (NodeKey) to its GrammarID for debug display,
 so analysis dumps can show node names with path in parentheses, e.g. "PROGRAM (0)".
-*/
-type GrammarPackage[TToken comparable] struct {
-	Name            string
-	Version         string
-	EntryRule       GrammarID
-	Rules           map[GrammarID]*Grammar[TToken]
-	TokensUsed      []TToken
-	Nests           []NestSpec[TToken]
-	Analysis        *GrammarAnalysis[TToken]
-	PathToGrammarID map[NodeKey]GrammarID
 
-	/* TokenNodeByID maps GrammarID to the first GToken node with that ID in the tree. Populated by ProducePackage. */
-	TokenNodeByID map[GrammarID]*Grammar[TToken]
+EntryRuleParserRule is the executable rule for the entry production; set when producing
+a package for the parser. The parser accepts a GrammarPackage and runs this rule.
+Nil when the package is produced for analysis only (e.g. debug dumps).
+*/
+type GrammarPackage[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind, TLexerState comparable] struct {
+	Name                 string
+	Version              string
+	EntryRule            GrammarID
+	Rules                map[GrammarID]*Grammar[TToken]
+	TokensUsed           []TToken
+	Nests                []NestSpec[TToken]
+	Analysis              *GrammarAnalysis[TToken]
+	PathToGrammarID       map[NodeKey]GrammarID
+	TokenNodeByID        map[GrammarID]*Grammar[TToken]
+	EntryRuleParserRule  *ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 }
 
 /*
@@ -71,15 +79,27 @@ type GrammarAnalysis[TToken comparable] struct {
 // ============================================================
 
 /*
-ProducePackage builds a GrammarPackage from the receiver grammar tree.
+ProducePackage builds a GrammarPackage from the root grammar tree.
 
 Walks the tree to collect rules, tokens, and nest specs; assigns node paths if needed;
 then computes nullable, first, and follow sets. Panics if the root grammar is nil.
+Duplicate rule-root GrammarIDs panic (engine error).
+
+entryRule is the executable parser rule for the entry production; pass it when the
+package will be used to create a parser. Pass nil for analysis-only use (e.g. debug dumps).
 */
-func (g *Grammar[TToken]) ProducePackage(
+func ProducePackage[
+	TObservation cmp.Ordered,
+	TToken,
+	TTokenRole,
+	TNodeKind,
+	TLexerState comparable,
+](
+	g *Grammar[TToken],
 	name string,
 	version string,
-) GrammarPackage[TToken] {
+	entryRule *ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+) GrammarPackage[TObservation, TToken, TTokenRole, TNodeKind, TLexerState] {
 	if g == nil {
 		panic("ProducePackage: root grammar is nil")
 	}
@@ -93,9 +113,10 @@ func (g *Grammar[TToken]) ProducePackage(
 	tokenSet := make(TokenSet[TToken])
 	nests := make([]NestSpec[TToken], 0)
 	tokenNodeByID := make(map[GrammarID]*Grammar[TToken])
+	seenGrammarIDs := make(map[GrammarID]struct{})
 
 	// Single unified walk
-	collectAll(g, rules, tokenSet, &nests, tokenNodeByID)
+	collectAll(g, rules, tokenSet, &nests, tokenNodeByID, seenGrammarIDs)
 
 	tokensUsed := make([]TToken, 0, len(tokenSet))
 	for t := range tokenSet {
@@ -105,16 +126,17 @@ func (g *Grammar[TToken]) ProducePackage(
 	analysis := computeAnalysisSingleTree(g)
 	pathToGrammarID := buildPathToGrammarID(g)
 
-	return GrammarPackage[TToken]{
-		Name:            name,
-		Version:         version,
-		EntryRule:       g.GrammarID,
-		Rules:           rules,
-		TokensUsed:      tokensUsed,
-		Nests:           nests,
-		Analysis:        analysis,
-		PathToGrammarID: pathToGrammarID,
-		TokenNodeByID:  tokenNodeByID,
+	return GrammarPackage[TObservation, TToken, TTokenRole, TNodeKind, TLexerState]{
+		Name:                name,
+		Version:             version,
+		EntryRule:           g.GrammarID,
+		Rules:               rules,
+		TokensUsed:          tokensUsed,
+		Nests:               nests,
+		Analysis:            analysis,
+		PathToGrammarID:     pathToGrammarID,
+		TokenNodeByID:       tokenNodeByID,
+		EntryRuleParserRule: entryRule,
 	}
 }
 
@@ -157,10 +179,10 @@ func NestSpecsOpenTokenCounts[TToken comparable](nests []NestSpec[TToken]) map[T
 /*
 collectAll walks the grammar tree and populates rules, tokenSet, nests, and tokenNodeByID.
 
-Only nodes marked as rule roots (Grammar.RuleRoot, e.g. from Rule.Root) are added to rules;
-first occurrence of each GrammarID among rule roots is stored. Tokens from GToken and GNest
-nodes are added to tokenSet; GNest nodes are appended to nests. For GToken nodes, the first
-node per GrammarID is stored in tokenNodeByID (if non-nil).
+Every node's GrammarID must be unique across the whole tree (empty IDs are ignored).
+Duplicate GrammarIDs panic (engine error). Only nodes marked as rule roots (e.g. from Rule.Root)
+are added to rules. Tokens from GToken and GNest are added to tokenSet; GNest nodes are
+appended to nests. For GToken nodes, the first node per GrammarID is stored in tokenNodeByID (if non-nil).
 */
 func collectAll[TToken comparable](
 	g *Grammar[TToken],
@@ -168,15 +190,21 @@ func collectAll[TToken comparable](
 	tokenSet TokenSet[TToken],
 	nests *[]NestSpec[TToken],
 	tokenNodeByID map[GrammarID]*Grammar[TToken],
+	seenGrammarIDs map[GrammarID]struct{},
 ) {
 	if g == nil {
 		return
 	}
 
-	if g.IsContextBoundary {
-		if _, exists := rules[g.GrammarID]; !exists {
-			rules[g.GrammarID] = g
+	if g.GrammarID != "" {
+		if _, seen := seenGrammarIDs[g.GrammarID]; seen {
+			panic(fmt.Sprintf("syntaxa: duplicate grammar ID %q in grammar package (engine error)", g.GrammarID))
 		}
+		seenGrammarIDs[g.GrammarID] = struct{}{}
+	}
+
+	if g.IsContextBoundary {
+		rules[g.GrammarID] = g
 	}
 
 	switch g.Kind {
@@ -203,7 +231,7 @@ func collectAll[TToken comparable](
 	}
 
 	for _, child := range g.Children {
-		collectAll(child, rules, tokenSet, nests, tokenNodeByID)
+		collectAll(child, rules, tokenSet, nests, tokenNodeByID, seenGrammarIDs)
 	}
 }
 
