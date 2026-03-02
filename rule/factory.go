@@ -137,7 +137,7 @@ func (t *tokenEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 	outputNodeKind TNodeKind,
 	firstToken, secondToken TToken,
 ) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
-	name     := t.sharedCore.createRuleName("ExpectPair", grammarID)
+	name := t.sharedCore.createRuleName("ExpectPair", grammarID)
 	identity := t.sharedCore.createRuleIdentity(
 		name,
 		grammarID,
@@ -192,7 +192,7 @@ func (t *tokenEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 	outputNodeKind TNodeKind,
 	firstToken, secondToken TToken,
 ) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
-	name     := t.sharedCore.createRuleName("ExpectPairWithChildGrammarIDs", concatID)
+	name := t.sharedCore.createRuleName("ExpectPairWithChildGrammarIDs", concatID)
 	identity := t.sharedCore.createRuleIdentity(
 		name,
 		concatID,
@@ -287,16 +287,8 @@ func (t *tokenEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 			return t.sharedCore.buildSuccessRuleResult(nil)
 		}
 
-		ctx.Error.ReportAt(
-			string(name),
-			peeked,
-			fmt.Sprintf(
-				"unexpected %s, wanted one of %s",
-				t.sharedCore.tokenFormatter(peeked.Token),
-				t.sharedCore.formatTokensAsList(", ", tokens...),
-			),
-		)
-
+		// Do not report here: returning FailureNoMatch lets Choice try other alternatives.
+		// Sequences report when a required element fails via listCore (committed context).
 		return t.sharedCore.buildFailureRuleResult(nil, syntaxa.FailureNoMatch)
 	}
 
@@ -452,6 +444,7 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 		identity,
 		r.sharedCore.createContract(mustConsume, false),
 		exec,
+		nil,
 		nil,
 		grammar,
 	)
@@ -773,7 +766,7 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 	rule Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	predicate func(ctx *syntaxa.SelectRuleContext[TObservation, TToken, TTokenRole]) bool,
 ) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
-	name     := syntaxa.RuleLabel(fmt.Sprintf("Predict(%s)", rule.GetName()))
+	name := syntaxa.RuleLabel(fmt.Sprintf("Predict(%s)", rule.GetName()))
 	identity := r.sharedCore.createRuleIdentity(name, rule.GetGrammarID(), rule.GetExpectedLabel())
 	exec := func(ctx *syntaxa.ExecRuleContext[
 		TObservation, TToken, TTokenRole, TLexerState, TNodeKind,
@@ -788,6 +781,7 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 		rule.GetContract(),
 		exec,
 		rule.GetRecoveryTokens(),
+		nil,
 		rule.GetGrammar(),
 	)
 }
@@ -816,9 +810,9 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 	rule Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	suffixToken TToken,
 ) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
-	name     := r.sharedCore.createRuleName("OptionalSuffix", grammarID)
+	name := r.sharedCore.createRuleName("OptionalSuffix", grammarID)
 	identity := r.sharedCore.createRuleIdentity(name, grammarID, rule.GetExpectedLabel())
-	grammar  := syntaxa.Concat(
+	grammar := syntaxa.Concat(
 		grammarID,
 		rule.GetGrammar(),
 		syntaxa.Optional(grammarID, syntaxa.Token(grammarID, suffixToken)),
@@ -846,6 +840,7 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 		r.sharedCore.createContract(rule.GetContract().MustConsume, true),
 		exec,
 		rule.GetRecoveryTokens(),
+		nil,
 		grammar,
 	)
 }
@@ -893,6 +888,7 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 			return result
 		},
 		rule.GetRecoveryTokens(),
+		nil,
 		rule.GetGrammar(),
 	)
 }
@@ -900,7 +896,7 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 /*
 Root builds a top-level structural rule that runs a sequence of rules and attaches all produced nodes under a single root node of nodeKind.
 
-Rules are run in order. The first rule may fail with FailureNoMatch (grammar boundary); once any rule succeeds, the sequence is committed. If mustConsume is false, zero consumed tokens is allowed (empty program). If mustConsume is true, at least one token must be consumed for success.
+Rules are run in order. On success, a single root node is created and each rule's result is attached; the root node is never nil on success. When any rule fails, that failure is propagated so the caller sees the real syntax error (e.g. missing semicolon) instead of a partial success. If mustConsume is false, zero consumed tokens is allowed (empty program). If mustConsume is true, at least one token must be consumed for success.
 
 Use cases:
 - Root of the grammar (e.g. "program" as sequence of declarations and statements).
@@ -913,7 +909,7 @@ Prerequisites:
 
 Edge cases:
 - First rule FailureNoMatch: entire Root fails with FailureNoMatch.
-- Later rule failure: returns success with the root node and whatever children were attached so far (partial consumption; engine semantics may vary).
+- Later rule failure: failure is propagated unchanged so diagnostics (e.g. expected semicolon) are reported.
 */
 func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) Root(
 	grammarID syntaxa.GrammarID,
@@ -945,7 +941,12 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 			result := ctx.ExecuteRule(rule, syntaxa.ExecutionNormal)
 
 			if result.Failed() {
-				return r.sharedCore.buildSuccessRuleResult(node)
+				return Result[TObservation, TToken, TTokenRole, TNodeKind]{
+					Node:             node,
+					Succeeded:        false,
+					Kind:             result.Kind,
+					ConsumeSyncToken: result.ConsumeSyncToken,
+				}
 			}
 
 			ctx.Editor.AttachResult(node, result)
@@ -958,6 +959,7 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 		identity,
 		r.sharedCore.createContract(mustConsume, true),
 		exec,
+		nil,
 		nil,
 		grammar,
 	)
@@ -1062,6 +1064,23 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 			if result.Failed() {
 				currentMarker := ctx.Token.PeekRaw(0).TokenNumber
 				effectiveKind := sequenceCommitmentFailureKind(startMarker, currentMarker, result.Kind)
+				if effectiveKind == syntaxa.FailureError {
+					peeked := ctx.Token.Peek(0)
+					msg := fmt.Sprintf(
+						"unexpected %s, expected %s",
+						r.sharedCore.tokenFormatter(peeked.Token),
+						rule.GetExpectedLabel(),
+					)
+					if ctx.GetLastConsumedLexeme != nil {
+						if last, ok := ctx.GetLastConsumedLexeme(); ok {
+							ctx.Error.ReportAtEnd(string(rule.GetName()), last, msg)
+						} else {
+							ctx.Error.ReportAt(string(rule.GetName()), peeked, msg)
+						}
+					} else {
+						ctx.Error.ReportAt(string(rule.GetName()), peeked, msg)
+					}
+				}
 				return r.sharedCore.buildFailureRuleResult(nil, effectiveKind)
 			}
 
@@ -1079,6 +1098,7 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 		r.sharedCore.createContract(mustConsume, true),
 		exec,
 		recovery,
+		nil,
 		grammar,
 	)
 }
@@ -1194,7 +1214,9 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 
 		case syntaxa.FailureError:
 			after := ctx.Token.PeekRaw(0)
-			if before.TokenNumber == after.TokenNumber {
+			noProgress := before.TokenNumber == after.TokenNumber
+			leaveSyncForParent := !result.ConsumeSyncToken
+			if noProgress || leaveSyncForParent {
 				return count, result, true
 			}
 			continue
@@ -1240,6 +1262,7 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 			return onSuccess(container)
 		},
 		rule.GetRecoveryTokens(),
+		nil,
 		grammar,
 	)
 }
@@ -1437,6 +1460,7 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 		r.sharedCore.createContract(mustConsume, true),
 		exec,
 		[]TToken{closeToken}, // recovery boundary
+		nil,
 		grammar,
 	)
 }
@@ -1476,6 +1500,7 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 		r.sharedCore.createContract(mustConsume, innerRule.GetContract().MustReturnNode),
 		exec,
 		[]TToken{closeToken},
+		nil,
 		grammar,
 	)
 }
@@ -1502,6 +1527,34 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 			return ctx.ExecuteRule(rule, syntaxa.ExecutionNormal)
 		},
 		newRecovery,
+		nil,
+		rule.GetGrammar(),
+	)
+}
+
+/*
+RecoverSyncBoundary is like RecoverSync but treats noConsumeTokens as sync points that are not consumed after recovery.
+
+Use when the list body is inside a delimited block (e.g. { ... }): include the closing delimiter in noConsumeTokens so the parent nest can consume it and the real syntax error (e.g. missing semicolon) is reported instead of "expected closing brace".
+*/
+func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) RecoverSyncBoundary(
+	rule Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+	syncTokens []TToken,
+	noConsumeTokens []TToken,
+) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
+	currentRecovery := rule.GetRecoveryTokens()
+	newRecovery := make([]TToken, 0, len(currentRecovery)+len(syncTokens)+len(noConsumeTokens))
+	newRecovery = append(newRecovery, currentRecovery...)
+	newRecovery = append(newRecovery, syncTokens...)
+	newRecovery = append(newRecovery, noConsumeTokens...)
+	return r.sharedCore.constructRule(
+		rule.GetIdentity(),
+		rule.GetContract(),
+		func(ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) Result[TObservation, TToken, TTokenRole, TNodeKind] {
+			return ctx.ExecuteRule(rule, syntaxa.ExecutionNormal)
+		},
+		newRecovery,
+		noConsumeTokens,
 		rule.GetGrammar(),
 	)
 }
@@ -1583,6 +1636,7 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 		r.sharedCore.createContract(true, innerRule.GetContract().MustReturnNode),
 		r.executePrefixedRule(prefixToken, innerRule),
 		innerRule.GetRecoveryTokens(),
+		nil,
 		grammar,
 	)
 }
@@ -1640,6 +1694,7 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 		identity,
 		r.sharedCore.createContract(mustConsume, false),
 		exec,
+		nil,
 		nil,
 		grammar,
 	)
@@ -1841,9 +1896,10 @@ func (s *sharedCore[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) b
 	failureKind syntaxa.FailureKind,
 ) Result[TObservation, TToken, TTokenRole, TNodeKind] {
 	return Result[TObservation, TToken, TTokenRole, TNodeKind]{
-		Node:      node,
-		Succeeded: false,
-		Kind:      failureKind,
+		Node:             node,
+		Succeeded:        false,
+		Kind:             failureKind,
+		ConsumeSyncToken: true,
 	}
 }
 
@@ -1887,6 +1943,7 @@ func (s *sharedCore[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) c
 		s.createContract(true, true),
 		execution,
 		recovery,
+		nil,
 		grammar,
 	)
 }
@@ -1902,6 +1959,7 @@ func (s *sharedCore[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) c
 		s.createContract(true, false),
 		execution,
 		recovery,
+		nil,
 		grammar,
 	)
 }
@@ -1917,6 +1975,7 @@ func (s *sharedCore[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) c
 		s.createContract(false, false),
 		execution,
 		recovery,
+		nil,
 		grammar,
 	)
 }
@@ -1932,6 +1991,7 @@ func (s *sharedCore[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) c
 		s.createContract(false, true),
 		execution,
 		recovery,
+		nil,
 		grammar,
 	)
 }
@@ -1950,6 +2010,7 @@ func (s *sharedCore[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) c
 	ruleContract syntaxa.RuleContract,
 	execution syntaxa.ParserRuleExecutor[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	recovery []TToken,
+	noConsumeOnRecovery []TToken,
 	grammar *syntaxa.Grammar[TToken],
 ) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
 	return syntaxa.ParserRuleCreate(
@@ -1958,5 +2019,6 @@ func (s *sharedCore[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) c
 		ruleContract,
 		recovery,
 		grammar,
+		noConsumeOnRecovery,
 	)
 }

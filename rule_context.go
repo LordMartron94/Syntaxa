@@ -106,6 +106,28 @@ func (rc *recoveryCore[_, TToken, _]) currentRecovery() tokenSet[TToken] {
 		merged[t] = struct{}{}
 	}
 
+	if len(rc.stack) > 0 {
+		for t := range rc.stack[len(rc.stack)-1] {
+			merged[t] = struct{}{}
+		}
+	}
+
+	return merged
+}
+
+/*
+currentRecoveryAllFrames returns the union of default recovery and all frames on the stack.
+
+Used only by performRecovery so recovery stops at any token that any enclosing rule
+(e.g. Block's blockEndToken) has in its set, while consume is decided by the failing rule.
+*/
+func (rc *recoveryCore[_, TToken, _]) currentRecoveryAllFrames() tokenSet[TToken] {
+	merged := make(tokenSet[TToken])
+
+	for t := range rc.defaultRecovery {
+		merged[t] = struct{}{}
+	}
+
 	for _, frame := range rc.stack {
 		for t := range frame {
 			merged[t] = struct{}{}
@@ -113,6 +135,17 @@ func (rc *recoveryCore[_, TToken, _]) currentRecovery() tokenSet[TToken] {
 	}
 
 	return merged
+}
+
+/*
+IsRecoveryToken returns true if token is in the current merged recovery set.
+
+Used by the engine to avoid reporting spurious errors when the current token is a sync
+token (e.g. semicolon or closing brace) from an inner rule's recovery set.
+*/
+func (rc *recoveryCore[_, TToken, _]) IsRecoveryToken(token TToken) bool {
+	_, ok := rc.currentRecovery()[token]
+	return ok
 }
 
 // -------------------------------------------------------------
@@ -269,6 +302,13 @@ type ExecRuleContext[
 	lastLexingError func() *lexarch.LexingError[TObservation, TToken]
 	createErrorNode func(string) *SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind]
 
+	/*
+		GetLastConsumedLexeme returns the last consumed lexeme and true if any token has been consumed.
+		Used to report "expected X" at the end of the previous token (e.g. missing semicolon after "lspec").
+		May be nil when the token source does not support it (e.g. streaming).
+	*/
+	GetLastConsumedLexeme func() (lexarch.Lexeme[TObservation, TToken, TTokenRole], bool)
+
 	trace *ParseTrace[TToken]
 
 	save    func() ParserSnapshot[TObservation, TLexerState]
@@ -355,6 +395,13 @@ func BuildExecRuleContextFromSlice[
 	// Context specific overrides
 	ctx.lastLexingError = func() *lexarch.LexingError[TObservation, TToken] { return nil }
 	ctx.SetLexerState = func(s TLexerState) {}
+	ctx.GetLastConsumedLexeme = func() (lexarch.Lexeme[TObservation, TToken, TTokenRole], bool) {
+		if *cursor > 0 {
+			return lexemes[*cursor-1], true
+		}
+		var z lexarch.Lexeme[TObservation, TToken, TTokenRole]
+		return z, false
+	}
 
 	return ctx
 }
@@ -371,11 +418,18 @@ func BuildExecRuleContextFromLexerSession[
 	session *lexarch.LexerSession[TObservation, TState, TToken],
 	errors *SyntaxErrors[TObservation],
 ) *ExecRuleContext[TObservation, TToken, TTokenRole, TState, TNodeKind] {
+	var lastConsumed lexarch.Lexeme[TObservation, TToken, TTokenRole]
+	var hasConsumed bool
 	src := rawSource[TObservation, TToken, TTokenRole]{
 		peek: func(n int) lexarch.Lexeme[TObservation, TToken, TTokenRole] {
 			return lexarch.LexerPeek(lexer, session, n)
 		},
-		consume: func() lexarch.Lexeme[TObservation, TToken, TTokenRole] { return lexarch.LexerConsume(lexer, session) },
+		consume: func() lexarch.Lexeme[TObservation, TToken, TTokenRole] {
+			l := lexarch.LexerConsume(lexer, session)
+			lastConsumed = l
+			hasConsumed = true
+			return l
+		},
 	}
 
 	save := func() ParserSnapshot[TObservation, TState] {
@@ -389,6 +443,9 @@ func BuildExecRuleContextFromLexerSession[
 
 	ctx.lastLexingError = func() *lexarch.LexingError[TObservation, TToken] { return session.GetLastError() }
 	ctx.SetLexerState = func(state TState) { lexarch.LexerSessionSetState(session, state) }
+	ctx.GetLastConsumedLexeme = func() (lexarch.Lexeme[TObservation, TToken, TTokenRole], bool) {
+		return lastConsumed, hasConsumed
+	}
 
 	return ctx
 }
@@ -405,12 +462,17 @@ func BuildExecRuleContextFromStreamingSession[
 	session *lexarch.StreamingLexerSession[TObservation, TState, TToken],
 	errors *SyntaxErrors[TObservation],
 ) *ExecRuleContext[TObservation, TToken, TTokenRole, TState, TNodeKind] {
+	var lastConsumed lexarch.Lexeme[TObservation, TToken, TTokenRole]
+	var hasConsumed bool
 	src := rawSource[TObservation, TToken, TTokenRole]{
 		peek: func(n int) lexarch.Lexeme[TObservation, TToken, TTokenRole] {
 			return lexarch.LexerPeekStreaming(lexer, session, n)
 		},
 		consume: func() lexarch.Lexeme[TObservation, TToken, TTokenRole] {
-			return lexarch.LexerConsumeStreaming(lexer, session)
+			l := lexarch.LexerConsumeStreaming(lexer, session)
+			lastConsumed = l
+			hasConsumed = true
+			return l
 		},
 	}
 
@@ -425,6 +487,9 @@ func BuildExecRuleContextFromStreamingSession[
 
 	ctx.lastLexingError = func() *lexarch.LexingError[TObservation, TToken] { return session.GetLastError() }
 	ctx.SetLexerState = func(state TState) { lexarch.StreamingLexerSessionSetState(session, state) }
+	ctx.GetLastConsumedLexeme = func() (lexarch.Lexeme[TObservation, TToken, TTokenRole], bool) {
+		return lastConsumed, hasConsumed
+	}
 
 	return ctx
 }

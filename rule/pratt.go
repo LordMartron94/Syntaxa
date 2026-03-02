@@ -118,6 +118,7 @@ func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 		p.sharedCore.createContract(true, true),
 		exec,
 		recovery,
+		nil,
 		grammar,
 	)
 }

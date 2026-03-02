@@ -146,7 +146,7 @@ exec := func(ctx *syntaxa.ExecRuleContext[...]) syntaxa.RuleResult[...] {
 	ctx.Editor.AddToken(node, lex)
 	return syntaxa.RuleResult[...]{Node: node, Succeeded: true}
 }
-rule := syntaxa.ParserRuleCreate(identity, exec, syntaxa.RuleContract{MustConsume: true, MustReturnNode: true}, nil, grammar)
+rule := syntaxa.ParserRuleCreate(identity, exec, syntaxa.RuleContract{MustConsume: true, MustReturnNode: true}, nil, grammar, nil)
 ```
 
 ## Use Cases

@@ -245,6 +245,9 @@ func parseWithContext[
 		)
 	}
 
+	if !programResult.Succeeded {
+		return programResult.Node, ctx.trace, fmt.Errorf("parse failed")
+	}
 	return programResult.Node, ctx.trace, nil
 }
 
@@ -306,29 +309,51 @@ func syntaxaParserExecuteRule[
 
 		if mode == ExecutionNormal {
 			if ruleResult.Kind == FailureError {
-				if bestPos, ok := ctx.Error.sink.currentBestPosition(); ok && bestPos == startPos {
-					ctx.Error.replaceBestErrorAt(
-						string(rule.GetName()),
-						lexemePreRule,
-						fmt.Sprintf(
-							"unexpected %v, expected %s",
-							lexemePreRule.Token,
-							rule.identity.ExpectedLabel,
-						),
-					)
+				isProgramRule := rule.GetGrammarID() == parser.programRule.GetGrammarID()
+				if !isProgramRule && !ctx.Recovery.IsRecoveryToken(lexemePreRule.Token) {
+					wouldBeEmpty := ctx.Error.sink.currentFrameWouldBeEmptyOnPop()
+					bestPos, ok := ctx.Error.sink.currentBestPosition()
+					if wouldBeEmpty || (ok && bestPos == startPos) {
+						ctx.Error.replaceBestErrorAt(
+							string(rule.GetName()),
+							lexemePreRule,
+							fmt.Sprintf(
+								"unexpected %v, expected %s",
+								lexemePreRule.Token,
+								rule.identity.ExpectedLabel,
+							),
+						)
+					}
 				}
 
 				ctx.Error.sink.popFrame(true)
+				if isProgramRule {
+					ctx.Error.sink.FlushFramesCommitAll()
+					// Keep only the error furthest in the stream (primary failure); discard earlier spurious ones.
+					if n := len(ctx.Error.sink.Errors); n > 1 {
+						best := 0
+						for i := 1; i < n; i++ {
+							if ctx.Error.sink.Errors[i].TokenNumber > ctx.Error.sink.Errors[best].TokenNumber {
+								best = i
+							}
+						}
+						ctx.Error.sink.Errors[0], ctx.Error.sink.Errors[best] = ctx.Error.sink.Errors[best], ctx.Error.sink.Errors[0]
+						ctx.Error.sink.Errors = ctx.Error.sink.Errors[:1]
+					}
+				}
 
 				// ------------------------------------------------
 				// Recovery should NOT produce competing errors
 				// ------------------------------------------------
 				ctx.Error.sink.pushFrame()
-				recovered := performRecovery(ctx, parser.eofToken, rule)
+				recovered, landedOnOurs := performRecovery(ctx, parser.eofToken, rule)
 				ctx.Error.sink.popFrame(false)
 
 				if recovered {
-					ctx.Token.ConsumeRaw()
+					ruleResult.ConsumeSyncToken = landedOnOurs && !rule.IsNoConsumeRecoveryToken(ctx.Token.PeekRaw(0).Token)
+					if ruleResult.ConsumeSyncToken {
+						ctx.Token.ConsumeRaw()
+					}
 				}
 
 			} else {
@@ -383,20 +408,19 @@ func performRecovery[
 	ctx *ExecRuleContext[TObs, TToken, TTokenRole, TLexerState, TKind],
 	eof TToken,
 	recoveryFromRule ParserRule[TObs, TToken, TTokenRole, TLexerState, TKind],
-) bool {
-	syncSet := ctx.Recovery.currentRecovery()
-
-	// fmt.Printf("recovering from rule %s with set: %v\n", recoveryFromRule.GetName(), syncSet)
+) (recovered bool, landedOnCurrentRule bool) {
+	syncSet := ctx.Recovery.currentRecoveryAllFrames()
 
 	for {
 		cur := ctx.Token.PeekRaw(0)
 
 		if cur.Token == eof {
-			return false
+			return false, false
 		}
 
 		if _, ok := syncSet[cur.Token]; ok {
-			return true
+			landedOnCurrentRule = recoveryFromRule.IsSyncToken(cur.Token)
+			return true, landedOnCurrentRule
 		}
 
 		ctx.Token.ConsumeRaw()

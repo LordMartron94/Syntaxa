@@ -113,6 +113,20 @@ func (s *SyntaxErrors[TObservation]) popFrame(commit bool) {
 	s.Errors = append(s.Errors, out...)
 }
 
+/*
+FlushFramesCommitAll pops all frames with commit true so that every error buffered in the
+stack is merged into s.Errors.
+
+Use when the top-level (program) rule fails: only one failure path runs (the program rule's),
+so only one popFrame happens and descendant errors remain stuck in the stack. Flushing
+ensures they are committed and visible to the caller.
+*/
+func (s *SyntaxErrors[TObservation]) FlushFramesCommitAll() {
+	for len(s.stack) > 0 {
+		s.popFrame(true)
+	}
+}
+
 func (s *SyntaxErrors[TObservation]) replaceBest(err SyntaxError[TObservation]) bool {
 	if len(s.stack) == 0 {
 		return false
@@ -132,6 +146,19 @@ func (s *SyntaxErrors[TObservation]) currentBestPosition() (int, bool) {
 		return 0, false
 	}
 	return top.best.AbsolutePosition, true
+}
+
+/*
+currentFrameWouldBeEmptyOnPop returns true when the top frame has no committed
+errors and no best error, so it would contribute nothing when popped with commit.
+Used to set a fallback error only on the innermost failing rule.
+*/
+func (s *SyntaxErrors[TObservation]) currentFrameWouldBeEmptyOnPop() bool {
+	if len(s.stack) == 0 {
+		return true
+	}
+	top := s.stack[len(s.stack)-1]
+	return top.best == nil && len(top.committed) == 0
 }
 
 /*

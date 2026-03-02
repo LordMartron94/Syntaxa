@@ -47,6 +47,17 @@ type RuleResult[TObservation cmp.Ordered, TToken, TTokenRole, TKind comparable] 
 	Kind FailureKind
 
 	IsFragment bool
+
+	/*
+		ConsumeSyncToken controls whether the parser consumes the recovery sync token after a failed rule.
+
+		When true (default), the engine consumes the token at which recovery landed. When false, the sync
+		token is left in the stream for the parent (e.g. so a TransparentNest can consume its closing
+		delimiter). Set by the engine on FailureError after recovery when the rule has noConsumeOnRecoveryTokens
+		and recovery landed on one of them. Repetition loops (NOrMore, TransparentZeroOrMore) use this to
+		decide whether to retry or propagate: if false, they propagate the error instead of retrying.
+	*/
+	ConsumeSyncToken bool
 }
 
 func (r *RuleResult[TObservation, TToken, TTokenRole, TKind]) Failed() bool {
@@ -176,6 +187,14 @@ type ParserRule[
 	contract       RuleContract
 	recoveryTokens []TToken
 
+	/*
+		noConsumeOnRecoveryTokens are sync tokens at which recovery should not consume.
+
+		When recovery lands on one of these, the engine sets result.ConsumeSyncToken = false so the
+		parent rule can consume the token (e.g. a nest consuming its closing brace).
+	*/
+	noConsumeOnRecoveryTokens []TToken
+
 	grammar *Grammar[TToken]
 }
 
@@ -211,6 +230,40 @@ func (p *ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) G
 }
 
 /*
+IsNoConsumeRecoveryToken returns true if token is in the rule's noConsumeOnRecoveryTokens set.
+
+Used by the engine after recovery to set result.ConsumeSyncToken so the sync token is left in the stream.
+*/
+func (p *ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) IsNoConsumeRecoveryToken(token TToken) bool {
+	for _, t := range p.noConsumeOnRecoveryTokens {
+		if t == token {
+			return true
+		}
+	}
+	return false
+}
+
+/*
+IsSyncToken returns true if token is in the rule's recovery set (recoveryTokens or noConsumeOnRecoveryTokens).
+
+Used by the engine to avoid reporting spurious "unexpected X" errors when the current token is a sync
+token used for recovery (e.g. semicolon or closing brace).
+*/
+func (p *ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) IsSyncToken(token TToken) bool {
+	for _, t := range p.recoveryTokens {
+		if t == token {
+			return true
+		}
+	}
+	for _, t := range p.noConsumeOnRecoveryTokens {
+		if t == token {
+			return true
+		}
+	}
+	return false
+}
+
+/*
 ParserRuleCreate constructs a rule.
 
 The Syntaxa core on purpose does not provide implemented rules.
@@ -231,12 +284,18 @@ func ParserRuleCreate[
 	contract RuleContract,
 	recoveryTokens []TToken,
 	grammar *Grammar[TToken],
+	noConsumeOnRecovery []TToken,
 ) ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
+	noConsume := noConsumeOnRecovery
+	if noConsume == nil {
+		noConsume = []TToken{}
+	}
 	return ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]{
-		identity:       identity,
-		executionFn:    executionFn,
-		contract:       contract,
-		recoveryTokens: recoveryTokens,
-		grammar:        grammar,
+		identity:                  identity,
+		executionFn:               executionFn,
+		contract:                  contract,
+		recoveryTokens:            recoveryTokens,
+		noConsumeOnRecoveryTokens: noConsume,
+		grammar:                   grammar,
 	}
 }
