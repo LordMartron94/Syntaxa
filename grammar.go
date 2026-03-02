@@ -540,3 +540,22 @@ func Between[TToken comparable](id GrammarID, body *Grammar[TToken], min, max in
 	m := max
 	return Repeat(id, body, min, &m)
 }
+
+/*
+GrammarIsTokenNode reports whether the node is a terminal token node (GToken).
+*/
+func GrammarIsTokenNode[TToken comparable](n *Grammar[TToken]) bool {
+	return n != nil && n.Kind == GToken
+}
+
+/*
+GrammarOptionalTokenChild returns the single token wrapped by an optional, if the node is GOptional with exactly one GToken child.
+
+This is a shape predicate for tooling (e.g. includes); it is not the same as nullable in the grammar-analysis sense.
+*/
+func GrammarOptionalTokenChild[TToken comparable](n *Grammar[TToken]) (token TToken, ok bool) {
+	if n == nil || n.Kind != GOptional || len(n.Children) != 1 || n.Children[0] == nil || n.Children[0].Kind != GToken {
+		return token, false
+	}
+	return n.Children[0].Token, true
+}

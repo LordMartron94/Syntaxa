@@ -84,6 +84,28 @@ func (g *Grammar[TToken]) WalkBreadth(
 	return g.Walk(structarch.WALK_STRATEGY_BREADTH, callback)
 }
 
+/*
+FindFirst returns the first node in pre-order for which predicate returns true.
+
+Returns nil if no node matches or if the receiver is nil.
+*/
+func (g *Grammar[TToken]) FindFirst(
+	predicate func(*Grammar[TToken]) bool,
+) *Grammar[TToken] {
+	if g == nil {
+		return nil
+	}
+	var found *Grammar[TToken]
+	_ = g.WalkPre(func(n *Grammar[TToken]) (skip, stop bool) {
+		if predicate(n) {
+			found = n
+			return false, true
+		}
+		return false, false
+	})
+	return found
+}
+
 func grammarWalkChildren[TToken comparable](g *Grammar[TToken]) []*Grammar[TToken] {
 	if g == nil || len(g.Children) == 0 {
 		return nil

@@ -37,6 +37,9 @@ type GrammarPackage[TToken comparable] struct {
 	Nests           []NestSpec[TToken]
 	Analysis        *GrammarAnalysis[TToken]
 	PathToGrammarID map[NodeKey]GrammarID
+
+	/* TokenNodeByID maps GrammarID to the first GToken node with that ID in the tree. Populated by ProducePackage. */
+	TokenNodeByID map[GrammarID]*Grammar[TToken]
 }
 
 /*
@@ -89,9 +92,10 @@ func (g *Grammar[TToken]) ProducePackage(
 	rules := make(map[GrammarID]*Grammar[TToken])
 	tokenSet := make(TokenSet[TToken])
 	nests := make([]NestSpec[TToken], 0)
+	tokenNodeByID := make(map[GrammarID]*Grammar[TToken])
 
 	// Single unified walk
-	collectAll(g, rules, tokenSet, &nests)
+	collectAll(g, rules, tokenSet, &nests, tokenNodeByID)
 
 	tokensUsed := make([]TToken, 0, len(tokenSet))
 	for t := range tokenSet {
@@ -110,6 +114,7 @@ func (g *Grammar[TToken]) ProducePackage(
 		Nests:           nests,
 		Analysis:        analysis,
 		PathToGrammarID: pathToGrammarID,
+		TokenNodeByID:  tokenNodeByID,
 	}
 }
 
@@ -134,22 +139,35 @@ func buildPathToGrammarIDRec[TToken comparable](g *Grammar[TToken], out map[Node
 	}
 }
 
+/*
+NestSpecsOpenTokenCounts returns the count of each open token across the given nest specs.
+*/
+func NestSpecsOpenTokenCounts[TToken comparable](nests []NestSpec[TToken]) map[TToken]int {
+	counts := make(map[TToken]int)
+	for _, nest := range nests {
+		counts[nest.Open]++
+	}
+	return counts
+}
+
 // ============================================================
 // UNIFIED TREE WALK
 // ============================================================
 
 /*
-collectAll walks the grammar tree and populates rules, tokenSet, and nests.
+collectAll walks the grammar tree and populates rules, tokenSet, nests, and tokenNodeByID.
 
 Only nodes marked as rule roots (Grammar.RuleRoot, e.g. from Rule.Root) are added to rules;
 first occurrence of each GrammarID among rule roots is stored. Tokens from GToken and GNest
-nodes are added to tokenSet; GNest nodes are appended to nests.
+nodes are added to tokenSet; GNest nodes are appended to nests. For GToken nodes, the first
+node per GrammarID is stored in tokenNodeByID (if non-nil).
 */
 func collectAll[TToken comparable](
 	g *Grammar[TToken],
 	rules map[GrammarID]*Grammar[TToken],
 	tokenSet TokenSet[TToken],
 	nests *[]NestSpec[TToken],
+	tokenNodeByID map[GrammarID]*Grammar[TToken],
 ) {
 	if g == nil {
 		return
@@ -165,6 +183,11 @@ func collectAll[TToken comparable](
 
 	case GToken:
 		tokenSet[g.Token] = struct{}{}
+		if tokenNodeByID != nil {
+			if _, exists := tokenNodeByID[g.GrammarID]; !exists {
+				tokenNodeByID[g.GrammarID] = g
+			}
+		}
 
 	case GNest:
 		tokenSet[*g.OpenToken] = struct{}{}
@@ -180,7 +203,7 @@ func collectAll[TToken comparable](
 	}
 
 	for _, child := range g.Children {
-		collectAll(child, rules, tokenSet, nests)
+		collectAll(child, rules, tokenSet, nests, tokenNodeByID)
 	}
 }
 
