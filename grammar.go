@@ -10,8 +10,9 @@ GrammarKind denotes the algebraic operation represented by a grammar node.
 
 The grammar IR is intentionally minimal and purely structural. Each kind
 corresponds to a fundamental grammar combinator found in EBNF/PEG-style
-grammars. No semantic behavior, recovery policy, or execution state is
-encoded at this layer.
+grammars. Optional recovery metadata (RecoveryTokens, NoConsumeOnRecoveryTokens)
+may be set on rule-root nodes for tooling and introspection; execution semantics
+otherwise live in the parser engine.
 
 Kinds:
 
@@ -116,10 +117,16 @@ Field semantics depend on Kind:
   - Common
     GrammarID identifies the rule. RuleLabel is optional. NodePath is filled by FinalizeNodePaths.
 
+  - Recovery (optional, for rule-root nodes)
+    RecoveryTokens and NoConsumeOnRecoveryTokens describe the recovery boundaries for the rule
+    that uses this node as its root. When set, the engine resyncs at those tokens on FailureError;
+    NoConsumeOnRecoveryTokens are sync points where the token is left in the stream for the parent.
+    Populated by ParserRuleCreate when a rule is created with this grammar.
+
 Invariants:
 
   - GrammarKind determines which fields are semantically valid.
-  - No grammar node may contain execution logic or recovery metadata.
+  - No grammar node may contain execution logic beyond optional recovery metadata.
   - Higher-level constructs must be expressed by composition, not by adding
     new GrammarKind values or special-case fields.
 
@@ -155,6 +162,18 @@ type Grammar[TToken comparable] struct {
 
 	/* IsContextBoundary is true only for the root node of a named production (e.g. from Rule.Root). Used by collectAll to populate the Rules map. */
 	IsContextBoundary bool
+
+	/*
+		RecoveryTokens are sync tokens at which the engine resyncs on FailureError (consumes until one is seen).
+		Set on the rule-root grammar by ParserRuleCreate. Nil when not applicable.
+	*/
+	RecoveryTokens []TToken
+
+	/*
+		NoConsumeOnRecoveryTokens are sync tokens at which recovery does not consume (token left in stream for parent).
+		Set on the rule-root grammar by ParserRuleCreate. Nil when not applicable.
+	*/
+	NoConsumeOnRecoveryTokens []TToken
 }
 
 /*

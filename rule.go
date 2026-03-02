@@ -290,6 +290,10 @@ func ParserRuleCreate[
 	if noConsume == nil {
 		noConsume = []TToken{}
 	}
+	if grammar != nil {
+		grammar.RecoveryTokens = append([]TToken(nil), recoveryTokens...)
+		grammar.NoConsumeOnRecoveryTokens = append([]TToken(nil), noConsume...)
+	}
 	return ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]{
 		identity:                  identity,
 		executionFn:               executionFn,
