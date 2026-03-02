@@ -179,6 +179,61 @@ func (t *tokenEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 	return t.sharedCore.constructStructuralRule(identity, rule, nil, grammar)
 }
 
+/*
+ExpectPairWithChildGrammarIDs expects two tokens in sequence and creates a single LST node with
+both lexemes attached. The concat and each token use distinct grammarIDs so the grammar IR has
+three separate nodes (construct, first token, second token) for override/metascope targeting.
+Same LST shape and execution semantics as ExpectPair.
+*/
+func (t *tokenEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) ExpectPairWithChildGrammarIDs(
+	concatID syntaxa.GrammarID,
+	firstTokenID syntaxa.GrammarID,
+	secondTokenID syntaxa.GrammarID,
+	outputNodeKind TNodeKind,
+	firstToken, secondToken TToken,
+) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
+	name     := t.sharedCore.createRuleName("ExpectPairWithChildGrammarIDs", concatID)
+	identity := t.sharedCore.createRuleIdentity(
+		name,
+		concatID,
+		t.sharedCore.formatTokensAsList(" then ", firstToken, secondToken),
+	)
+	grammar := syntaxa.Concat(
+		concatID,
+		syntaxa.Token(firstTokenID, firstToken),
+		syntaxa.Token(secondTokenID, secondToken),
+	)
+	syntaxa.MarkAsContextBoundary(grammar)
+	rule := func(ctx *syntaxa.ExecRuleContext[
+		TObservation, TToken, TTokenRole, TLexerState, TNodeKind,
+	]) Result[TObservation, TToken, TTokenRole, TNodeKind] {
+		peek := ctx.Token.Peek(0)
+		if peek.Token != firstToken {
+			return t.sharedCore.buildFailureRuleResult(nil, syntaxa.FailureNoMatch)
+		}
+		firstLex := ctx.Token.Consume()
+		next := ctx.Token.Peek(0)
+		if next.Token != secondToken {
+			ctx.Error.ReportAt(
+				string(name),
+				next,
+				fmt.Sprintf(
+					"unexpected %s, wanted %s",
+					t.sharedCore.tokenFormatter(next.Token),
+					t.sharedCore.tokenFormatter(secondToken),
+				),
+			)
+			return t.sharedCore.buildFailureRuleResult(nil, syntaxa.FailureError)
+		}
+		secondLex := ctx.Token.Consume()
+		node := ctx.Editor.NewNode(outputNodeKind)
+		ctx.Editor.AddToken(node, firstLex)
+		ctx.Editor.AddToken(node, secondLex)
+		return t.sharedCore.buildSuccessRuleResult(node)
+	}
+	return t.sharedCore.constructStructuralRule(identity, rule, nil, grammar)
+}
+
 func (t *tokenEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) expectCore(
 	ruleName string,
 	grammarID syntaxa.GrammarID,
