@@ -3,6 +3,8 @@ package syntaxa
 import (
 	"cmp"
 	"fmt"
+	"foundation/formatting"
+	"sort"
 )
 
 // ============================================================
@@ -114,9 +116,23 @@ func ProducePackage[
 	nests := make([]NestSpec[TToken], 0)
 	tokenNodeByID := make(map[GrammarID]*Grammar[TToken])
 	seenGrammarIDs := make(map[GrammarID]struct{})
+	duplicateIDs := make(map[GrammarID]struct{})
 
 	// Single unified walk
-	collectAll(g, rules, tokenSet, &nests, tokenNodeByID, seenGrammarIDs)
+	collectAll(g, rules, tokenSet, &nests, tokenNodeByID, seenGrammarIDs, duplicateIDs)
+
+	if len(duplicateIDs) > 0 {
+		ids := make([]string, 0, len(duplicateIDs))
+		for id := range duplicateIDs {
+			ids = append(ids, string(id))
+		}
+		sort.Strings(ids)
+		list := formatting.FormatStringSlice(ids, formatting.FormatSliceOptions[string]{
+			Separator: ", ",
+			Quote:     true,
+		})
+		panic(fmt.Sprintf("syntaxa: duplicate grammar IDs in grammar package (engine error): %s", list))
+	}
 
 	tokensUsed := make([]TToken, 0, len(tokenSet))
 	for t := range tokenSet {
@@ -180,9 +196,10 @@ func NestSpecsOpenTokenCounts[TToken comparable](nests []NestSpec[TToken]) map[T
 collectAll walks the grammar tree and populates rules, tokenSet, nests, and tokenNodeByID.
 
 Every node's GrammarID must be unique across the whole tree (empty IDs are ignored).
-Duplicate GrammarIDs panic (engine error). Only nodes marked as rule roots (e.g. from Rule.Root)
-are added to rules. Tokens from GToken and GNest are added to tokenSet; GNest nodes are
-appended to nests. For GToken nodes, the first node per GrammarID is stored in tokenNodeByID (if non-nil).
+Duplicate IDs are recorded in duplicateIDs; caller panics once after the walk with all duplicates.
+Only nodes marked as rule roots (e.g. from Rule.Root) are added to rules. Tokens from GToken
+and GNest are added to tokenSet; GNest nodes are appended to nests. For GToken nodes, the first
+node per GrammarID is stored in tokenNodeByID (if non-nil).
 */
 func collectAll[TToken comparable](
 	g *Grammar[TToken],
@@ -191,6 +208,7 @@ func collectAll[TToken comparable](
 	nests *[]NestSpec[TToken],
 	tokenNodeByID map[GrammarID]*Grammar[TToken],
 	seenGrammarIDs map[GrammarID]struct{},
+	duplicateIDs map[GrammarID]struct{},
 ) {
 	if g == nil {
 		return
@@ -198,9 +216,10 @@ func collectAll[TToken comparable](
 
 	if g.GrammarID != "" {
 		if _, seen := seenGrammarIDs[g.GrammarID]; seen {
-			panic(fmt.Sprintf("syntaxa: duplicate grammar ID %q in grammar package (engine error)", g.GrammarID))
+			duplicateIDs[g.GrammarID] = struct{}{}
+		} else {
+			seenGrammarIDs[g.GrammarID] = struct{}{}
 		}
-		seenGrammarIDs[g.GrammarID] = struct{}{}
 	}
 
 	if g.IsContextBoundary {
@@ -231,7 +250,7 @@ func collectAll[TToken comparable](
 	}
 
 	for _, child := range g.Children {
-		collectAll(child, rules, tokenSet, nests, tokenNodeByID, seenGrammarIDs)
+		collectAll(child, rules, tokenSet, nests, tokenNodeByID, seenGrammarIDs, duplicateIDs)
 	}
 }
 
