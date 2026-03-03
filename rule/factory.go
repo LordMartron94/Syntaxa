@@ -1026,41 +1026,66 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 Path matches: <prefixToken> <separatorToken> <elementToken> { <separatorToken> <elementToken> }
 The separator is mandatory and non-trailing.
 
-LST Shape (Compact):
-
-	nodeKind
-	├── prefixNodeKind (Lexeme)
-	├── elementNodeKind (Lexeme)
-	└── elementNodeKind (Lexeme) ...
+All grammar labels (prefix, separator, element, tail) are supplied by the caller; syntaxa does not
+invent or concatenate labels. Use ScopedBuilder.Path for a scope-bound API that derives prefix/sep/tail via Sub.
 */
 func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) Path(
 	grammarID syntaxa.GrammarLabel,
 	nodeKind TNodeKind,
+	prefixGrammarLabel syntaxa.GrammarLabel,
 	prefixNodeKind TNodeKind,
 	prefixToken TToken,
+	separatorGrammarLabel syntaxa.GrammarLabel,
 	separatorToken TToken,
+	elementGrammarLabel syntaxa.GrammarLabel,
 	elementNodeKind TNodeKind,
 	elementToken TToken,
+	tailGrammarLabel syntaxa.GrammarLabel,
 ) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
-	idPrefix := grammarID + ".prefix"
-	idSep := grammarID + ".sep"
-	idElem := grammarID + ".elem"
-
 	segment := r.TransparentSequence(
-		idSep,
-		r.token.ExpectVirtual(idSep, separatorToken),
-		r.token.Expect(idElem, elementNodeKind, elementToken),
+		separatorGrammarLabel,
+		r.token.ExpectVirtual(separatorGrammarLabel, separatorToken),
+		r.token.Expect(elementGrammarLabel, elementNodeKind, elementToken),
 	)
 
 	return r.Sequence(
 		grammarID,
 		nodeKind,
-		r.token.Expect(idPrefix, prefixNodeKind, prefixToken),
+		r.token.Expect(prefixGrammarLabel, prefixNodeKind, prefixToken),
 		r.Required(
 			segment,
 			fmt.Sprintf("expected %s followed by identifier", r.sharedCore.tokenFormatter(separatorToken)),
 		),
-		r.TransparentZeroOrMore(grammarID+".tail", segment),
+		r.TransparentZeroOrMore(tailGrammarLabel, segment),
+	)
+}
+
+/*
+Path builds a Path rule in this scope. The rule ID is the scope base; prefix, separator, and tail
+labels are derived via Sub; elementGrammarLabel is supplied by the client so overrides (e.g. editor
+scope) can target the element by the same label.
+*/
+func (b *ScopedBuilder[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) Path(
+	nodeKind TNodeKind,
+	prefixNodeKind TNodeKind,
+	prefixToken TToken,
+	separatorToken TToken,
+	elementGrammarLabel syntaxa.GrammarLabel,
+	elementNodeKind TNodeKind,
+	elementToken TToken,
+) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
+	return b.rb.Rule.Path(
+		b.base,
+		nodeKind,
+		b.Sub("prefix"),
+		prefixNodeKind,
+		prefixToken,
+		b.Sub("sep"),
+		separatorToken,
+		elementGrammarLabel,
+		elementNodeKind,
+		elementToken,
+		b.Sub("tail"),
 	)
 }
 
@@ -1817,6 +1842,35 @@ type RuleBuilder[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNod
 	Pratt *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 
 	sharedCore *sharedCore[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
+}
+
+/*
+ScopedBuilder is a builder bound to a specific grammar scope (base ID). Use Scope(grammarID) on RuleBuilder
+to obtain one. Sub(name) derives a hierarchical sub-scope from the base so syntaxa never invents labels;
+Path and other methods use the base and derived labels as provided by the client or Sub.
+*/
+type ScopedBuilder[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable] struct {
+	base syntaxa.GrammarLabel
+	rb   *RuleBuilder[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
+}
+
+/*
+Scope returns a ScopedBuilder bound to grammarID. All rules built from it (e.g. Path) use this ID as the
+rule identity; sub-parts use Sub(name) for hierarchical identities so the client controls the label contract.
+*/
+func (rb *RuleBuilder[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) Scope(grammarID syntaxa.GrammarLabel) *ScopedBuilder[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
+	return &ScopedBuilder[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]{base: grammarID, rb: rb}
+}
+
+/*
+Sub returns a derived GrammarLabel for a named sub-scope under the builder's base. Derivation is in one
+place so hierarchical identities are predictable and syntaxa does not invent or concatenate labels elsewhere.
+*/
+func (b *ScopedBuilder[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) Sub(name string) syntaxa.GrammarLabel {
+	if b.base == "" {
+		return syntaxa.GrammarLabel(name)
+	}
+	return syntaxa.GrammarLabel(string(b.base) + " " + name)
 }
 
 /*
