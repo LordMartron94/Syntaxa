@@ -680,21 +680,20 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 }
 
 /*
-OptionalPrefix makes the rule optional only when the current token equals prefixToken.
+OptionalPrefix conditionally executes the rule if the next token matches prefixToken.
 
-If the next token is prefixToken, the rule is executed (in normal mode). Otherwise the optional succeeds without consuming and returns a nil node. Use this to avoid committing to a production until the prefix is seen.
+Execution flow:
+ 1. Peeks at the next token without consuming it.
+ 2. If it matches prefixToken, it commits to the rule. The rule runs in ExecutionNormal,
+    meaning any failure inside the rule results in a syntax error.
+ 3. If it does not match, it skips the rule entirely, consumes nothing, and returns a nil node.
 
 Use cases:
-- Optional blocks that start with a keyword (e.g. "else" block).
-- Prefixed optional clauses without full lookahead.
+- Parsing optional syntax blocks that are strictly gated by a specific keyword (e.g., an "else" block).
 
-Prerequisites:
-- rule must be a valid parser rule.
-- prefixToken is the token that triggers execution of rule.
-
-Edge cases:
-- When prefix does not match, succeeds immediately with nil node (no consumption).
-- When prefix matches, rule runs in ExecutionNormal; its failure is a syntax error.
+Parameters:
+- rule: The parser rule to execute if the prefix is present.
+- prefixToken: The token required to trigger the rule's execution.
 */
 func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) OptionalPrefix(
 	rule Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
@@ -707,21 +706,22 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 }
 
 /*
-OptionalWhen makes the rule optional when shouldStart returns false at the current position.
+OptionalWhen conditionally executes the rule based on a custom lookahead predicate.
 
-When shouldStart(ctx.Select) is false, the rule is not run and the optional succeeds with a nil node. When true, the rule is executed in normal mode and its result is returned.
+Execution flow:
+ 1. Evaluates shouldStart. This function must inspect the token stream (e.g., via ctx.Select.Peek)
+    without consuming any tokens.
+ 2. If shouldStart returns true, it commits to the rule. The rule runs in ExecutionNormal;
+    failure results in a syntax error.
+ 3. If shouldStart returns false, it skips the rule, consumes nothing, and returns a nil node.
 
 Use cases:
-- Custom lookahead (e.g. "optional when next token is not X").
-- Prefixed optionals; prefer OptionalPrefix when the condition is "next token == prefix".
+- Complex lookahead conditions (e.g., "run optional rule when next token is X and the one after is Y").
+- Note: Prefer OptionalPrefix if you are only checking a single prefix token.
 
-Prerequisites:
-- rule must be a valid parser rule.
-- shouldStart must only inspect the token stream (e.g. ctx.Select.Peek(0)); it should not consume.
-
-Edge cases:
-- shouldStart true and rule failure: syntax error (normal execution).
-- shouldStart false: success with nil node, no consumption.
+Parameters:
+- rule: The parser rule to execute if the condition is met.
+- shouldStart: A predicate determining whether to commit to the rule. Must be side-effect free.
 */
 func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) OptionalWhen(
 	rule Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
@@ -1020,6 +1020,48 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 	name := r.sharedCore.createRuleName("Block", grammarID)
 	identity := r.sharedCore.createRuleIdentity(name, grammarID, "")
 	return r.listCore(identity, nodeKind, []TToken{blockEndToken}, rules...)
+}
+
+/*
+Path matches: <prefixToken> <separatorToken> <elementToken> { <separatorToken> <elementToken> }
+The separator is mandatory and non-trailing.
+
+LST Shape (Compact):
+
+	nodeKind
+	├── prefixNodeKind (Lexeme)
+	├── elementNodeKind (Lexeme)
+	└── elementNodeKind (Lexeme) ...
+*/
+func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) Path(
+	grammarID syntaxa.GrammarLabel,
+	nodeKind TNodeKind,
+	prefixNodeKind TNodeKind,
+	prefixToken TToken,
+	separatorToken TToken,
+	elementNodeKind TNodeKind,
+	elementToken TToken,
+) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
+	idPrefix := grammarID + ".prefix"
+	idSep := grammarID + ".sep"
+	idElem := grammarID + ".elem"
+
+	segment := r.TransparentSequence(
+		idSep,
+		r.token.ExpectVirtual(idSep, separatorToken),
+		r.token.Expect(idElem, elementNodeKind, elementToken),
+	)
+
+	return r.Sequence(
+		grammarID,
+		nodeKind,
+		r.token.Expect(idPrefix, prefixNodeKind, prefixToken),
+		r.Required(
+			segment,
+			fmt.Sprintf("expected %s followed by identifier", r.sharedCore.tokenFormatter(separatorToken)),
+		),
+		r.TransparentZeroOrMore(grammarID+".tail", segment),
+	)
 }
 
 /*
@@ -1926,7 +1968,7 @@ func (s *sharedCore[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) c
 ) syntaxa.RuleIdentity {
 	return syntaxa.RuleIdentity{
 		RuleName:      name,
-		GrammarLabel:     grammarID,
+		GrammarLabel:  grammarID,
 		ExpectedLabel: expectedLabel,
 	}
 }
