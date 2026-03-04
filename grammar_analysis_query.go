@@ -20,7 +20,7 @@ func GrammarAnalysisNullable[TToken comparable](
 	if analysis == nil || node == nil || node.NodePath == nil {
 		return false
 	}
-	key := nodeKeyFromPath(*node.NodePath)
+	key := NodeKeyFromPath(*node.NodePath)
 	return analysis.Nullable[key]
 }
 
@@ -37,7 +37,7 @@ func GrammarAnalysisFirst[TToken comparable](
 	if analysis == nil || node == nil || node.NodePath == nil {
 		return make(TokenSet[TToken])
 	}
-	key := nodeKeyFromPath(*node.NodePath)
+	key := NodeKeyFromPath(*node.NodePath)
 	set := analysis.First[key]
 	if set == nil {
 		return make(TokenSet[TToken])

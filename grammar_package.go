@@ -40,17 +40,17 @@ EntryRuleParserRule is the executable rule for the entry production; set when pr
 a package for the parser. Nil when the package is produced for analysis only (e.g. debug dumps).
 */
 type GrammarPackage[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind, TLexerState comparable] struct {
-	Name                  string
-	Version               string
-	EntryRule             GrammarLabel
-	Rules                 map[GrammarLabel]*Grammar[TToken]
-	TokensUsed            []TToken
-	Nests                 []NestSpec[TToken]
-	Analysis              *GrammarAnalysis[TToken]
-	PathToGrammarLabel    map[NodeKey]GrammarLabel
-	NodeByGrammarKey      map[GrammarKey]*Grammar[TToken]
-	NodesByGrammarLabel   map[GrammarLabel][]*Grammar[TToken]
-	EntryRuleParserRule   *ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
+	Name                string
+	Version             string
+	EntryRule           GrammarLabel
+	Rules               map[GrammarLabel]*Grammar[TToken]
+	TokensUsed          []TToken
+	Nests               []NestSpec[TToken]
+	Analysis            *GrammarAnalysis[TToken]
+	PathToGrammarLabel  map[NodeKey]GrammarLabel
+	NodeByGrammarKey    map[GrammarKey]*Grammar[TToken]
+	NodesByGrammarLabel map[GrammarLabel][]*Grammar[TToken]
+	EntryRuleParserRule *ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 }
 
 /*
@@ -140,21 +140,21 @@ func ProducePackage[
 		tokensUsed = append(tokensUsed, t)
 	}
 
-	analysis := computeAnalysisSingleTree(root)
+	analysis := ComputeAnalysisSingleTree(root)
 	pathToGrammarLabel := buildPathToGrammarLabel(root)
 
 	return GrammarPackage[TObservation, TToken, TTokenRole, TNodeKind, TLexerState]{
-		Name:                 name,
-		Version:              version,
-		EntryRule:            root.GrammarLabel,
-		Rules:                rules,
-		TokensUsed:           tokensUsed,
-		Nests:                nests,
-		Analysis:             analysis,
-		PathToGrammarLabel:   pathToGrammarLabel,
-		NodeByGrammarKey:     nodeByGrammarKey,
-		NodesByGrammarLabel:  nodesByGrammarLabel,
-		EntryRuleParserRule:  entryRule,
+		Name:                name,
+		Version:             version,
+		EntryRule:           root.GrammarLabel,
+		Rules:               rules,
+		TokensUsed:          tokensUsed,
+		Nests:               nests,
+		Analysis:            analysis,
+		PathToGrammarLabel:  pathToGrammarLabel,
+		NodeByGrammarKey:    nodeByGrammarKey,
+		NodesByGrammarLabel: nodesByGrammarLabel,
+		EntryRuleParserRule: entryRule,
 	}
 }
 
@@ -172,7 +172,7 @@ func buildPathToGrammarLabelRec[TToken comparable](g *Grammar[TToken], out map[N
 	if g == nil || g.NodePath == nil {
 		return
 	}
-	key := nodeKeyFromPath(*g.NodePath)
+	key := NodeKeyFromPath(*g.NodePath)
 	out[key] = g.GrammarLabel
 	for _, c := range g.Children {
 		buildPathToGrammarLabelRec(c, out)
@@ -254,12 +254,12 @@ func collectAll[TToken comparable](
 // ============================================================
 
 /*
-computeAnalysisSingleTree runs nullable, first, and follow analysis on the grammar tree.
+ComputeAnalysisSingleTree runs nullable, first, and follow analysis on the grammar tree.
 
 Returns a GrammarAnalysis with maps keyed by NodeKey. The root's GrammarLabel is used
 as the current rule when descending; nested rule roots switch the current rule.
 */
-func computeAnalysisSingleTree[TToken comparable](root *Grammar[TToken]) *GrammarAnalysis[TToken] {
+func ComputeAnalysisSingleTree[TToken comparable](root *Grammar[TToken]) *GrammarAnalysis[TToken] {
 	nullable := make(map[NodeKey]bool)
 	first := make(map[NodeKey]TokenSet[TToken])
 	follow := make(map[NodeKey]TokenSet[TToken])
@@ -294,7 +294,7 @@ GEpsilon and GOptional are nullable; GToken and GNest are not; GRepeat is nullab
 GConcat is nullable iff all children are; GChoice is nullable iff any child is.
 */
 func computeNullable[TToken comparable](g *Grammar[TToken], currentRule GrammarLabel, out map[NodeKey]bool) bool {
-	key := nodeKeyFromPath(*g.NodePath)
+	key := NodeKeyFromPath(*g.NodePath)
 
 	var res bool
 	switch g.Kind {
@@ -340,7 +340,7 @@ func propagateFirst[TToken comparable](g *Grammar[TToken], currentRule GrammarLa
 		currentRule = g.GrammarLabel
 	}
 
-	key := nodeKeyFromPath(*g.NodePath)
+	key := NodeKeyFromPath(*g.NodePath)
 	changed := false
 	set := getOrInit(out, key)
 
@@ -352,13 +352,13 @@ func propagateFirst[TToken comparable](g *Grammar[TToken], currentRule GrammarLa
 		}
 	case GChoice, GOptional, GRepeat:
 		for _, c := range g.Children {
-			if mergeInto(set, out[nodeKeyFromPath(*c.NodePath)]) {
+			if mergeInto(set, out[NodeKeyFromPath(*c.NodePath)]) {
 				changed = true
 			}
 		}
 	case GConcat:
 		for _, c := range g.Children {
-			childKey := nodeKeyFromPath(*c.NodePath)
+			childKey := NodeKeyFromPath(*c.NodePath)
 			if mergeInto(set, out[childKey]) {
 				changed = true
 			}
@@ -402,7 +402,7 @@ func propagateFollow[TToken comparable](
 	}
 
 	changed := false
-	parentKey := nodeKeyFromPath(*g.NodePath)
+	parentKey := NodeKeyFromPath(*g.NodePath)
 
 	// Ensure parent set exists to avoid nil checks in child merges
 	if follow[parentKey] == nil {
@@ -415,7 +415,7 @@ func propagateFollow[TToken comparable](
 		// Every alternative in a choice inherits the follow set of the choice itself
 		// Choice ::= ( A | B | C ) Follow(Choice) -> Follow(A), Follow(B), Follow(C)
 		for _, c := range g.Children {
-			childKey := nodeKeyFromPath(*c.NodePath)
+			childKey := NodeKeyFromPath(*c.NodePath)
 			if mergeInto(getOrInit(follow, childKey), follow[parentKey]) {
 				changed = true
 			}
@@ -424,13 +424,13 @@ func propagateFollow[TToken comparable](
 	case GConcat:
 		for i := 0; i < len(g.Children); i++ {
 			A := g.Children[i]
-			AKey := nodeKeyFromPath(*A.NodePath)
+			AKey := NodeKeyFromPath(*A.NodePath)
 			targetFollow := getOrInit(follow, AKey)
 
 			// Rule 1: A is followed by FIRST of everything to its right
 			for j := i + 1; j < len(g.Children); j++ {
 				B := g.Children[j]
-				BKey := nodeKeyFromPath(*B.NodePath)
+				BKey := NodeKeyFromPath(*B.NodePath)
 
 				if mergeInto(targetFollow, first[BKey]) {
 					changed = true
@@ -444,7 +444,7 @@ func propagateFollow[TToken comparable](
 			// Rule 2: If everything to the right is nullable, A inherits parent's FOLLOW
 			allRightNullable := true
 			for j := i + 1; j < len(g.Children); j++ {
-				if !nullable[nodeKeyFromPath(*g.Children[j].NodePath)] {
+				if !nullable[NodeKeyFromPath(*g.Children[j].NodePath)] {
 					allRightNullable = false
 					break
 				}
@@ -461,7 +461,7 @@ func propagateFollow[TToken comparable](
 		// A* -> body can be followed by its own FIRST (looping)
 		// A* -> body also inherits parent's FOLLOW (exiting)
 		body := g.Children[0]
-		bodyKey := nodeKeyFromPath(*body.NodePath)
+		bodyKey := NodeKeyFromPath(*body.NodePath)
 		bodyFollow := getOrInit(follow, bodyKey)
 
 		if mergeInto(bodyFollow, first[bodyKey]) {
@@ -474,7 +474,7 @@ func propagateFollow[TToken comparable](
 	case GOptional:
 		// Optional(A) -> A inherits parent's FOLLOW
 		body := g.Children[0]
-		bodyKey := nodeKeyFromPath(*body.NodePath)
+		bodyKey := NodeKeyFromPath(*body.NodePath)
 		if mergeInto(getOrInit(follow, bodyKey), follow[parentKey]) {
 			changed = true
 		}
@@ -484,7 +484,7 @@ func propagateFollow[TToken comparable](
 		// 1. Body is followed by the Close token
 		// 2. The Close token (virtual or real) inherits the Nest's FOLLOW
 		body := g.Children[0]
-		bodyKey := nodeKeyFromPath(*body.NodePath)
+		bodyKey := NodeKeyFromPath(*body.NodePath)
 		bodyFollow := getOrInit(follow, bodyKey)
 
 		if _, exists := bodyFollow[*g.CloseToken]; !exists {
@@ -523,7 +523,7 @@ func initializeFollow[TToken comparable](
 		currentRule = g.GrammarLabel
 	}
 
-	key := nodeKeyFromPath(*g.NodePath)
+	key := NodeKeyFromPath(*g.NodePath)
 	if follow[key] == nil {
 		follow[key] = make(TokenSet[TToken])
 	}
@@ -552,11 +552,11 @@ func mergeInto[TToken comparable](
 // ============================================================
 
 /*
-nodeKeyFromPath builds a NodeKey from a node path.
+NodeKeyFromPath builds a NodeKey from a node path.
 
 NodePath is unique per node in the tree. Using path as the sole key ensures analysis maps
 (nullable, first, follow) are consistent when multiple nodes share the same GrammarLabel.
 */
-func nodeKeyFromPath(path NodePath) NodeKey {
+func NodeKeyFromPath(path NodePath) NodeKey {
 	return NodeKey(path)
 }

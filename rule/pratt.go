@@ -42,7 +42,6 @@ type PrattImplicitInfix[TToken, TNodeKind comparable] struct {
 	LeftBP   int
 	RightBP  int
 	NodeKind TNodeKind
-	Predict  func(peek TToken) bool
 }
 
 /*
@@ -104,6 +103,30 @@ func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 		}
 	}
 
+	// Dynamic FIRST set computation for Implicit Concatenation
+	var predictMap map[TToken]bool
+	if config.ImplicitInfix != nil {
+		predictMap = make(map[TToken]bool)
+
+		// 1. Get FIRST set of the Primary rule via your existing Analysis
+		primaryGrammar := primary.GetGrammar()
+		if primaryGrammar != nil {
+			// Ensure paths are finalized so analysis has valid keys
+			primaryGrammar.FinalizeNodePaths()
+			analysis := syntaxa.ComputeAnalysisSingleTree(primaryGrammar)
+			rootKey := syntaxa.NodeKeyFromPath(*primaryGrammar.NodePath)
+
+			for tok := range analysis.First[rootKey] {
+				predictMap[tok] = true
+			}
+		}
+
+		// 2. Prefix operators also start an expression, so they trigger concatenation
+		for tok := range prefixMap {
+			predictMap[tok] = true
+		}
+	}
+
 	name := p.sharedCore.createRuleName("Expression", grammarLabel)
 	identity := p.sharedCore.createRuleIdentity(name, grammarLabel, "expression")
 
@@ -113,7 +136,8 @@ func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 	exec := func(ctx *syntaxa.ExecRuleContext[
 		TObservation, TToken, TTokenRole, TLexerState, TNodeKind,
 	]) Result[TObservation, TToken, TTokenRole, TNodeKind] {
-		return p.runPrattExpression(ctx, name, primary, prefixMap, infixMap, config.ImplicitInfix, 0)
+		// Pass both the config AND the pre-computed map
+		return p.runPrattExpression(ctx, name, primary, prefixMap, infixMap, config.ImplicitInfix, predictMap, 0)
 	}
 
 	recovery := config.RecoveryTokens
@@ -162,33 +186,31 @@ func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 	primary Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	prefixMap map[TToken]prefixInfo[TNodeKind],
 	infixMap map[TToken]infixInfo[TNodeKind],
-	implicitOp *PrattImplicitInfix[TToken, TNodeKind], // Added parameter
+	implicitOp *PrattImplicitInfix[TToken, TNodeKind],
+	predictMap map[TToken]bool,
 	minBP int,
 ) Result[TObservation, TToken, TTokenRole, TNodeKind] {
-	// 1. Handle Prefix / Primary Atom
-	// Ensure parsePrattPrefix is updated to pass the implicitOp to recursive calls
-	leftResult := p.parsePrattPrefix(ctx, name, primary, prefixMap, infixMap, implicitOp)
+
+	// 1. Parse the left side (Prefix or Primary)
+	leftResult := p.parsePrattPrefix(ctx, name, primary, prefixMap, infixMap, implicitOp, predictMap)
 	if leftResult.Failed() {
 		return leftResult
 	}
 	left := leftResult.Node
 
-	// 2. Precedence Climbing Loop
+	// 2. Climb precedence
 	for {
 		peek := ctx.Token.Peek(0)
 		peekToken := peek.Token
 
-		// OPTION A: Explicit Infix Operator (e.g., '|')
+		// OPTION A: Explicit Infix Operator
 		if inf, ok := infixMap[peekToken]; ok {
 			if inf.leftBP < minBP {
-				return p.sharedCore.buildSuccessRuleResult(left)
+				break
 			}
 
-			// Consume the operator token
 			opLex := ctx.Token.Consume()
-
-			// Recurse to find the right operand
-			rightResult := p.runPrattExpression(ctx, name, primary, prefixMap, infixMap, implicitOp, inf.rightBP)
+			rightResult := p.runPrattExpression(ctx, name, primary, prefixMap, infixMap, implicitOp, predictMap, inf.rightBP)
 			if rightResult.Failed() {
 				return rightResult
 			}
@@ -199,7 +221,6 @@ func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 				return p.sharedCore.buildFailureRuleResult(nil, syntaxa.FailureError)
 			}
 
-			// Construct the Infix Node
 			opNode := ctx.Editor.NewNode(inf.nodeKind)
 			ctx.Editor.AddToken(opNode, opLex)
 			ctx.Editor.AttachChild(opNode, left)
@@ -209,33 +230,30 @@ func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 		}
 
 		// OPTION B: Implicit Juxtaposition (Concatenation)
-		// Check if we have an implicit config and if the next token starts a new primary
-		if implicitOp != nil && implicitOp.LeftBP >= minBP && implicitOp.Predict(peekToken) {
+		if implicitOp != nil && implicitOp.LeftBP >= minBP && predictMap[peekToken] {
 
-			// Note: We do NOT consume a token here. Adjacency is the "operator".
-			rightResult := p.runPrattExpression(ctx, name, primary, prefixMap, infixMap, implicitOp, implicitOp.RightBP)
+			// We do NOT consume a token; adjacency IS the operator.
+			rightResult := p.runPrattExpression(ctx, name, primary, prefixMap, infixMap, implicitOp, predictMap, implicitOp.RightBP)
 			if rightResult.Failed() {
 				return rightResult
 			}
 
 			right := rightResult.Node
 			if right == nil {
-				// This shouldn't happen if Predict is accurate, but we guard against it.
 				peekLex := ctx.Token.Peek(0)
 				ctx.Error.ReportAt(string(name), peekLex, "missing right operand in concatenation")
 				return p.sharedCore.buildFailureRuleResult(nil, syntaxa.FailureError)
 			}
 
-			// Construct the Implicit Infix Node (Concat)
+			// Create the node representing the implicit sequence
 			opNode := ctx.Editor.NewNode(implicitOp.NodeKind)
-			// No token is added to the node since the operator is implicit
 			ctx.Editor.AttachChild(opNode, left)
 			ctx.Editor.AttachChild(opNode, right)
 			left = opNode
 			continue
 		}
 
-		// OPTION C: No valid operator found or precedence is too low
+		// No more operators to process at this precedence level
 		break
 	}
 
@@ -248,16 +266,16 @@ func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 	primary Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	prefixMap map[TToken]prefixInfo[TNodeKind],
 	infixMap map[TToken]infixInfo[TNodeKind],
-	implicitOp *PrattImplicitInfix[TToken, TNodeKind], // Added parameter
+	implicitOp *PrattImplicitInfix[TToken, TNodeKind],
+	predictMap map[TToken]bool,
 ) Result[TObservation, TToken, TTokenRole, TNodeKind] {
 	peek := ctx.Token.Peek(0)
 
-	// 1. Check if the current token is a Prefix Operator (e.g., !, -, ~)
+	// Check for Prefix Operator
 	if info, ok := prefixMap[peek.Token]; ok {
 		opLex := ctx.Token.Consume()
 
-		// Recurse using runPrattExpression to handle binding power and implicit ops
-		operandResult := p.runPrattExpression(ctx, name, primary, prefixMap, infixMap, implicitOp, info.rightBP)
+		operandResult := p.runPrattExpression(ctx, name, primary, prefixMap, infixMap, implicitOp, predictMap, info.rightBP)
 		if operandResult.Failed() {
 			return operandResult
 		}
@@ -268,24 +286,21 @@ func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 			return p.sharedCore.buildFailureRuleResult(nil, syntaxa.FailureError)
 		}
 
-		// Construct the Prefix Node
-		nodeKind := info.nodeKind
-		opNode := ctx.Editor.NewNode(nodeKind)
+		opNode := ctx.Editor.NewNode(info.nodeKind)
 		ctx.Editor.AddToken(opNode, opLex)
 		ctx.Editor.AttachChild(opNode, operand)
-
 		return p.sharedCore.buildSuccessRuleResult(opNode)
 	}
 
-	// 2. If not a prefix, it must be a Primary Atom (Literal, Identifier, Group)
+	// Fallback to the Primary rule (Literals, VarRefs, etc.)
 	result := ctx.ExecuteRule(primary, syntaxa.ExecutionNormal)
 	if result.Failed() {
 		return result
 	}
 
 	if result.Node == nil {
-		peek := ctx.Token.Peek(0)
-		ctx.Error.ReportAt(string(name), peek, "expected expression")
+		peekLex := ctx.Token.Peek(0)
+		ctx.Error.ReportAt(string(name), peekLex, "expected expression")
 		return p.sharedCore.buildFailureRuleResult(nil, syntaxa.FailureError)
 	}
 
