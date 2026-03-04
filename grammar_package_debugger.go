@@ -19,13 +19,13 @@ All hooks are optional; missing ones fall back to default formatting (e.g. fmt.S
 Use for custom token or rule ID display (e.g. to match a GrammarDebugFormatter).
 */
 type GrammarPackageDebugFormatter[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind, TLexerState comparable] struct {
-	FormatPackageName func(name string) string
-	FormatVersion     func(version string) string
+	FormatPackageName  func(name string) string
+	FormatVersion      func(version string) string
 	FormatGrammarLabel func(GrammarLabel) string
-	FormatToken       func(TToken) string
-	FormatNodeKey     func(NodeKey) string
-	FormatTokenSet    func(TokenSet[TToken]) string
-	FormatNestSpec    func(NestSpec[TToken]) string
+	FormatToken        func(TToken) string
+	FormatNodeKey      func(NodeKey) string
+	FormatTokenSet     func(TokenSet[TToken]) string
+	FormatNestSpec     func(NestSpec[TToken]) string
 }
 
 func (f GrammarPackageDebugFormatter[TObservation, TToken, TTokenRole, TNodeKind, TLexerState]) packageName(name string) string {
@@ -156,11 +156,11 @@ func (d *GrammarPackageDebugger[TObservation, TToken, TTokenRole, TNodeKind, TLe
 	if _, err := io.WriteString(w, "=== Rules ===\n"); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(w, "  count: %d\n", len(pkg.Rules)); err != nil {
+	if _, err := fmt.Fprintf(w, "  count: %d\n", len(pkg.Grammars)); err != nil {
 		return err
 	}
-	ruleLabels := make([]GrammarLabel, 0, len(pkg.Rules))
-	for label := range pkg.Rules {
+	ruleLabels := make([]GrammarLabel, 0, len(pkg.Grammars))
+	for label := range pkg.Grammars {
 		ruleLabels = append(ruleLabels, label)
 	}
 	sort.Slice(ruleLabels, func(i, j int) bool { return ruleLabels[i] < ruleLabels[j] })

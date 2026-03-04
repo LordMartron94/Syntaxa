@@ -103,40 +103,37 @@ func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 		}
 	}
 
-	// Dynamic FIRST set computation for Implicit Concatenation
-	var predictMap map[TToken]bool
-	if config.ImplicitInfix != nil {
-		predictMap = make(map[TToken]bool)
-
-		// 1. Get FIRST set of the Primary rule via your existing Analysis
-		primaryGrammar := primary.GetGrammar()
-		if primaryGrammar != nil {
-			// Ensure paths are finalized so analysis has valid keys
-			primaryGrammar.FinalizeNodePaths()
-			analysis := syntaxa.ComputeAnalysisSingleTree(primaryGrammar)
-			rootKey := syntaxa.NodeKeyFromPath(*primaryGrammar.NodePath)
-
-			for tok := range analysis.First[rootKey] {
-				predictMap[tok] = true
-			}
-		}
-
-		// 2. Prefix operators also start an expression, so they trigger concatenation
-		for tok := range prefixMap {
-			predictMap[tok] = true
-		}
-	}
-
 	name := p.sharedCore.createRuleName("Expression", grammarLabel)
 	identity := p.sharedCore.createRuleIdentity(name, grammarLabel, "expression")
 
 	grammar := p.buildPrattGrammar(grammarLabel, primary, config.PrefixOps, config.InfixOps)
 	syntaxa.MarkAsContextBoundary(grammar)
 
+	hasImplicitInfix := config.ImplicitInfix != nil
+
 	exec := func(ctx *syntaxa.ExecRuleContext[
 		TObservation, TToken, TTokenRole, TLexerState, TNodeKind,
 	]) Result[TObservation, TToken, TTokenRole, TNodeKind] {
-		// Pass both the config AND the pre-computed map
+
+		// 1. Resolve prediction dynamically at execution time
+		var predictMap map[TToken]bool
+		if hasImplicitInfix {
+			predictMap = make(map[TToken]bool)
+
+			analysis := ctx.GetAnalysis()
+			rootKey := syntaxa.NodeKeyFromPath(*primary.GetGrammar().NodePath)
+
+			// Populate from the global, mathematically verified FIRST set
+			for tok := range analysis.First[rootKey] {
+				predictMap[tok] = true
+			}
+
+			// Add prefixes
+			for tok := range prefixMap {
+				predictMap[tok] = true
+			}
+		}
+
 		return p.runPrattExpression(ctx, name, primary, prefixMap, infixMap, config.ImplicitInfix, predictMap, 0)
 	}
 

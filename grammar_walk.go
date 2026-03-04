@@ -136,10 +136,15 @@ func (g *Grammar[TToken]) FindFirst(
 }
 
 func grammarWalkChildren[TToken comparable](g *Grammar[TToken]) []*Grammar[TToken] {
-	if g == nil || len(g.Children) == 0 {
+	if g == nil {
 		return nil
 	}
-
+	if g.Kind == GReference && g.ResolvedReference != nil {
+		return []*Grammar[TToken]{g.ResolvedReference}
+	}
+	if len(g.Children) == 0 {
+		return nil
+	}
 	out := make([]*Grammar[TToken], 0, len(g.Children))
 	for _, c := range g.Children {
 		if c != nil {

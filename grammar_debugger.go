@@ -90,6 +90,9 @@ func (e defaultGrammarEdgeEnumerator[TToken]) EdgesOf(
 			{label: "body", node: g.Children[0]},
 		}
 
+	case GReference:
+		return nil
+
 	default:
 		return nil
 	}
@@ -305,6 +308,15 @@ func (d *GrammarDebugger[TToken]) writeNodeLine(
 			txt = f.applyColor(txt, f.ColorRange)
 
 			if _, err := io.WriteString(w, " "+txt); err != nil {
+				return err
+			}
+		}
+
+	case GReference:
+		if g.ReferenceTarget != "" && f.FormatGrammarLabel != nil {
+			txt := f.FormatGrammarLabel(g.ReferenceTarget)
+			txt = f.applyColor(txt, f.ColorGrammarLabel)
+			if _, err := io.WriteString(w, " → "+txt); err != nil {
 				return err
 			}
 		}

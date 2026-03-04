@@ -101,6 +101,14 @@ type ParseResult[TObs cmp.Ordered, TToken, TTokenRole, TKind comparable] struct 
 }
 
 /*
+RuleRegistry maps grammar labels to executable parser rules.
+
+It serves as the late-binding lookup table for GReference nodes.
+Only named, context-boundary rules need to be registered here.
+*/
+type RuleRegistry[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable] map[GrammarLabel]ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
+
+/*
 SyntaxaParser is a grammar-agnostic parsing engine.
 
 It imposes no parsing paradigm (LL, LR, Pratt, PEG, etc.).
@@ -112,7 +120,9 @@ Responsibilities:
 */
 type SyntaxaParser[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind, TLexerState comparable] struct {
 	grammarPackage *GrammarPackage[TObservation, TToken, TTokenRole, TNodeKind, TLexerState]
-	programRule    ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
+	registry       RuleRegistry[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
+
+	programRule ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 
 	postProcessor NodePostProcessor[TObservation, TToken, TTokenRole, TNodeKind]
 
@@ -139,6 +149,7 @@ nodePostProcessor is optional and allowed to be nil.
 */
 func SyntaxaParserCreate[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind, TLexerState comparable](
 	grammarPackage *GrammarPackage[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
+	registry RuleRegistry[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	tokenFormatter func(token TToken) string,
 	observationFormatter lexarch.ObservationFormatter[TObservation],
 	nodePostProcessor NodePostProcessor[TObservation, TToken, TTokenRole, TNodeKind],
@@ -151,6 +162,7 @@ func SyntaxaParserCreate[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind
 	}
 	return &SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TLexerState]{
 		grammarPackage:       grammarPackage,
+		registry:             registry,
 		programRule:          *grammarPackage.EntryRuleParserRule,
 		tokenFormatter:       tokenFormatter,
 		observationFormatter: observationFormatter,
@@ -448,7 +460,16 @@ func validateRuleSuccess[
 	endPos int,
 	lexemePreRule lexarch.Lexeme[TObservation, TToken, TTokenRole],
 ) error {
+
 	contract := rule.contract
+
+	if rule.grammar != nil && rule.grammar.Kind == GReference {
+		if targetRule, exists := parser.registry[rule.grammar.ReferenceTarget]; exists {
+			contract = targetRule.contract
+		} else {
+			return fmt.Errorf("engine validation error: unresolved reference target '%s'", rule.grammar.ReferenceTarget)
+		}
+	}
 
 	if endPos == startPos && contract.MustConsume && lexemePreRule.Token != parser.eofToken {
 		return fmt.Errorf(

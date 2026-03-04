@@ -54,6 +54,7 @@ const (
 	GOptional
 	GEpsilon
 	GNest
+	GReference
 )
 
 /*
@@ -184,6 +185,14 @@ type Grammar[TToken comparable] struct {
 		Set on the rule-root grammar by ParserRuleCreate. Nil when not applicable.
 	*/
 	NoConsumeOnRecoveryTokens []TToken
+
+	ReferenceTarget GrammarLabel
+
+	/*
+		ResolvedReference is set during ProducePackage for GReference nodes to the referenced rule root.
+		Used by the grammar walker so Walk/WalkPre/WalkPost traverse into the referenced production.
+	*/
+	ResolvedReference *Grammar[TToken]
 }
 
 /*
@@ -206,29 +215,27 @@ func (g *Grammar[TToken]) FinalizeNodePaths() {
 }
 
 func fillForGrammar[TToken comparable](g *Grammar[TToken], current string) {
-	if g == nil {
+	if g == nil || g.NodePath != nil {
 		return
 	}
 
-	// Assign current node's path.
 	p := NodePath(current)
 	g.NodePath = &p
 
-	// Recurse into children with dot-separated indices.
 	if len(g.Children) == 0 {
 		return
 	}
 
-	// Small optimization to avoid repeated allocations in deep trees:
-	// build "current." once and append indices.
+	traverseChildrenPaths(g.Children, current)
+}
+
+func traverseChildrenPaths[TToken comparable](children []*Grammar[TToken], current string) {
 	prefix := current + "."
 
-	// Pre-size a builder for worst-case index string lengths.
-	// Not strictly necessary, but keeps this cheap on large grammars.
 	var sb strings.Builder
 	sb.Grow(len(prefix) + 20)
 
-	for i, child := range g.Children {
+	for i, child := range children {
 		if child == nil {
 			continue
 		}
@@ -239,63 +246,6 @@ func fillForGrammar[TToken comparable](g *Grammar[TToken], current string) {
 
 		fillForGrammar(child, sb.String())
 	}
-}
-
-/*
-	IsRegular computes whether this grammar is regular.
-
-Given the current Grammar algebra, all grammars are regular by construction.
-This function exists for forward compatibility in case non-regular constructs
-(e.g. recursive nonterminals) are introduced in the future.
-*/
-func (g *Grammar[TToken]) IsRegular() bool {
-	if g == nil {
-		return true
-	}
-
-	// Defensive cycle guard in case future extensions introduce references
-	visited := make(map[*Grammar[TToken]]bool)
-
-	var walk func(*Grammar[TToken]) bool
-	walk = func(n *Grammar[TToken]) bool {
-		if n == nil {
-			return true
-		}
-
-		if visited[n] {
-			// Cycles alone do NOT make a grammar non-regular
-			// (Kleene star is cyclic by nature)
-			return true
-		}
-		visited[n] = true
-
-		switch n.Kind {
-		case GToken, GEpsilon:
-			return true
-
-		case GConcat, GChoice:
-			for _, c := range n.Children {
-				if !walk(c) {
-					return false
-				}
-			}
-			return true
-
-		case GRepeat, GOptional:
-			if len(n.Children) != 1 {
-				return false
-			}
-			return walk(n.Children[0])
-
-		case GNest:
-			return false
-		default:
-			// Unknown grammar kind => not provably regular
-			return false
-		}
-	}
-
-	return walk(g)
 }
 
 /*
@@ -568,6 +518,14 @@ Edge cases:
 func Between[TToken comparable](label GrammarLabel, body *Grammar[TToken], min, max int) *Grammar[TToken] {
 	m := max
 	return Repeat(label, body, min, &m)
+}
+
+func Ref[TToken comparable](label, target GrammarLabel) *Grammar[TToken] {
+	return &Grammar[TToken]{
+		GrammarLabel:    label,
+		Kind:            GReference,
+		ReferenceTarget: target,
+	}
 }
 
 /*

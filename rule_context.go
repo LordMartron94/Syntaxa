@@ -2,6 +2,7 @@ package syntaxa
 
 import (
 	"cmp"
+	"fmt"
 	"lexarch"
 )
 
@@ -290,6 +291,8 @@ type ExecRuleContext[
 	/* ExecuteRule routes a rule through the parser for invariant detection. */
 	ExecuteRule func(rule ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind], mode RuleExecutionMode) RuleResult[TObservation, TToken, TTokenRole, TNodeKind]
 
+	ExecuteReference func(targetRule GrammarLabel, mode RuleExecutionMode) RuleResult[TObservation, TToken, TTokenRole, TNodeKind]
+
 	// Specific LST/State helpers
 	Editor *LSTEditor[TObservation, TToken, TTokenRole, TNodeKind]
 
@@ -308,6 +311,8 @@ type ExecRuleContext[
 		May be nil when the token source does not support it (e.g. streaming).
 	*/
 	GetLastConsumedLexeme func() (lexarch.Lexeme[TObservation, TToken, TTokenRole], bool)
+
+	GetAnalysis func() *GrammarAnalysis[TToken]
 
 	trace *ParseTrace[TToken]
 
@@ -555,6 +560,9 @@ func buildBaseContext[
 		restore:      restoreFn,
 		Select:       selectCtx,
 		Finalization: finalCtx,
+		GetAnalysis: func() *GrammarAnalysis[TToken] {
+			return parser.grammarPackage.Analysis
+		},
 	}
 
 	var trace *ParseTrace[TToken]
@@ -572,6 +580,15 @@ func buildBaseContext[
 		mode RuleExecutionMode,
 	) RuleResult[TObservation, TToken, TTokenRole, TNodeKind] {
 		return syntaxaParserExecuteRule(parser, ctxPtr, rule, mode)
+	}
+
+	ctxPtr.ExecuteReference = func(targetRule GrammarLabel, mode RuleExecutionMode) RuleResult[TObservation, TToken, TTokenRole, TNodeKind] {
+		resolvedRule, ok := parser.registry[targetRule]
+		if !ok {
+			panic(fmt.Errorf("runtime engine error: unresolved target rule '%s'", targetRule))
+		}
+
+		return resolvedRule.executionFn(ctxPtr) // deliberately bypass the parser execution because this is a reference. The outer proxy is already going through the normal path.
 	}
 
 	return ctxPtr

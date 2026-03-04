@@ -1560,12 +1560,47 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 		return innerResult
 	}
 
-	mustConsume := true
 	return r.sharedCore.constructRule(
 		identity,
-		r.sharedCore.createContract(mustConsume, innerRule.GetContract().MustReturnNode),
+		r.sharedCore.createContract(innerRule.GetContract().MustConsume, innerRule.GetContract().MustReturnNode),
 		exec,
 		[]TToken{closeToken},
+		nil,
+		grammar,
+	)
+}
+
+/*
+Reference creates a late-binding proxy rule that resolves and executes its target at runtime.
+
+This rule acts as a transparent thunk. It defines a graph edge at compile-time
+and resolves the actual execution logic dynamically during parsing.
+*/
+func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) Reference(
+	grammarID syntaxa.GrammarLabel,
+	target syntaxa.GrammarLabel,
+) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
+
+	name := r.sharedCore.createRuleName("Reference", grammarID)
+	identity := r.sharedCore.createRuleIdentity(name, grammarID, "")
+
+	grammar := syntaxa.Ref[TToken](grammarID, target)
+	// syntaxa.MarkAsContextBoundary(grammar)
+
+	exec := func(ctx *syntaxa.ExecRuleContext[
+		TObservation, TToken, TTokenRole, TLexerState, TNodeKind,
+	]) Result[TObservation, TToken, TTokenRole, TNodeKind] {
+		result := ctx.ExecuteReference(target, syntaxa.ExecutionNormal)
+		return result
+	}
+
+	contract := r.sharedCore.createContract(false, false)
+
+	return r.sharedCore.constructRule(
+		identity,
+		contract,
+		exec,
+		nil,
 		nil,
 		grammar,
 	)
@@ -1822,6 +1857,25 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 	return true
 }
 
+/*
+Define promotes any existing rule to a context boundary and registers it.
+
+Use this when you construct a rule from low-level primitives (like ExpectPair)
+but need it to serve as a targetable node in the global graph for GReference.
+*/
+func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) Define(
+	rule Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
+	grammar := rule.GetGrammar()
+
+	if grammar != nil {
+		syntaxa.MarkAsContextBoundary(grammar)
+		r.sharedCore.registry[rule.GetIdentity().GrammarLabel] = rule
+	}
+
+	return rule
+}
+
 // ------------------------------------------------------------- RULEBUILDER
 
 /*
@@ -1863,6 +1917,34 @@ func (rb *RuleBuilder[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 }
 
 /*
+GetRegistry returns the rule registry maintained by the builder for the core engine.
+
+The registry maps GrammarLabel to ParserRule for every context-boundary rule built through this
+builder. Clients pass it to the parser so that references (e.g. GReference) resolve at runtime.
+*/
+func (rb *RuleBuilder[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) GetRegistry() syntaxa.RuleRegistry[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
+	return rb.sharedCore.registry
+}
+
+/*
+GetDefinedGrammars exports the structural IR of all defined context boundaries.
+
+Pass this into syntaxa.ProducePackage as the 'additionalRules' parameter
+so the analysis phase can compute FIRST/FOLLOW sets for disconnected sub-graphs.
+*/
+func (rb *RuleBuilder[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) GetDefinedGrammars() []*syntaxa.Grammar[TToken] {
+	grammars := make([]*syntaxa.Grammar[TToken], 0, len(rb.sharedCore.registry))
+
+	for _, rule := range rb.sharedCore.registry {
+		if g := rule.GetGrammar(); g != nil {
+			grammars = append(grammars, g)
+		}
+	}
+
+	return grammars
+}
+
+/*
 Sub returns a derived GrammarLabel for a named sub-scope under the builder's base. Derivation is in one
 place so hierarchical identities are predictable and syntaxa does not invent or concatenate labels elsewhere.
 */
@@ -1889,6 +1971,7 @@ func RuleBuilderCreate[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState
 ) *RuleBuilder[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
 	sharedCore := &sharedCore[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]{
 		tokenFormatter: tokenFormatter,
+		registry:       make(syntaxa.RuleRegistry[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]),
 	}
 
 	tokenEndpoint := &tokenEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]{
@@ -1915,11 +1998,13 @@ func RuleBuilderCreate[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState
 // ------------------------------------------------------------- PRIVATE HELPERS
 
 /*
-sharedCore holds the token formatter and provides rule construction helpers: result builders,
-identity/contract creation, and constructRule variants (structural, skipping, optional, virtual).
+sharedCore holds the token formatter, the rule registry for the core engine, and rule construction
+helpers: result builders, identity/contract creation, and constructRule variants (structural, skipping,
+optional, virtual). Context-boundary rules are automatically added to the registry when constructed.
 */
 type sharedCore[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable] struct {
 	tokenFormatter func(token TToken) string
+	registry       syntaxa.RuleRegistry[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 }
 
 /*
@@ -2108,7 +2193,7 @@ func (s *sharedCore[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) c
 	noConsumeOnRecovery []TToken,
 	grammar *syntaxa.Grammar[TToken],
 ) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
-	return syntaxa.ParserRuleCreate(
+	rule := syntaxa.ParserRuleCreate(
 		identity,
 		execution,
 		ruleContract,
@@ -2116,4 +2201,8 @@ func (s *sharedCore[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) c
 		grammar,
 		noConsumeOnRecovery,
 	)
+	if grammar != nil && grammar.IsContextBoundary {
+		s.registry[identity.GrammarLabel] = rule
+	}
+	return rule
 }
