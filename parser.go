@@ -253,7 +253,9 @@ func parseWithContext[
 	}
 
 	editor.setRoot(programResult.Node)
-	editor.ComputeSpans()
+	if editor.root != nil {
+		editor.ComputeSpans()
+	}
 
 	peeked := ctx.Token.Peek(0)
 	if peeked.Token != parser.eofToken {
