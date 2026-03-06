@@ -17,6 +17,14 @@ type PrattPrefixOp[TToken, TNodeKind comparable] struct {
 	TokenGrammarLabel syntaxa.GrammarLabel
 }
 
+type PrattPrefixRuleOp[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable] struct {
+	TriggerToken      TToken
+	RightBP           int
+	NodeKind          TNodeKind
+	Rule              Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
+	TokenGrammarLabel syntaxa.GrammarLabel
+}
+
 /*
 PrattInfixOp describes an infix (binary) operator for Pratt expression parsing.
 */
@@ -25,6 +33,15 @@ type PrattInfixOp[TToken, TNodeKind comparable] struct {
 	LeftBP            int
 	RightBP           int
 	NodeKind          TNodeKind
+	TokenGrammarLabel syntaxa.GrammarLabel
+}
+
+type PrattInfixRuleOp[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable] struct {
+	TriggerToken      TToken
+	LeftBP            int
+	RightBP           int
+	NodeKind          TNodeKind
+	Rule              Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 	TokenGrammarLabel syntaxa.GrammarLabel
 }
 
@@ -59,9 +76,11 @@ PrattConfig holds the configuration for a Pratt-style expression rule.
 type PrattConfig[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable] struct {
 	Primary        Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 	PrefixOps      []PrattPrefixOp[TToken, TNodeKind]
+	PrefixRuleOps  []PrattPrefixRuleOp[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 	PostfixOps     []PrattPostfixOp[TToken, TNodeKind]
 	PostfixRuleOps []PrattPostfixRuleOp[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 	InfixOps       []PrattInfixOp[TToken, TNodeKind]
+	InfixRuleOps   []PrattInfixRuleOp[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 	ImplicitInfix  *PrattImplicitInfix[TToken, TNodeKind]
 	RecoveryTokens []TToken
 }
@@ -73,10 +92,23 @@ type prefixInfo[TNodeKind comparable] struct {
 	nodeKind TNodeKind
 }
 
+type prefixRuleInfo[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable] struct {
+	rightBP  int
+	nodeKind TNodeKind
+	rule     Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
+}
+
 type infixInfo[TNodeKind comparable] struct {
 	leftBP   int
 	rightBP  int
 	nodeKind TNodeKind
+}
+
+type infixRuleInfo[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable] struct {
+	leftBP   int
+	rightBP  int
+	nodeKind TNodeKind
+	rule     Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 }
 
 type postfixInfo[TNodeKind comparable] struct {
@@ -97,7 +129,9 @@ type prattConfigMaps[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, 
 	primary        Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 	name           syntaxa.RuleLabel
 	prefixMap      map[TToken]prefixInfo[TNodeKind]
+	prefixRuleMap  map[TToken]prefixRuleInfo[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 	infixMap       map[TToken]infixInfo[TNodeKind]
+	infixRuleMap   map[TToken]infixRuleInfo[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 	postfixMap     map[TToken]postfixInfo[TNodeKind]
 	postfixRuleMap map[TToken]postfixRuleInfo[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 	implicitOp     *PrattImplicitInfix[TToken, TNodeKind]
@@ -158,7 +192,9 @@ func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 		primary:        config.Primary,
 		name:           p.sharedCore.createRuleName("Expression", grammarLabel),
 		prefixMap:      make(map[TToken]prefixInfo[TNodeKind]),
+		prefixRuleMap:  make(map[TToken]prefixRuleInfo[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]),
 		infixMap:       make(map[TToken]infixInfo[TNodeKind]),
+		infixRuleMap:   make(map[TToken]infixRuleInfo[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]),
 		postfixMap:     make(map[TToken]postfixInfo[TNodeKind]),
 		postfixRuleMap: make(map[TToken]postfixRuleInfo[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]),
 		implicitOp:     config.ImplicitInfix,
@@ -167,18 +203,20 @@ func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 	for _, op := range config.PrefixOps {
 		maps.prefixMap[op.Token] = prefixInfo[TNodeKind]{rightBP: op.RightBP, nodeKind: op.NodeKind}
 	}
+	for _, op := range config.PrefixRuleOps {
+		maps.prefixRuleMap[op.TriggerToken] = prefixRuleInfo[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]{rightBP: op.RightBP, nodeKind: op.NodeKind, rule: op.Rule}
+	}
 	for _, op := range config.InfixOps {
 		maps.infixMap[op.Token] = infixInfo[TNodeKind]{leftBP: op.LeftBP, rightBP: op.RightBP, nodeKind: op.NodeKind}
+	}
+	for _, op := range config.InfixRuleOps {
+		maps.infixRuleMap[op.TriggerToken] = infixRuleInfo[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]{leftBP: op.LeftBP, rightBP: op.RightBP, nodeKind: op.NodeKind, rule: op.Rule}
 	}
 	for _, op := range config.PostfixOps {
 		maps.postfixMap[op.Token] = postfixInfo[TNodeKind]{leftBP: op.LeftBP, nodeKind: op.NodeKind}
 	}
 	for _, op := range config.PostfixRuleOps {
-		maps.postfixRuleMap[op.TriggerToken] = postfixRuleInfo[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]{
-			leftBP:   op.LeftBP,
-			nodeKind: op.NodeKind,
-			rule:     op.Rule,
-		}
+		maps.postfixRuleMap[op.TriggerToken] = postfixRuleInfo[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]{leftBP: op.LeftBP, nodeKind: op.NodeKind, rule: op.Rule}
 	}
 
 	return maps
@@ -209,29 +247,22 @@ func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 	children := []*syntaxa.Grammar[TToken]{config.Primary.GetGrammar()}
 
 	for _, op := range config.PrefixOps {
-		if op.TokenGrammarLabel == "" {
-			panic("Pratt prefix op has empty TokenGrammarLabel")
-		}
 		children = append(children, syntaxa.Token(op.TokenGrammarLabel, op.Token))
 	}
+	for _, op := range config.PrefixRuleOps {
+		children = append(children, op.Rule.GetGrammar())
+	}
 	for _, op := range config.PostfixOps {
-		if op.TokenGrammarLabel == "" {
-			panic("Pratt postfix op has empty TokenGrammarLabel")
-		}
 		children = append(children, syntaxa.Token(op.TokenGrammarLabel, op.Token))
 	}
 	for _, op := range config.PostfixRuleOps {
-		if op.TokenGrammarLabel == "" {
-			panic("Pratt postfix rule op has empty TokenGrammarLabel")
-		}
-		// The grammar for a complex rule postfix incorporates its internal sub-grammar
 		children = append(children, op.Rule.GetGrammar())
 	}
 	for _, op := range config.InfixOps {
-		if op.TokenGrammarLabel == "" {
-			panic("Pratt infix op has empty TokenGrammarLabel")
-		}
 		children = append(children, syntaxa.Token(op.TokenGrammarLabel, op.Token))
+	}
+	for _, op := range config.InfixRuleOps {
+		children = append(children, op.Rule.GetGrammar())
 	}
 
 	if len(children) == 1 {
@@ -259,7 +290,6 @@ func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 			left = newLeft
 			continue
 		}
-
 		if handled, newLeft, res := p.tryPostfixRuleOp(ctx, peekToken, left, maps, minBP); handled {
 			if res.Failed() {
 				return res
@@ -267,7 +297,6 @@ func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 			left = newLeft
 			continue
 		}
-
 		if handled, newLeft, res := p.tryInfixOp(ctx, peekToken, left, maps, minBP); handled {
 			if res.Failed() {
 				return res
@@ -275,7 +304,13 @@ func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 			left = newLeft
 			continue
 		}
-
+		if handled, newLeft, res := p.tryInfixRuleOp(ctx, peekToken, left, maps, minBP); handled {
+			if res.Failed() {
+				return res
+			}
+			left = newLeft
+			continue
+		}
 		if handled, newLeft, res := p.tryImplicitInfix(ctx, peekToken, left, maps, minBP); handled {
 			if res.Failed() {
 				return res
@@ -290,6 +325,97 @@ func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 	return p.sharedCore.buildSuccessRuleResult(left)
 }
 
+func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) parsePrattPrefix(
+	ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+	maps prattConfigMaps[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+) Result[TObservation, TToken, TTokenRole, TNodeKind] {
+
+	peekToken := ctx.Token.Peek(0).Token
+
+	if handled, res := p.tryPrefixOp(ctx, peekToken, maps); handled {
+		return res
+	}
+	if handled, res := p.tryPrefixRuleOp(ctx, peekToken, maps); handled {
+		return res
+	}
+
+	return p.parsePrimary(ctx, maps)
+}
+
+func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) tryPrefixOp(
+	ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+	peekToken TToken,
+	maps prattConfigMaps[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+) (bool, Result[TObservation, TToken, TTokenRole, TNodeKind]) {
+	info, ok := maps.prefixMap[peekToken]
+	if !ok {
+		return false, p.sharedCore.buildSuccessRuleResult(nil)
+	}
+
+	opLex := ctx.Token.Consume()
+	operandResult := p.runPrattExpression(ctx, maps, info.rightBP)
+	if operandResult.Failed() {
+		return true, operandResult
+	}
+
+	if operandResult.Node == nil {
+		ctx.Error.ReportAt(string(maps.name), opLex, "missing operand after prefix operator")
+		return true, p.sharedCore.buildFailureRuleResult(nil, syntaxa.FailureError)
+	}
+
+	opNode := ctx.Editor.NewNode(info.nodeKind)
+	ctx.Editor.AddToken(opNode, opLex)
+	ctx.Editor.AttachChild(opNode, operandResult.Node)
+	return true, p.sharedCore.buildSuccessRuleResult(opNode)
+}
+
+func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) tryPrefixRuleOp(
+	ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+	peekToken TToken,
+	maps prattConfigMaps[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+) (bool, Result[TObservation, TToken, TTokenRole, TNodeKind]) {
+	info, ok := maps.prefixRuleMap[peekToken]
+	if !ok {
+		return false, p.sharedCore.buildSuccessRuleResult(nil)
+	}
+
+	ruleResult := ctx.ExecuteRule(info.rule, syntaxa.ExecutionNormal)
+	if ruleResult.Failed() {
+		return true, ruleResult
+	}
+
+	operandResult := p.runPrattExpression(ctx, maps, info.rightBP)
+	if operandResult.Failed() {
+		return true, operandResult
+	}
+	if operandResult.Node == nil {
+		ctx.Error.ReportAt(string(maps.name), ctx.Token.Peek(0), "missing operand after complex prefix operator")
+		return true, p.sharedCore.buildFailureRuleResult(nil, syntaxa.FailureError)
+	}
+
+	opNode := ctx.Editor.NewNode(info.nodeKind)
+	ctx.Editor.AttachChild(opNode, ruleResult.Node)
+	ctx.Editor.AttachChild(opNode, operandResult.Node)
+	return true, p.sharedCore.buildSuccessRuleResult(opNode)
+}
+
+func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) parsePrimary(
+	ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+	maps prattConfigMaps[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+) Result[TObservation, TToken, TTokenRole, TNodeKind] {
+	result := ctx.ExecuteRule(maps.primary, syntaxa.ExecutionNormal)
+	if result.Failed() {
+		return result
+	}
+
+	if result.Node == nil {
+		ctx.Error.ReportAt(string(maps.name), ctx.Token.Peek(0), "expected expression")
+		return p.sharedCore.buildFailureRuleResult(nil, syntaxa.FailureError)
+	}
+
+	return result
+}
+
 func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) tryPostfixOp(
 	ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	peekToken TToken,
@@ -297,7 +423,6 @@ func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 	maps prattConfigMaps[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	minBP int,
 ) (bool, *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind]) {
-
 	post, ok := maps.postfixMap[peekToken]
 	if !ok || post.leftBP < minBP {
 		return false, nil
@@ -307,7 +432,6 @@ func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 	opNode := ctx.Editor.NewNode(post.nodeKind)
 	ctx.Editor.AddToken(opNode, opLex)
 	ctx.Editor.AttachChild(opNode, left)
-
 	return true, opNode
 }
 
@@ -318,7 +442,6 @@ func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 	maps prattConfigMaps[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	minBP int,
 ) (bool, *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind], Result[TObservation, TToken, TTokenRole, TNodeKind]) {
-
 	postRule, ok := maps.postfixRuleMap[peekToken]
 	if !ok || postRule.leftBP < minBP {
 		return false, nil, p.sharedCore.buildSuccessRuleResult(nil)
@@ -331,11 +454,9 @@ func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 
 	opNode := ctx.Editor.NewNode(postRule.nodeKind)
 	ctx.Editor.AttachChild(opNode, left)
-
 	if rightResult.Node != nil {
 		ctx.Editor.AttachChild(opNode, rightResult.Node)
 	}
-
 	return true, opNode, p.sharedCore.buildSuccessRuleResult(opNode)
 }
 
@@ -346,7 +467,6 @@ func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 	maps prattConfigMaps[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	minBP int,
 ) (bool, *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind], Result[TObservation, TToken, TTokenRole, TNodeKind]) {
-
 	inf, ok := maps.infixMap[peekToken]
 	if !ok || inf.leftBP < minBP {
 		return false, nil, p.sharedCore.buildSuccessRuleResult(nil)
@@ -357,9 +477,7 @@ func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 	if rightResult.Failed() {
 		return true, nil, rightResult
 	}
-
-	right := rightResult.Node
-	if right == nil {
+	if rightResult.Node == nil {
 		ctx.Error.ReportAt(string(maps.name), opLex, "missing right operand")
 		return true, nil, p.sharedCore.buildFailureRuleResult(nil, syntaxa.FailureError)
 	}
@@ -367,8 +485,42 @@ func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 	opNode := ctx.Editor.NewNode(inf.nodeKind)
 	ctx.Editor.AddToken(opNode, opLex)
 	ctx.Editor.AttachChild(opNode, left)
-	ctx.Editor.AttachChild(opNode, right)
+	ctx.Editor.AttachChild(opNode, rightResult.Node)
+	return true, opNode, p.sharedCore.buildSuccessRuleResult(opNode)
+}
 
+func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) tryInfixRuleOp(
+	ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+	peekToken TToken,
+	left *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind],
+	maps prattConfigMaps[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+	minBP int,
+) (bool, *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind], Result[TObservation, TToken, TTokenRole, TNodeKind]) {
+	infRule, ok := maps.infixRuleMap[peekToken]
+	if !ok || infRule.leftBP < minBP {
+		return false, nil, p.sharedCore.buildSuccessRuleResult(nil)
+	}
+
+	midResult := ctx.ExecuteRule(infRule.rule, syntaxa.ExecutionNormal)
+	if midResult.Failed() {
+		return true, nil, midResult
+	}
+
+	rightResult := p.runPrattExpression(ctx, maps, infRule.rightBP)
+	if rightResult.Failed() {
+		return true, nil, rightResult
+	}
+	if rightResult.Node == nil {
+		ctx.Error.ReportAt(string(maps.name), ctx.Token.Peek(0), "missing right operand after complex infix operator")
+		return true, nil, p.sharedCore.buildFailureRuleResult(nil, syntaxa.FailureError)
+	}
+
+	opNode := ctx.Editor.NewNode(infRule.nodeKind)
+	ctx.Editor.AttachChild(opNode, left)
+	if midResult.Node != nil {
+		ctx.Editor.AttachChild(opNode, midResult.Node)
+	}
+	ctx.Editor.AttachChild(opNode, rightResult.Node)
 	return true, opNode, p.sharedCore.buildSuccessRuleResult(opNode)
 }
 
@@ -379,7 +531,6 @@ func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 	maps prattConfigMaps[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	minBP int,
 ) (bool, *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind], Result[TObservation, TToken, TTokenRole, TNodeKind]) {
-
 	if maps.implicitOp == nil || maps.implicitOp.LeftBP < minBP || !maps.predictMap[peekToken] {
 		return false, nil, p.sharedCore.buildSuccessRuleResult(nil)
 	}
@@ -388,58 +539,13 @@ func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 	if rightResult.Failed() {
 		return true, nil, rightResult
 	}
-
-	right := rightResult.Node
-	if right == nil {
-		peekLex := ctx.Token.Peek(0)
-		ctx.Error.ReportAt(string(maps.name), peekLex, "missing right operand in concatenation")
+	if rightResult.Node == nil {
+		ctx.Error.ReportAt(string(maps.name), ctx.Token.Peek(0), "missing right operand in concatenation")
 		return true, nil, p.sharedCore.buildFailureRuleResult(nil, syntaxa.FailureError)
 	}
 
 	opNode := ctx.Editor.NewNode(maps.implicitOp.NodeKind)
 	ctx.Editor.AttachChild(opNode, left)
-	ctx.Editor.AttachChild(opNode, right)
-
+	ctx.Editor.AttachChild(opNode, rightResult.Node)
 	return true, opNode, p.sharedCore.buildSuccessRuleResult(opNode)
-}
-
-func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) parsePrattPrefix(
-	ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
-	maps prattConfigMaps[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
-) Result[TObservation, TToken, TTokenRole, TNodeKind] {
-
-	peek := ctx.Token.Peek(0)
-
-	if info, ok := maps.prefixMap[peek.Token]; ok {
-		opLex := ctx.Token.Consume()
-
-		operandResult := p.runPrattExpression(ctx, maps, info.rightBP)
-		if operandResult.Failed() {
-			return operandResult
-		}
-
-		operand := operandResult.Node
-		if operand == nil {
-			ctx.Error.ReportAt(string(maps.name), opLex, "missing operand after prefix operator")
-			return p.sharedCore.buildFailureRuleResult(nil, syntaxa.FailureError)
-		}
-
-		opNode := ctx.Editor.NewNode(info.nodeKind)
-		ctx.Editor.AddToken(opNode, opLex)
-		ctx.Editor.AttachChild(opNode, operand)
-		return p.sharedCore.buildSuccessRuleResult(opNode)
-	}
-
-	result := ctx.ExecuteRule(maps.primary, syntaxa.ExecutionNormal)
-	if result.Failed() {
-		return result
-	}
-
-	if result.Node == nil {
-		peekLex := ctx.Token.Peek(0)
-		ctx.Error.ReportAt(string(maps.name), peekLex, "expected expression")
-		return p.sharedCore.buildFailureRuleResult(nil, syntaxa.FailureError)
-	}
-
-	return result
 }
