@@ -91,6 +91,15 @@ func (e defaultGrammarEdgeEnumerator[TToken]) EdgesOf(
 		}
 
 	case GReference:
+		if g.ResolvedReference != nil {
+			label := "variable ref"
+			if g.ReferenceTarget != "" {
+				label = "variable ref: " + string(g.ReferenceTarget)
+			}
+			return []grammarDebugEdge[TToken]{
+				{label: label, node: g.ResolvedReference},
+			}
+		}
 		return nil
 
 	default:
@@ -143,6 +152,7 @@ func NewGrammarDebugger[TToken comparable](
 DumpTo writes the full debug dump of the grammar tree to w.
 
 Returns any write error. If root is nil, writes "<nil>\n".
+Cycles from variable references are detected; inlined refs already on the path show a cycle marker instead of recursing.
 */
 func (d *GrammarDebugger[TToken]) DumpTo(
 	w io.Writer,
@@ -158,10 +168,13 @@ func (d *GrammarDebugger[TToken]) DumpTo(
 		return err
 	}
 
+	path := make(map[*Grammar[TToken]]struct{})
+	path[root] = struct{}{}
+
 	edges := d.edgesOf(root)
 	for i := range edges {
 		last := i == len(edges)-1
-		if err := d.walkEdge(w, edges[i], "", last, 1); err != nil {
+		if err := d.walkEdge(w, edges[i], "", last, 1, path); err != nil {
 			return err
 		}
 	}
@@ -224,6 +237,7 @@ func (d *GrammarDebugger[TToken]) walkEdge(
 	prefix string,
 	isLast bool,
 	depth int,
+	path map[*Grammar[TToken]]struct{},
 ) error {
 
 	if err := d.writePrefix(w, prefix, isLast, depth); err != nil {
@@ -240,8 +254,22 @@ func (d *GrammarDebugger[TToken]) walkEdge(
 		return err
 	}
 
+	if e.node == nil {
+		return nil
+	}
+	if _, onPath := path[e.node]; onPath {
+		childPrefix := d.nextPrefix(prefix, isLast, depth)
+		if _, err := io.WriteString(w, childPrefix+d.GlyphLast+"↻ cycle\n"); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	path[e.node] = struct{}{}
+	defer delete(path, e.node)
+
 	childPrefix := d.nextPrefix(prefix, isLast, depth)
-	return d.walkChildren(w, e.node, childPrefix, depth+1)
+	return d.walkChildren(w, e.node, childPrefix, depth+1, path)
 }
 
 func (d *GrammarDebugger[TToken]) walkChildren(
@@ -249,12 +277,13 @@ func (d *GrammarDebugger[TToken]) walkChildren(
 	parent *Grammar[TToken],
 	prefix string,
 	depth int,
+	path map[*Grammar[TToken]]struct{},
 ) error {
 
 	edges := d.edgesOf(parent)
 	for i := range edges {
 		last := i == len(edges)-1
-		if err := d.walkEdge(w, edges[i], prefix, last, depth); err != nil {
+		if err := d.walkEdge(w, edges[i], prefix, last, depth, path); err != nil {
 			return err
 		}
 	}
