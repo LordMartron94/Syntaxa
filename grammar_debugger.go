@@ -23,13 +23,15 @@ type GrammarDebugFormatter[TToken, TNodeKind comparable] struct {
 	FormatToken           func(TToken) string
 	FormatRange           func(min int, max *int) string
 	FormatRecoveryTokens  func(recovery []TToken, noConsume []TToken) string
+	FormatOutputNodeKind  func(TNodeKind) string
 	ColorRecoveryTokens   func(string) string
 
 	/* Coloring layer (nil = no color) */
-	ColorKind      func(string) string
-	ColorGrammarLabel func(string) string
-	ColorToken     func(string) string
-	ColorRange     func(string) string
+	ColorKind           func(string) string
+	ColorGrammarLabel   func(string) string
+	ColorToken          func(string) string
+	ColorRange          func(string) string
+	ColorOutputNodeKind func(string) string
 }
 
 func (f GrammarDebugFormatter[TToken, TNodeKind]) validate() {
@@ -358,6 +360,14 @@ func (d *GrammarDebugger[TToken, TNodeKind]) writeNodeLine(
 			if _, err := io.WriteString(w, " "+txt); err != nil {
 				return err
 			}
+		}
+	}
+
+	if g.OutputNodeKind != nil && f.FormatOutputNodeKind != nil {
+		txt := f.FormatOutputNodeKind(*g.OutputNodeKind)
+		txt = f.applyColor(txt, f.ColorOutputNodeKind)
+		if _, err := io.WriteString(w, " → "+txt); err != nil {
+			return err
 		}
 	}
 
