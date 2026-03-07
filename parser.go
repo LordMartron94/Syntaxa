@@ -284,14 +284,6 @@ func syntaxaParserExecuteRule[
 	rule ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	mode RuleExecutionMode,
 ) RuleResult[TObservation, TToken, TTokenRole, TNodeKind] {
-	for rule.grammar != nil && rule.grammar.Kind == GReference {
-		targetRule, exists := parser.registry[rule.grammar.ReferenceTarget]
-		if !exists {
-			panic(fmt.Errorf("runtime engine error: unresolved reference target '%s'", rule.grammar.ReferenceTarget))
-		}
-		rule = targetRule
-	}
-
 	startSnap := ctx.save()
 	startPos := startSnap.tokenIndex
 
@@ -470,7 +462,16 @@ func validateRuleSuccess[
 	endPos int,
 	lexemePreRule lexarch.Lexeme[TObservation, TToken, TTokenRole],
 ) error {
+
 	contract := rule.contract
+
+	if rule.grammar != nil && rule.grammar.Kind == GReference {
+		if targetRule, exists := parser.registry[rule.grammar.ReferenceTarget]; exists {
+			contract = targetRule.contract
+		} else {
+			return fmt.Errorf("engine validation error: unresolved reference target '%s'", rule.grammar.ReferenceTarget)
+		}
+	}
 
 	if endPos == startPos && contract.MustConsume && lexemePreRule.Token != parser.eofToken {
 		return fmt.Errorf(

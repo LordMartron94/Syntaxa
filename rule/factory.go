@@ -1571,11 +1571,10 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 }
 
 /*
-Reference creates a late-binding proxy rule that resolves its target at runtime.
+Reference creates a late-binding proxy rule that resolves and executes its target at runtime.
 
-This rule acts purely as a structural thunk. It defines a graph edge at compile-time.
-Because the engine (syntaxaParserExecuteRule) transparently unrolls references
-before execution, the execution logic defined here is unreachable.
+This rule acts as a transparent thunk. It defines a graph edge at compile-time
+and resolves the actual execution logic dynamically during parsing.
 */
 func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) Reference(
 	grammarID syntaxa.GrammarLabel,
@@ -1586,20 +1585,15 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 	identity := r.sharedCore.createRuleIdentity(name, grammarID, "")
 
 	grammar := syntaxa.Ref[TToken](grammarID, target)
+	// syntaxa.MarkAsContextBoundary(grammar)
 
-	// This execution function is dead code by design.
-	// If it is invoked, the engine failed to unroll the proxy via syntaxaParserExecuteRule.
 	exec := func(ctx *syntaxa.ExecRuleContext[
 		TObservation, TToken, TTokenRole, TLexerState, TNodeKind,
 	]) Result[TObservation, TToken, TTokenRole, TNodeKind] {
-		panic(fmt.Errorf(
-			"fatal engine error: Reference rule '%s' -> '%s' was executed directly. "+
-				"Proxies must be unrolled by syntaxaParserExecuteRule before execution",
-			grammarID, target,
-		))
+		result := ctx.ExecuteReference(target, syntaxa.ExecutionNormal)
+		return result
 	}
 
-	// The contract is irrelevant since the rule is bypassed, but we initialize it cleanly.
 	contract := r.sharedCore.createContract(false, false)
 
 	return r.sharedCore.constructRule(
