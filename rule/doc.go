@@ -12,9 +12,9 @@
 //     and RuleBuilder.Pratt for precedence-climbing expression rules.
 //   - Token endpoint: Expect, ExpectVirtual, ExpectOneOf, ExpectPair, List — match lexer tokens and optionally
 //     build LST nodes. ExpectPair expects two tokens in sequence and creates one node with both attached.
-//   - Rule endpoint: Sequence, Block, Optional, OptionalPrefix, OptionalWhen, OptionalSuffix, Required, NOrMore, Nest, Root, Predict — combine rules and control
+//   - Rule endpoint: Sequence, Block, Optional, OptionalPrefix, OptionalWhen, OptionalSuffix, Required, NOrMore, Nest, Root, PredictWithLookahead, PredictLookahead — combine rules and control
 //     consumption and recovery. OptionalSuffix runs a rule and, if the next token matches, consumes it and wraps the result in a new node.
-//     Predict runs a rule only when a lookahead predicate (on SelectRuleContext) returns true; otherwise it returns FailureNoMatch without consuming, so Choice can try the next alternative. Use Predict to resolve prefix overlap when two alternatives start with the same token.
+//     PredictWithLookahead runs a rule only when a lookahead predicate returns true and optionally records lookaheads on the grammar; PredictLookahead takes a slice of (Offset, Expected) and runs the rule when all match. Use to resolve prefix overlap in Choice.
 //   - Pratt endpoint: Expression — build one expression rule from a primary rule (atoms) and
 //     prefix/infix operator tables with binding powers. Primary is the atom (e.g. literal, identifier,
 //     parenthesized expression). PrefixOps and InfixOps define tokens and precedence; LeftBP/RightBP

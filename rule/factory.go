@@ -748,32 +748,63 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 }
 
 /*
-Predict runs the inner rule only when the predicate returns true on the current token stream.
+PredictLookahead runs the inner rule only when all lookahead conditions are satisfied.
 
-Before running the rule, the predicate is called with the select context (read-only lookahead).
-If the predicate returns false, Predict returns FailureNoMatch without consuming any token, so
-the caller (e.g. Choice) can try the next alternative. If the predicate returns true, the
-inner rule is executed in ExecutionNormal and its result is returned.
-
-The predicate must only inspect the token stream (e.g. ctx.Peek(0), ctx.Peek(1)); it must not
-consume. Use Predict to resolve prefix overlap in Choice: wrap an alternative that shares a
-prefix with another so it runs only when lookahead disambiguates (e.g. run range only when
-Peek(1) is the range operator).
-
-Prerequisites:
-- rule must be a valid parser rule.
-- predicate must be pure lookahead (no consumption).
+The predicate is implemented inside the factory from the slice: for each entry, ctx.Peek(l.Offset).Token
+must equal l.Expected (after skip). The rule's grammar has Lookaheads set for introspection.
+The caller does not provide a predicate; use PredictWithLookahead for custom predicate logic.
 */
-func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) Predict(
+func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) PredictLookahead(
 	rule Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+	lookaheads []syntaxa.Lookahead[TToken],
+) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
+	return r.predictRule(rule, lookaheads, nil)
+}
+
+/*
+PredictWithLookahead runs the inner rule only when the custom predicate returns true.
+
+Use when lookahead logic cannot be expressed as a slice of (Offset, Expected). The rule's
+grammar is not given Lookaheads (only PredictLookahead sets that). The predicate must
+only inspect the token stream and must not consume.
+*/
+func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) PredictWithLookahead(
+	rule Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+	predicate func(ctx *syntaxa.SelectRuleContext[TObservation, TToken, TTokenRole]) bool,
+) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
+	return r.predictRule(rule, nil, predicate)
+}
+
+func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) predictRule(
+	rule Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+	lookaheads []syntaxa.Lookahead[TToken],
 	predicate func(ctx *syntaxa.SelectRuleContext[TObservation, TToken, TTokenRole]) bool,
 ) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
 	name := syntaxa.RuleLabel(fmt.Sprintf("Predict(%s)", rule.GetName()))
 	identity := r.sharedCore.createRuleIdentity(name, rule.GetGrammarLabel(), rule.GetExpectedLabel())
+	if g := rule.GetGrammar(); g != nil && len(lookaheads) > 0 {
+		g.Lookaheads = lookaheads
+	}
+	var pred func(ctx *syntaxa.SelectRuleContext[TObservation, TToken, TTokenRole]) bool
+	if len(lookaheads) > 0 {
+		pred = func(ctx *syntaxa.SelectRuleContext[TObservation, TToken, TTokenRole]) bool {
+			for _, l := range lookaheads {
+				if ctx.Peek(l.Offset).Token != l.Expected {
+					return false
+				}
+			}
+			return true
+		}
+	} else {
+		pred = predicate
+	}
+	if pred == nil {
+		panic("predictRule: need non-empty lookaheads or non-nil predicate")
+	}
 	exec := func(ctx *syntaxa.ExecRuleContext[
 		TObservation, TToken, TTokenRole, TLexerState, TNodeKind,
 	]) Result[TObservation, TToken, TTokenRole, TNodeKind] {
-		if !predicate(ctx.Select) {
+		if !pred(ctx.Select) {
 			return r.sharedCore.buildFailureRuleResult(nil, syntaxa.FailureNoMatch)
 		}
 		return ctx.ExecuteRule(rule, syntaxa.ExecutionNormal)
