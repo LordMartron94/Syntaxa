@@ -588,7 +588,11 @@ func buildBaseContext[
 			panic(fmt.Errorf("runtime engine error: unresolved target rule '%s'", targetRule))
 		}
 
-		return resolvedRule.executionFn(ctxPtr) // deliberately bypass the parser execution because this is a reference. The outer proxy is already going through the normal path.
+		// Deliberately bypass syntaxaParserExecuteRule.
+		// No snapshots, no error frames, no recovery pushing.
+		// The proxy's syntaxaParserExecuteRule has already inherited
+		// and hoisted all necessary state for this target.
+		return resolvedRule.executionFn(ctxPtr)
 	}
 
 	return ctxPtr

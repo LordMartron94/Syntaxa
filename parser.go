@@ -292,12 +292,10 @@ func syntaxaParserExecuteRule[
 	lexemePreRule := ctx.Token.Peek(0)
 	lexemePreRuleRaw := ctx.Token.PeekRaw(0)
 
-	// fmt.Printf("starting exec rule: %s\n", rule.name)
-	// defer fmt.Printf("end exec rule: %s\n", rule.name)
-
-	// Recovery scope for this construct
+	// Recovery scope for this construct: INHERIT FROM PROXIES
 	if mode == ExecutionNormal {
-		ctx.Recovery.pushRecovery(rule.recoveryTokens...)
+		inheritedTokens := getInheritedRecoveryTokens(parser, rule)
+		ctx.Recovery.pushRecovery(inheritedTokens...)
 		defer ctx.Recovery.popRecovery()
 	}
 
@@ -321,9 +319,6 @@ func syntaxaParserExecuteRule[
 		})
 	}
 
-	// ============================================================
-	// FAILURE PATH
-	// ============================================================
 	if !success {
 		ctx.restore(startSnap)
 		ctx.Editor.created = ctx.Editor.created[:startLSTNodeCreationIdx]
@@ -350,7 +345,6 @@ func syntaxaParserExecuteRule[
 				ctx.Error.sink.popFrame(true)
 				if isProgramRule {
 					ctx.Error.sink.FlushFramesCommitAll()
-					// Keep only the error furthest in the stream (primary failure); discard earlier spurious ones.
 					if n := len(ctx.Error.sink.Errors); n > 1 {
 						best := 0
 						for i := 1; i < n; i++ {
@@ -363,15 +357,12 @@ func syntaxaParserExecuteRule[
 					}
 				}
 
-				// ------------------------------------------------
-				// Recovery should NOT produce competing errors
-				// ------------------------------------------------
 				ctx.Error.sink.pushFrame()
-				recovered, landedOnOurs := performRecovery(ctx, parser.eofToken, rule)
+				recovered, landedOnOurs := performRecovery(ctx, parser, parser.eofToken, rule)
 				ctx.Error.sink.popFrame(false)
 
 				if recovered {
-					ruleResult.ConsumeSyncToken = landedOnOurs && !rule.IsNoConsumeRecoveryToken(ctx.Token.PeekRaw(0).Token)
+					ruleResult.ConsumeSyncToken = landedOnOurs && !ruleHasNoConsumeToken(parser, rule, ctx.Token.PeekRaw(0).Token)
 					if ruleResult.ConsumeSyncToken {
 						ctx.Token.ConsumeRaw()
 					}
@@ -380,7 +371,6 @@ func syntaxaParserExecuteRule[
 			} else {
 				ctx.Error.sink.popFrame(false)
 			}
-
 		} else {
 			ctx.Error.sink.popFrame(false)
 		}
@@ -388,25 +378,13 @@ func syntaxaParserExecuteRule[
 		return ruleResult
 	}
 
-	// ============================================================
-	// SUCCESS PATH
-	// ============================================================
-
 	ctx.Error.sink.popFrame(true)
 
-	if err := validateRuleSuccess(
-		parser,
-		rule,
-		ruleResult,
-		startPos,
-		endPos,
-		lexemePreRule,
-	); err != nil {
+	if err := validateRuleSuccess(parser, rule, ruleResult, startPos, endPos, lexemePreRule); err != nil {
 		panic(err)
 	}
 
 	newNodes := ctx.Editor.created[startLSTNodeCreationIdx:]
-
 	if parser.postProcessor != nil {
 		for _, node := range newNodes {
 			if !node.postProcessed {
@@ -427,6 +405,7 @@ func performRecovery[
 	TKind comparable,
 ](
 	ctx *ExecRuleContext[TObs, TToken, TTokenRole, TLexerState, TKind],
+	parser *SyntaxaParser[TObs, TToken, TTokenRole, TKind, TLexerState],
 	eof TToken,
 	recoveryFromRule ParserRule[TObs, TToken, TTokenRole, TLexerState, TKind],
 ) (recovered bool, landedOnCurrentRule bool) {
@@ -440,7 +419,7 @@ func performRecovery[
 		}
 
 		if _, ok := syncSet[cur.Token]; ok {
-			landedOnCurrentRule = recoveryFromRule.IsSyncToken(cur.Token)
+			landedOnCurrentRule = ruleOwnsSyncToken(parser, recoveryFromRule, cur.Token)
 			return true, landedOnCurrentRule
 		}
 
@@ -496,4 +475,73 @@ func validateRuleSuccess[
 	}
 
 	return nil
+}
+
+func getInheritedRecoveryTokens[
+	TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind, TLexerState comparable,
+](
+	parser *SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
+	rule ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+) []TToken {
+	tokens := append([]TToken(nil), rule.recoveryTokens...)
+	curr := rule
+	for curr.grammar != nil && curr.grammar.Kind == GReference {
+		target, ok := parser.registry[curr.grammar.ReferenceTarget]
+		if !ok {
+			break
+		}
+		tokens = append(tokens, target.recoveryTokens...)
+		curr = target
+	}
+	return tokens
+}
+
+func ruleOwnsSyncToken[
+	TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind, TLexerState comparable,
+](
+	parser *SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
+	rule ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+	token TToken,
+) bool {
+	curr := rule
+	for {
+		if curr.IsSyncToken(token) {
+			return true
+		}
+		if curr.grammar != nil && curr.grammar.Kind == GReference {
+			target, ok := parser.registry[curr.grammar.ReferenceTarget]
+			if !ok {
+				break
+			}
+			curr = target
+		} else {
+			break
+		}
+	}
+	return false
+}
+
+func ruleHasNoConsumeToken[
+	TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind, TLexerState comparable,
+](
+	parser *SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
+	rule ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+	token TToken,
+) bool {
+	curr := rule
+	for {
+		if curr.IsNoConsumeRecoveryToken(token) {
+			return true
+		}
+		if curr.grammar != nil && curr.grammar.Kind == GReference {
+			target, ok := parser.registry[curr.grammar.ReferenceTarget]
+			if !ok {
+				break
+			}
+			curr = target
+		} else {
+			break
+		}
+	}
+	return false
 }
