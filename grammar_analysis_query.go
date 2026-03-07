@@ -13,9 +13,9 @@ GrammarAnalysisNullable returns whether the given node can derive the empty stri
 Caller must ensure node != nil and node.NodePath != nil (e.g. node is from a tree
 that was used in ProducePackage or had FinalizeNodePaths called).
 */
-func GrammarAnalysisNullable[TToken comparable](
+func GrammarAnalysisNullable[TToken, TNodeKind comparable](
 	analysis *GrammarAnalysis[TToken],
-	node *Grammar[TToken],
+	node *Grammar[TToken, TNodeKind],
 ) bool {
 	if analysis == nil || node == nil || node.NodePath == nil {
 		return false
@@ -30,9 +30,9 @@ GrammarAnalysisFirst returns the First set for the given node.
 Returns a non-nil set (empty if the node is not in the analysis or has no first tokens).
 Caller must ensure node != nil and node.NodePath != nil.
 */
-func GrammarAnalysisFirst[TToken comparable](
+func GrammarAnalysisFirst[TToken, TNodeKind comparable](
 	analysis *GrammarAnalysis[TToken],
-	node *Grammar[TToken],
+	node *Grammar[TToken, TNodeKind],
 ) TokenSet[TToken] {
 	if analysis == nil || node == nil || node.NodePath == nil {
 		return make(TokenSet[TToken])
@@ -52,9 +52,9 @@ Union of First(concatNode.Children[j]) for j from start until the first non-null
 child (or end of children). Used for lookahead over a suffix of a sequence.
 Returns non-nil set. concatNode and its children must have NodePath set.
 */
-func GrammarAnalysisFirstOfSuffix[TToken comparable](
+func GrammarAnalysisFirstOfSuffix[TToken, TNodeKind comparable](
 	analysis *GrammarAnalysis[TToken],
-	concatNode *Grammar[TToken],
+	concatNode *Grammar[TToken, TNodeKind],
 	start int,
 ) TokenSet[TToken] {
 	out := make(TokenSet[TToken])

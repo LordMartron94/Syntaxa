@@ -14,7 +14,7 @@ GrammarDebugFormatter supplies string rendering for grammar debug dumps.
 
 FormatKind is required; the rest are optional. Color functions may be nil for plain text.
 */
-type GrammarDebugFormatter[TToken comparable] struct {
+type GrammarDebugFormatter[TToken, TNodeKind comparable] struct {
 	/* REQUIRED */
 	FormatKind func(GrammarKind) string
 
@@ -32,13 +32,13 @@ type GrammarDebugFormatter[TToken comparable] struct {
 	ColorRange     func(string) string
 }
 
-func (f GrammarDebugFormatter[TToken]) validate() {
+func (f GrammarDebugFormatter[TToken, TNodeKind]) validate() {
 	if f.FormatKind == nil {
 		panic("GrammarDebugFormatter: FormatKind is required")
 	}
 }
 
-func (f GrammarDebugFormatter[TToken]) applyColor(s string, colorFn func(string) string) string {
+func (f GrammarDebugFormatter[TToken, TNodeKind]) applyColor(s string, colorFn func(string) string) string {
 	if colorFn == nil {
 		return s
 	}
@@ -49,9 +49,9 @@ func (f GrammarDebugFormatter[TToken]) applyColor(s string, colorFn func(string)
 // ENUMERATION (structural layer)
 // ============================================================
 
-type grammarDebugEdge[TToken comparable] struct {
+type grammarDebugEdge[TToken, TNodeKind comparable] struct {
 	label string
-	node  *Grammar[TToken]
+	node  *Grammar[TToken, TNodeKind]
 }
 
 /*
@@ -59,15 +59,15 @@ GrammarEdgeEnumerator defines how child edges of a grammar node are enumerated f
 
 Custom implementations can reorder or label edges; the default uses child order and "body" for repeat/optional.
 */
-type GrammarEdgeEnumerator[TToken comparable] interface {
-	EdgesOf(node *Grammar[TToken]) []grammarDebugEdge[TToken]
+type GrammarEdgeEnumerator[TToken, TNodeKind comparable] interface {
+	EdgesOf(node *Grammar[TToken, TNodeKind]) []grammarDebugEdge[TToken, TNodeKind]
 }
 
-type defaultGrammarEdgeEnumerator[TToken comparable] struct{}
+type defaultGrammarEdgeEnumerator[TToken, TNodeKind comparable] struct{}
 
-func (e defaultGrammarEdgeEnumerator[TToken]) EdgesOf(
-	g *Grammar[TToken],
-) []grammarDebugEdge[TToken] {
+func (e defaultGrammarEdgeEnumerator[TToken, TNodeKind]) EdgesOf(
+	g *Grammar[TToken, TNodeKind],
+) []grammarDebugEdge[TToken, TNodeKind] {
 
 	if g == nil {
 		return nil
@@ -76,9 +76,9 @@ func (e defaultGrammarEdgeEnumerator[TToken]) EdgesOf(
 	switch g.Kind {
 
 	case GConcat, GChoice, GNest:
-		out := make([]grammarDebugEdge[TToken], len(g.Children))
+		out := make([]grammarDebugEdge[TToken, TNodeKind], len(g.Children))
 		for i, ch := range g.Children {
-			out[i] = grammarDebugEdge[TToken]{node: ch}
+			out[i] = grammarDebugEdge[TToken, TNodeKind]{node: ch}
 		}
 		return out
 
@@ -86,7 +86,7 @@ func (e defaultGrammarEdgeEnumerator[TToken]) EdgesOf(
 		if len(g.Children) == 0 {
 			return nil
 		}
-		return []grammarDebugEdge[TToken]{
+		return []grammarDebugEdge[TToken, TNodeKind]{
 			{label: "body", node: g.Children[0]},
 		}
 
@@ -96,7 +96,7 @@ func (e defaultGrammarEdgeEnumerator[TToken]) EdgesOf(
 			if g.ReferenceTarget != "" {
 				label = "variable ref: " + string(g.ReferenceTarget)
 			}
-			return []grammarDebugEdge[TToken]{
+			return []grammarDebugEdge[TToken, TNodeKind]{
 				{label: label, node: g.ResolvedReference},
 			}
 		}
@@ -116,9 +116,9 @@ GrammarDebugger renders a grammar tree to a human-readable dump (tree glyphs + f
 
 Use NewGrammarDebugger to construct; then DumpTo or DumpString to produce output.
 */
-type GrammarDebugger[TToken comparable] struct {
-	Formatter  GrammarDebugFormatter[TToken]
-	Enumerator GrammarEdgeEnumerator[TToken]
+type GrammarDebugger[TToken, TNodeKind comparable] struct {
+	Formatter  GrammarDebugFormatter[TToken, TNodeKind]
+	Enumerator GrammarEdgeEnumerator[TToken, TNodeKind]
 
 	GlyphMid   string
 	GlyphLast  string
@@ -131,15 +131,15 @@ NewGrammarDebugger creates a GrammarDebugger with the given formatter and defaul
 
 Panics if formatter.FormatKind is nil.
 */
-func NewGrammarDebugger[TToken comparable](
-	formatter GrammarDebugFormatter[TToken],
-) *GrammarDebugger[TToken] {
+func NewGrammarDebugger[TToken, TNodeKind comparable](
+	formatter GrammarDebugFormatter[TToken, TNodeKind],
+) *GrammarDebugger[TToken, TNodeKind] {
 
 	formatter.validate()
 
-	return &GrammarDebugger[TToken]{
+	return &GrammarDebugger[TToken, TNodeKind]{
 		Formatter:  formatter,
-		Enumerator: defaultGrammarEdgeEnumerator[TToken]{},
+		Enumerator: defaultGrammarEdgeEnumerator[TToken, TNodeKind]{},
 
 		GlyphMid:   "├─ ",
 		GlyphLast:  "└─ ",
@@ -154,9 +154,9 @@ DumpTo writes the full debug dump of the grammar tree to w.
 Returns any write error. If root is nil, writes "<nil>\n".
 Cycles from variable references are detected; inlined refs already on the path show a cycle marker instead of recursing.
 */
-func (d *GrammarDebugger[TToken]) DumpTo(
+func (d *GrammarDebugger[TToken, TNodeKind]) DumpTo(
 	w io.Writer,
-	root *Grammar[TToken],
+	root *Grammar[TToken, TNodeKind],
 ) error {
 
 	if root == nil {
@@ -168,7 +168,7 @@ func (d *GrammarDebugger[TToken]) DumpTo(
 		return err
 	}
 
-	path := make(map[*Grammar[TToken]]struct{})
+	path := make(map[*Grammar[TToken, TNodeKind]]struct{})
 	path[root] = struct{}{}
 
 	edges := d.edgesOf(root)
@@ -185,7 +185,7 @@ func (d *GrammarDebugger[TToken]) DumpTo(
 /*
 DumpString returns the full debug dump of the grammar tree as a string.
 */
-func (d *GrammarDebugger[TToken]) DumpString(root *Grammar[TToken]) string {
+func (d *GrammarDebugger[TToken, TNodeKind]) DumpString(root *Grammar[TToken, TNodeKind]) string {
 	var b strings.Builder
 	_ = d.DumpTo(&b, root)
 	return b.String()
@@ -195,16 +195,16 @@ func (d *GrammarDebugger[TToken]) DumpString(root *Grammar[TToken]) string {
 // internal helpers
 // ------------------------------------------------------------
 
-func (d *GrammarDebugger[TToken]) edgesOf(
-	g *Grammar[TToken],
-) []grammarDebugEdge[TToken] {
+func (d *GrammarDebugger[TToken, TNodeKind]) edgesOf(
+	g *Grammar[TToken, TNodeKind],
+) []grammarDebugEdge[TToken, TNodeKind] {
 	if d.Enumerator == nil {
-		return defaultGrammarEdgeEnumerator[TToken]{}.EdgesOf(g)
+		return defaultGrammarEdgeEnumerator[TToken, TNodeKind]{}.EdgesOf(g)
 	}
 	return d.Enumerator.EdgesOf(g)
 }
 
-func (d *GrammarDebugger[TToken]) writePrefix(
+func (d *GrammarDebugger[TToken, TNodeKind]) writePrefix(
 	w io.Writer,
 	prefix string,
 	isLast bool,
@@ -221,7 +221,7 @@ func (d *GrammarDebugger[TToken]) writePrefix(
 	return err
 }
 
-func (d *GrammarDebugger[TToken]) nextPrefix(prefix string, isLast bool, depth int) string {
+func (d *GrammarDebugger[TToken, TNodeKind]) nextPrefix(prefix string, isLast bool, depth int) string {
 	if depth == 0 {
 		return ""
 	}
@@ -231,13 +231,13 @@ func (d *GrammarDebugger[TToken]) nextPrefix(prefix string, isLast bool, depth i
 	return prefix + d.GlyphVert
 }
 
-func (d *GrammarDebugger[TToken]) walkEdge(
+func (d *GrammarDebugger[TToken, TNodeKind]) walkEdge(
 	w io.Writer,
-	e grammarDebugEdge[TToken],
+	e grammarDebugEdge[TToken, TNodeKind],
 	prefix string,
 	isLast bool,
 	depth int,
-	path map[*Grammar[TToken]]struct{},
+	path map[*Grammar[TToken, TNodeKind]]struct{},
 ) error {
 
 	if err := d.writePrefix(w, prefix, isLast, depth); err != nil {
@@ -272,12 +272,12 @@ func (d *GrammarDebugger[TToken]) walkEdge(
 	return d.walkChildren(w, e.node, childPrefix, depth+1, path)
 }
 
-func (d *GrammarDebugger[TToken]) walkChildren(
+func (d *GrammarDebugger[TToken, TNodeKind]) walkChildren(
 	w io.Writer,
-	parent *Grammar[TToken],
+	parent *Grammar[TToken, TNodeKind],
 	prefix string,
 	depth int,
-	path map[*Grammar[TToken]]struct{},
+	path map[*Grammar[TToken, TNodeKind]]struct{},
 ) error {
 
 	edges := d.edgesOf(parent)
@@ -290,9 +290,9 @@ func (d *GrammarDebugger[TToken]) walkChildren(
 	return nil
 }
 
-func (d *GrammarDebugger[TToken]) writeNodeLine(
+func (d *GrammarDebugger[TToken, TNodeKind]) writeNodeLine(
 	w io.Writer,
-	g *Grammar[TToken],
+	g *Grammar[TToken, TNodeKind],
 ) error {
 
 	f := d.Formatter
@@ -374,8 +374,8 @@ DebugDump produces a human-readable tree dump of the grammar using the given for
 
 Convenience wrapper around NewGrammarDebugger and DumpString.
 */
-func (g *Grammar[TToken]) DebugDump(
-	formatter GrammarDebugFormatter[TToken],
+func (g *Grammar[TToken, TNodeKind]) DebugDump(
+	formatter GrammarDebugFormatter[TToken, TNodeKind],
 ) string {
 	dbg := NewGrammarDebugger(formatter)
 	return dbg.DumpString(g)

@@ -195,7 +195,7 @@ type ParserRule[
 	*/
 	noConsumeOnRecoveryTokens []TToken
 
-	grammar *Grammar[TToken]
+	grammar *Grammar[TToken, TNodeKind]
 }
 
 func (p *ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) GetIdentity() RuleIdentity {
@@ -225,7 +225,7 @@ func (p *ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) G
 	return p.identity.GrammarLabel
 }
 
-func (p *ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) GetGrammar() *Grammar[TToken] {
+func (p *ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) GetGrammar() *Grammar[TToken, TNodeKind] {
 	return p.grammar
 }
 
@@ -283,7 +283,7 @@ func ParserRuleCreate[
 	executionFn ParserRuleExecutor[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	contract RuleContract,
 	recoveryTokens []TToken,
-	grammar *Grammar[TToken],
+	grammar *Grammar[TToken, TNodeKind],
 	noConsumeOnRecovery []TToken,
 ) ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
 	noConsume := noConsumeOnRecovery

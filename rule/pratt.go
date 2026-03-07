@@ -333,23 +333,23 @@ func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) buildPrattGrammar(
 	grammarLabel syntaxa.GrammarLabel,
 	config PrattConfig[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
-) *syntaxa.Grammar[TToken] {
-	children := []*syntaxa.Grammar[TToken]{config.Primary.GetGrammar()}
+) *syntaxa.Grammar[TToken, TNodeKind] {
+	children := []*syntaxa.Grammar[TToken, TNodeKind]{config.Primary.GetGrammar()}
 
 	for _, op := range config.PrefixOps {
-		children = append(children, syntaxa.Token(op.TokenGrammarLabel, op.Token))
+		children = append(children, syntaxa.Token[TToken, TNodeKind](op.TokenGrammarLabel, op.Token))
 	}
 	for _, op := range config.PrefixRuleOps {
 		children = append(children, op.Rule.GetGrammar())
 	}
 	for _, op := range config.PostfixOps {
-		children = append(children, syntaxa.Token(op.TokenGrammarLabel, op.Token))
+		children = append(children, syntaxa.Token[TToken, TNodeKind](op.TokenGrammarLabel, op.Token))
 	}
 	for _, op := range config.PostfixRuleOps {
 		children = append(children, op.Rule.GetGrammar())
 	}
 	for _, op := range config.InfixOps {
-		children = append(children, syntaxa.Token(op.TokenGrammarLabel, op.Token))
+		children = append(children, syntaxa.Token[TToken, TNodeKind](op.TokenGrammarLabel, op.Token))
 	}
 	for _, op := range config.InfixRuleOps {
 		children = append(children, op.Rule.GetGrammar())
@@ -358,7 +358,11 @@ func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 	if len(children) == 1 {
 		return children[0]
 	}
-	return syntaxa.Choice(grammarLabel, children...)
+	grammar := syntaxa.Choice[TToken, TNodeKind](grammarLabel, children...)
+	if primaryGrammar := config.Primary.GetGrammar(); primaryGrammar != nil && primaryGrammar.OutputNodeKind != nil {
+		grammar.OutputNodeKind = primaryGrammar.OutputNodeKind
+	}
+	return grammar
 }
 
 func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) runPrattExpression(

@@ -13,7 +13,7 @@ GrammarConcatTokenNestPairs returns (token, nest GrammarLabel) for each adjacent
 
 Returns nil for nil or non-GConcat nodes. Used by consumers that need to attach IDs or labels to these structural pairs.
 */
-func GrammarConcatTokenNestPairs[TToken comparable](concat *Grammar[TToken]) []TokenNestPair[TToken] {
+func GrammarConcatTokenNestPairs[TToken, TNodeKind comparable](concat *Grammar[TToken, TNodeKind]) []TokenNestPair[TToken] {
 	return GrammarSequenceTokenNestPairs(nil, concat)
 }
 
@@ -22,7 +22,7 @@ GrammarSequenceTokenNestPairs returns (token, nest) pairs for each adjacent prev
 for each token in First(prev), adds (token, next.GrammarLabel). Uses analysis when non-nil; when nil, only GToken prev is considered (one pair per GToken–GNest).
 Works for GConcat; other node kinds return nil. Enables sequence triggers for any prev that has a First set (e.g. GOptional, GChoice).
 */
-func GrammarSequenceTokenNestPairs[TToken comparable](analysis *GrammarAnalysis[TToken], node *Grammar[TToken]) []TokenNestPair[TToken] {
+func GrammarSequenceTokenNestPairs[TToken, TNodeKind comparable](analysis *GrammarAnalysis[TToken], node *Grammar[TToken, TNodeKind]) []TokenNestPair[TToken] {
 	if node == nil || node.Kind != GConcat || len(node.Children) < 2 {
 		return nil
 	}
@@ -51,7 +51,7 @@ GrammarNestBody returns the body grammar of a GNest (the content between open an
 
 Returns nil if nest is nil, not a GNest, or has no children. Keeps nest-body semantics in one place.
 */
-func GrammarNestBody[TToken comparable](nest *Grammar[TToken]) *Grammar[TToken] {
+func GrammarNestBody[TToken, TNodeKind comparable](nest *Grammar[TToken, TNodeKind]) *Grammar[TToken, TNodeKind] {
 	if nest == nil || nest.Kind != GNest || len(nest.Children) == 0 {
 		return nil
 	}

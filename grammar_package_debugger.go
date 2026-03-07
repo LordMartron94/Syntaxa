@@ -25,7 +25,7 @@ type GrammarPackageDebugFormatter[TObservation cmp.Ordered, TToken, TTokenRole, 
 	FormatToken        func(TToken) string
 	FormatNodeKey      func(NodeKey) string
 	FormatTokenSet     func(TokenSet[TToken]) string
-	FormatNestSpec     func(NestSpec[TToken]) string
+	FormatNestSpec     func(NestSpec[TToken, TNodeKind]) string
 }
 
 func (f GrammarPackageDebugFormatter[TObservation, TToken, TTokenRole, TNodeKind, TLexerState]) packageName(name string) string {
@@ -92,7 +92,7 @@ func (f GrammarPackageDebugFormatter[TObservation, TToken, TTokenRole, TNodeKind
 	return "{" + strings.Join(tokens, ", ") + "}"
 }
 
-func (f GrammarPackageDebugFormatter[TObservation, TToken, TTokenRole, TNodeKind, TLexerState]) nestSpec(n NestSpec[TToken]) string {
+func (f GrammarPackageDebugFormatter[TObservation, TToken, TTokenRole, TNodeKind, TLexerState]) nestSpec(n NestSpec[TToken, TNodeKind]) string {
 	if f.FormatNestSpec != nil {
 		return f.FormatNestSpec(n)
 	}

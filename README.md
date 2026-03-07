@@ -49,7 +49,7 @@ syntaxa
 
 ### `syntaxa` (core)
 
-- **Grammar IR**: `Grammar[TToken]` with kinds GToken, GConcat, GChoice, GRepeat, GOptional, GEpsilon, GNest. Constructors: `Token`, `Concat`, `Choice`, `Repeat`, `Optional`, `ZeroOrMore`, `OneOrMore`, `Nest`, etc.
+- **Grammar IR**: `Grammar[TToken, TNodeKind]` with kinds GToken, GConcat, GChoice, GRepeat, GOptional, GEpsilon, GNest. Optional `OutputNodeKind` for the LST node kind produced when the grammar is the root of a rule. Constructors: `Token`, `Concat`, `Choice`, `Repeat`, `Optional`, `ZeroOrMore`, `OneOrMore`, `Nest`, etc.
 - **Rules**: `ParserRule` (identity, executor, contract, recovery tokens, grammar). Created with `ParserRuleCreate`. Executed by the engine; never called directly by the user.
 - **Context**: `ExecRuleContext` exposes `Token` (stream), `Recovery`, `Skip`, `Error`, `ExecuteRule`, `Editor`, `SetLexerState`, `Select`, `Finalization`. Built via `BuildExecRuleContextFromSlice`, `BuildExecRuleContextFromLexerSession`, or `BuildExecRuleContextFromStreamingSession`.
 - **Parser**: `SyntaxaParser` is built from a grammar package (with entry rule set). `SyntaxaParserCreate(grammarPackage, ...)` takes a `GrammarPackage`; the package must have been produced with an entry rule so the parser can run it. `SyntaxaParserParseWithContext(parser, ctx)` runs the parse.

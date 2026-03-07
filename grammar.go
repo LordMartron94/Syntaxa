@@ -127,6 +127,9 @@ Field semantics depend on Kind:
   - Common
     GrammarLabel identifies the kind of production. GrammarKey is set from NodePath during package production. RuleLabel is optional. NodePath is filled by FinalizeNodePaths.
 
+  - Output (optional)
+    OutputNodeKind, when set, is the LST node kind (TNodeKind) produced when this grammar node is the root of a rule. Used for introspection and tooling.
+
   - Recovery (optional, for rule-root nodes)
     RecoveryTokens and NoConsumeOnRecoveryTokens describe the recovery boundaries for the rule
     that uses this node as its root. When set, the engine resyncs at those tokens on FailureError;
@@ -144,7 +147,7 @@ This structure enables grammar introspection, transformation, visualization,
 pattern derivation, and parser execution from a single authoritative grammar
 definition.
 */
-type Grammar[TToken comparable] struct {
+type Grammar[TToken, TNodeKind comparable] struct {
 	GrammarLabel GrammarLabel
 	GrammarKey   GrammarKey
 
@@ -158,7 +161,7 @@ type Grammar[TToken comparable] struct {
 	CloseToken *TToken
 
 	/* Children holds sub-grammars for composite operators (Concat, Choice, Repeat, Optional). */
-	Children []*Grammar[TToken]
+	Children []*Grammar[TToken, TNodeKind]
 
 	/* Min is the minimum repetition count for GRepeat nodes. */
 	Min int
@@ -173,6 +176,12 @@ type Grammar[TToken comparable] struct {
 
 	/* IsContextBoundary is true only for the root node of a named production (e.g. from Rule.Root). Used by collectAll to populate the Rules map. */
 	IsContextBoundary bool
+
+	/*
+		OutputNodeKind, when non-nil, is the LST node kind produced when this grammar node is the root of a rule.
+		Used for introspection and tooling; execution uses the rule's contract.
+	*/
+	OutputNodeKind *TNodeKind
 
 	/*
 		RecoveryTokens are sync tokens at which the engine resyncs on FailureError (consumes until one is seen).
@@ -192,7 +201,7 @@ type Grammar[TToken comparable] struct {
 		ResolvedReference is set during ProducePackage for GReference nodes to the referenced rule root.
 		Used by the grammar walker so Walk/WalkPre/WalkPost traverse into the referenced production.
 	*/
-	ResolvedReference *Grammar[TToken]
+	ResolvedReference *Grammar[TToken, TNodeKind]
 }
 
 /*
@@ -202,7 +211,7 @@ Paths are dot-separated indices from the root (e.g. "0", "0.1", "0.2.0").
 Idempotent: if NodePath is already set, the subtree is skipped.
 Call this once before producing a grammar package or running analysis.
 */
-func (g *Grammar[TToken]) FinalizeNodePaths() {
+func (g *Grammar[TToken, TNodeKind]) FinalizeNodePaths() {
 	if g == nil {
 		return
 	}
@@ -214,7 +223,7 @@ func (g *Grammar[TToken]) FinalizeNodePaths() {
 	fillForGrammar(g, "0")
 }
 
-func fillForGrammar[TToken comparable](g *Grammar[TToken], current string) {
+func fillForGrammar[TToken, TNodeKind comparable](g *Grammar[TToken, TNodeKind], current string) {
 	if g == nil || g.NodePath != nil {
 		return
 	}
@@ -229,7 +238,7 @@ func fillForGrammar[TToken comparable](g *Grammar[TToken], current string) {
 	traverseChildrenPaths(g.Children, current)
 }
 
-func traverseChildrenPaths[TToken comparable](children []*Grammar[TToken], current string) {
+func traverseChildrenPaths[TToken, TNodeKind comparable](children []*Grammar[TToken, TNodeKind], current string) {
 	prefix := current + "."
 
 	var sb strings.Builder
@@ -253,7 +262,7 @@ MarkAsContextBoundary marks the grammar node as the root of a named production.
 
 Called by the rule factory for nodes created by Rule.Root. collectAll uses this to decide which nodes to add to the Rules map.
 */
-func MarkAsContextBoundary[TToken comparable](g *Grammar[TToken]) {
+func MarkAsContextBoundary[TToken, TNodeKind comparable](g *Grammar[TToken, TNodeKind]) {
 	if g != nil {
 		g.IsContextBoundary = true
 	}
@@ -262,8 +271,8 @@ func MarkAsContextBoundary[TToken comparable](g *Grammar[TToken]) {
 /*
 Token constructs an atomic terminal grammar node that matches exactly one token.
 */
-func Token[TToken comparable](label GrammarLabel, tok TToken) *Grammar[TToken] {
-	return &Grammar[TToken]{
+func Token[TToken, TNodeKind comparable](label GrammarLabel, tok TToken) *Grammar[TToken, TNodeKind] {
+	return &Grammar[TToken, TNodeKind]{
 		GrammarLabel: label,
 		Kind:         GToken,
 		Token:        tok,
@@ -276,12 +285,12 @@ Concat constructs a sequential composition of grammar nodes.
 All children must match in order for the production to succeed.
 At least one child must be provided.
 */
-func Concat[TToken comparable](label GrammarLabel, children ...*Grammar[TToken]) *Grammar[TToken] {
+func Concat[TToken, TNodeKind comparable](label GrammarLabel, children ...*Grammar[TToken, TNodeKind]) *Grammar[TToken, TNodeKind] {
 	if len(children) == 0 {
 		panic("Concat: at least one child grammar required")
 	}
 
-	return &Grammar[TToken]{
+	return &Grammar[TToken, TNodeKind]{
 		GrammarLabel: label,
 		Kind:         GConcat,
 		Children:     children,
@@ -307,11 +316,11 @@ Prerequisites:
 Edge cases:
 - Panics if body is nil
 */
-func Nest[TToken comparable](label GrammarLabel, openToken TToken, closeToken TToken, body *Grammar[TToken]) *Grammar[TToken] {
-	return &Grammar[TToken]{
+func Nest[TToken, TNodeKind comparable](label GrammarLabel, openToken TToken, closeToken TToken, body *Grammar[TToken, TNodeKind]) *Grammar[TToken, TNodeKind] {
+	return &Grammar[TToken, TNodeKind]{
 		GrammarLabel: label,
 		Kind:         GNest,
-		Children:     []*Grammar[TToken]{body},
+		Children:     []*Grammar[TToken, TNodeKind]{body},
 		OpenToken:    &openToken,
 		CloseToken:   &closeToken,
 	}
@@ -323,12 +332,12 @@ Choice constructs an alternation between grammar nodes.
 Exactly one of the children must match.
 At least one child must be provided.
 */
-func Choice[TToken comparable](label GrammarLabel, children ...*Grammar[TToken]) *Grammar[TToken] {
+func Choice[TToken, TNodeKind comparable](label GrammarLabel, children ...*Grammar[TToken, TNodeKind]) *Grammar[TToken, TNodeKind] {
 	if len(children) == 0 {
 		panic("Choice: at least one child grammar required")
 	}
 
-	return &Grammar[TToken]{
+	return &Grammar[TToken, TNodeKind]{
 		GrammarLabel: label,
 		Kind:         GChoice,
 		Children:     children,
@@ -347,7 +356,7 @@ Invariants:
   - min must be >= 0
   - if max != nil, *max must be >= min
 */
-func Repeat[TToken comparable](label GrammarLabel, body *Grammar[TToken], min int, max *int) *Grammar[TToken] {
+func Repeat[TToken, TNodeKind comparable](label GrammarLabel, body *Grammar[TToken, TNodeKind], min int, max *int) *Grammar[TToken, TNodeKind] {
 	if body == nil {
 		panic("Repeat: body grammar must not be nil")
 	}
@@ -358,10 +367,10 @@ func Repeat[TToken comparable](label GrammarLabel, body *Grammar[TToken], min in
 		panic("Repeat: max must be >= min")
 	}
 
-	return &Grammar[TToken]{
+	return &Grammar[TToken, TNodeKind]{
 		GrammarLabel: label,
 		Kind:         GRepeat,
-		Children:     []*Grammar[TToken]{body},
+		Children:     []*Grammar[TToken, TNodeKind]{body},
 		Min:          min,
 		Max:          max,
 	}
@@ -372,15 +381,15 @@ Optional constructs an optional grammar node.
 
 Equivalent to Repeat(body, 0, 1) but preserved explicitly for semantic clarity.
 */
-func Optional[TToken comparable](label GrammarLabel, body *Grammar[TToken]) *Grammar[TToken] {
+func Optional[TToken, TNodeKind comparable](label GrammarLabel, body *Grammar[TToken, TNodeKind]) *Grammar[TToken, TNodeKind] {
 	if body == nil {
 		panic("Optional: body grammar must not be nil")
 	}
 
-	return &Grammar[TToken]{
+	return &Grammar[TToken, TNodeKind]{
 		GrammarLabel: label,
 		Kind:         GOptional,
-		Children:     []*Grammar[TToken]{body},
+		Children:     []*Grammar[TToken, TNodeKind]{body},
 	}
 }
 
@@ -389,8 +398,8 @@ Epsilon constructs an empty production grammar node.
 
 This always succeeds without consuming input.
 */
-func Epsilon[TToken comparable](label GrammarLabel) *Grammar[TToken] {
-	return &Grammar[TToken]{
+func Epsilon[TToken, TNodeKind comparable](label GrammarLabel) *Grammar[TToken, TNodeKind] {
+	return &Grammar[TToken, TNodeKind]{
 		GrammarLabel: label,
 		Kind:         GEpsilon,
 	}
@@ -415,7 +424,7 @@ Prerequisites:
 Edge cases:
 - Can succeed without consuming input (zero repetitions)
 */
-func ZeroOrMore[TToken comparable](label GrammarLabel, body *Grammar[TToken]) *Grammar[TToken] {
+func ZeroOrMore[TToken, TNodeKind comparable](label GrammarLabel, body *Grammar[TToken, TNodeKind]) *Grammar[TToken, TNodeKind] {
 	return Repeat(label, body, 0, nil)
 }
 
@@ -438,7 +447,7 @@ Prerequisites:
 Edge cases:
 - Fails if no occurrence of body matches (unlike ZeroOrMore)
 */
-func OneOrMore[TToken comparable](label GrammarLabel, body *Grammar[TToken]) *Grammar[TToken] {
+func OneOrMore[TToken, TNodeKind comparable](label GrammarLabel, body *Grammar[TToken, TNodeKind]) *Grammar[TToken, TNodeKind] {
 	return Repeat(label, body, 1, nil)
 }
 
@@ -463,7 +472,7 @@ Edge cases:
 - Panics if body is nil or n < 0 (via Repeat)
 - Fails if fewer or more than n matches occur
 */
-func Exactly[TToken comparable](label GrammarLabel, body *Grammar[TToken], n int) *Grammar[TToken] {
+func Exactly[TToken, TNodeKind comparable](label GrammarLabel, body *Grammar[TToken, TNodeKind], n int) *Grammar[TToken, TNodeKind] {
 	max := n
 	return Repeat(label, body, n, &max)
 }
@@ -489,7 +498,7 @@ Edge cases:
 - Panics if body is nil or max < 0 (via Repeat)
 - Succeeds with zero matches; fails only if more than max matches would be required
 */
-func AtMost[TToken comparable](label GrammarLabel, body *Grammar[TToken], max int) *Grammar[TToken] {
+func AtMost[TToken, TNodeKind comparable](label GrammarLabel, body *Grammar[TToken, TNodeKind], max int) *Grammar[TToken, TNodeKind] {
 	return Repeat(label, body, 0, &max)
 }
 
@@ -515,13 +524,13 @@ Edge cases:
 - Panics if body is nil, min < 0, or max < min (via Repeat)
 - Fails if fewer than min or more than max matches occur
 */
-func Between[TToken comparable](label GrammarLabel, body *Grammar[TToken], min, max int) *Grammar[TToken] {
+func Between[TToken, TNodeKind comparable](label GrammarLabel, body *Grammar[TToken, TNodeKind], min, max int) *Grammar[TToken, TNodeKind] {
 	m := max
 	return Repeat(label, body, min, &m)
 }
 
-func Ref[TToken comparable](label, target GrammarLabel) *Grammar[TToken] {
-	return &Grammar[TToken]{
+func Ref[TToken, TNodeKind comparable](label, target GrammarLabel) *Grammar[TToken, TNodeKind] {
+	return &Grammar[TToken, TNodeKind]{
 		GrammarLabel:    label,
 		Kind:            GReference,
 		ReferenceTarget: target,
@@ -531,7 +540,7 @@ func Ref[TToken comparable](label, target GrammarLabel) *Grammar[TToken] {
 /*
 GrammarIsTokenNode reports whether the node is a terminal token node (GToken).
 */
-func GrammarIsTokenNode[TToken comparable](n *Grammar[TToken]) bool {
+func GrammarIsTokenNode[TToken, TNodeKind comparable](n *Grammar[TToken, TNodeKind]) bool {
 	return n != nil && n.Kind == GToken
 }
 
@@ -540,7 +549,7 @@ GrammarOptionalTokenChild returns the single token wrapped by an optional, if th
 
 This is a shape predicate for tooling (e.g. includes); it is not the same as nullable in the grammar-analysis sense.
 */
-func GrammarOptionalTokenChild[TToken comparable](n *Grammar[TToken]) (token TToken, ok bool) {
+func GrammarOptionalTokenChild[TToken, TNodeKind comparable](n *Grammar[TToken, TNodeKind]) (token TToken, ok bool) {
 	if n == nil || n.Kind != GOptional || len(n.Children) != 1 || n.Children[0] == nil || n.Children[0].Kind != GToken {
 		return token, false
 	}

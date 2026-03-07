@@ -45,13 +45,13 @@ type GrammarPackage[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind, TLe
 	Name                string
 	Version             string
 	EntryRule           GrammarLabel
-	Grammars            map[GrammarLabel]*Grammar[TToken]
+	Grammars            map[GrammarLabel]*Grammar[TToken, TNodeKind]
 	TokensUsed          []TToken
-	Nests               []NestSpec[TToken]
+	Nests               []NestSpec[TToken, TNodeKind]
 	Analysis            *GrammarAnalysis[TToken]
 	PathToGrammarLabel  map[NodeKey]GrammarLabel
-	NodeByGrammarKey    map[GrammarKey]*Grammar[TToken]
-	NodesByGrammarLabel map[GrammarLabel][]*Grammar[TToken]
+	NodeByGrammarKey    map[GrammarKey]*Grammar[TToken, TNodeKind]
+	NodesByGrammarLabel map[GrammarLabel][]*Grammar[TToken, TNodeKind]
 	EntryRuleParserRule *ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 }
 
@@ -61,12 +61,12 @@ NestSpec describes one bracketed (GNest) production: open token, close token, an
 Used by the parser for balanced delimiter matching and error recovery.
 ID and OwnerRule are GrammarLabels (context-boundary nodes; unique per nest).
 */
-type NestSpec[TToken comparable] struct {
+type NestSpec[TToken, TNodeKind comparable] struct {
 	ID        GrammarLabel
 	Open      TToken
 	Close     TToken
 	OwnerRule GrammarLabel
-	Node      *Grammar[TToken]
+	Node      *Grammar[TToken, TNodeKind]
 }
 
 /*
@@ -103,8 +103,8 @@ func ProducePackage[
 	TNodeKind,
 	TLexerState comparable,
 ](
-	root *Grammar[TToken],
-	additionalRules []*Grammar[TToken],
+	root *Grammar[TToken, TNodeKind],
+	additionalRules []*Grammar[TToken, TNodeKind],
 	name string,
 	version string,
 	entryRule *ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
@@ -117,11 +117,11 @@ func ProducePackage[
 	finalizeGraphPaths(root, additionalRules)
 
 	hasher := hash.XXH3HasherCreateWithSeed(0)
-	rules := make(map[GrammarLabel]*Grammar[TToken])
+	rules := make(map[GrammarLabel]*Grammar[TToken, TNodeKind])
 	tokenSet := make(TokenSet[TToken])
-	nests := make([]NestSpec[TToken], 0)
-	nodeByGrammarKey := make(map[GrammarKey]*Grammar[TToken])
-	nodesByGrammarLabel := make(map[GrammarLabel][]*Grammar[TToken])
+	nests := make([]NestSpec[TToken, TNodeKind], 0)
+	nodeByGrammarKey := make(map[GrammarKey]*Grammar[TToken, TNodeKind])
+	nodesByGrammarLabel := make(map[GrammarLabel][]*Grammar[TToken, TNodeKind])
 	duplicateContextBoundaryLabels := make(map[GrammarLabel]struct{})
 	visitedLabels := make(map[GrammarLabel]struct{}) // To prevent duplicate Rules/Nests
 	visitedPaths := make(map[GrammarKey]struct{})    // To prevent infinite recursion in graph walks
@@ -193,7 +193,7 @@ func ProducePackage[
 finalizeGraphPaths assigns unique topological addresses to all nodes in the namespace.
 The root tree starts at "0". Disconnected subgraphs start at "ext0", "ext1", etc.
 */
-func finalizeGraphPaths[TToken comparable](root *Grammar[TToken], additionals []*Grammar[TToken]) {
+func finalizeGraphPaths[TToken, TNodeKind comparable](root *Grammar[TToken, TNodeKind], additionals []*Grammar[TToken, TNodeKind]) {
 	if root.NodePath == nil {
 		assignPathRec(root, "0")
 	}
@@ -204,7 +204,7 @@ func finalizeGraphPaths[TToken comparable](root *Grammar[TToken], additionals []
 	}
 }
 
-func assignPathRec[TToken comparable](g *Grammar[TToken], current string) {
+func assignPathRec[TToken, TNodeKind comparable](g *Grammar[TToken, TNodeKind], current string) {
 	if g == nil || g.NodePath != nil {
 		return
 	}
@@ -234,7 +234,7 @@ func assignPathRec[TToken comparable](g *Grammar[TToken], current string) {
 /*
 buildPathToGrammarLabel walks all graphs and builds a map from each node's path to its GrammarLabel.
 */
-func buildPathToGrammarLabel[TToken comparable](root *Grammar[TToken], additionals []*Grammar[TToken]) map[NodeKey]GrammarLabel {
+func buildPathToGrammarLabel[TToken, TNodeKind comparable](root *Grammar[TToken, TNodeKind], additionals []*Grammar[TToken, TNodeKind]) map[NodeKey]GrammarLabel {
 	out := make(map[NodeKey]GrammarLabel)
 	buildPathToGrammarLabelRec(root, out)
 	for _, add := range additionals {
@@ -243,7 +243,7 @@ func buildPathToGrammarLabel[TToken comparable](root *Grammar[TToken], additiona
 	return out
 }
 
-func buildPathToGrammarLabelRec[TToken comparable](g *Grammar[TToken], out map[NodeKey]GrammarLabel) {
+func buildPathToGrammarLabelRec[TToken, TNodeKind comparable](g *Grammar[TToken, TNodeKind], out map[NodeKey]GrammarLabel) {
 	if g == nil || g.NodePath == nil {
 		return
 	}
@@ -257,7 +257,7 @@ func buildPathToGrammarLabelRec[TToken comparable](g *Grammar[TToken], out map[N
 /*
 NestSpecsOpenTokenCounts returns the count of each open token across the given nest specs.
 */
-func NestSpecsOpenTokenCounts[TToken comparable](nests []NestSpec[TToken]) map[TToken]int {
+func NestSpecsOpenTokenCounts[TToken comparable, TNodeKind comparable](nests []NestSpec[TToken, TNodeKind]) map[TToken]int {
 	counts := make(map[TToken]int)
 	for _, nest := range nests {
 		counts[nest.Open]++
@@ -279,14 +279,14 @@ collectAll walks the grammar tree. It uses a visited map for GrammarLabels to en
 that context-boundary nodes (rules) and Nests are only processed once, preventing
 duplicates in the package even if a rule is referenced multiple times.
 */
-func collectAll[TToken comparable](
+func collectAll[TToken, TNodeKind comparable](
 	hasher *hash.XXH3Hasher,
-	g *Grammar[TToken],
-	rules map[GrammarLabel]*Grammar[TToken],
+	g *Grammar[TToken, TNodeKind],
+	rules map[GrammarLabel]*Grammar[TToken, TNodeKind],
 	tokenSet TokenSet[TToken],
-	nests *[]NestSpec[TToken],
-	nodeByGrammarKey map[GrammarKey]*Grammar[TToken],
-	nodesByGrammarLabel map[GrammarLabel][]*Grammar[TToken],
+	nests *[]NestSpec[TToken, TNodeKind],
+	nodeByGrammarKey map[GrammarKey]*Grammar[TToken, TNodeKind],
+	nodesByGrammarLabel map[GrammarLabel][]*Grammar[TToken, TNodeKind],
 	duplicateContextBoundaryLabels map[GrammarLabel]struct{},
 	visitedLabels map[GrammarLabel]struct{},
 	visitedPaths map[GrammarKey]struct{},
@@ -334,7 +334,7 @@ func collectAll[TToken comparable](
 		tokenSet[*g.CloseToken] = struct{}{}
 
 		if !labelSeen {
-			*nests = append(*nests, NestSpec[TToken]{
+			*nests = append(*nests, NestSpec[TToken, TNodeKind]{
 				ID:        g.GrammarLabel,
 				Open:      *g.OpenToken,
 				Close:     *g.CloseToken,
@@ -361,10 +361,10 @@ func collectAll[TToken comparable](
 collectUnresolvedReferences walks the root and additional graphs to find any ReferenceTarget
 labels that are not present in the global rules map.
 */
-func collectUnresolvedReferences[TToken comparable](
-	root *Grammar[TToken],
-	additionals []*Grammar[TToken],
-	rules map[GrammarLabel]*Grammar[TToken],
+func collectUnresolvedReferences[TToken, TNodeKind comparable](
+	root *Grammar[TToken, TNodeKind],
+	additionals []*Grammar[TToken, TNodeKind],
+	rules map[GrammarLabel]*Grammar[TToken, TNodeKind],
 ) []string {
 	unresolved := make(map[string]struct{})
 
@@ -380,9 +380,9 @@ func collectUnresolvedReferences[TToken comparable](
 	return out
 }
 
-func collectUnresolvedReferencesRec[TToken comparable](
-	g *Grammar[TToken],
-	rules map[GrammarLabel]*Grammar[TToken],
+func collectUnresolvedReferencesRec[TToken, TNodeKind comparable](
+	g *Grammar[TToken, TNodeKind],
+	rules map[GrammarLabel]*Grammar[TToken, TNodeKind],
 	unresolved map[string]struct{},
 ) {
 	if g == nil {
@@ -403,9 +403,9 @@ setResolvedReferences walks the grammar tree via structural Children only and se
 ResolvedReference on each GReference node from the rules map. Call after collectAll
 and after validating no unresolved references, so the grammar walker can follow refs.
 */
-func setResolvedReferences[TToken comparable](
-	g *Grammar[TToken],
-	rules map[GrammarLabel]*Grammar[TToken],
+func setResolvedReferences[TToken, TNodeKind comparable](
+	g *Grammar[TToken, TNodeKind],
+	rules map[GrammarLabel]*Grammar[TToken, TNodeKind],
 ) {
 	if g == nil {
 		return
@@ -429,9 +429,9 @@ ComputeAnalysisGlobal runs nullable, first, and follow analysis on the entire gr
 
 It uses fixed-point iteration over the global rules registry to resolve cyclic GReference nodes.
 */
-func ComputeAnalysisGlobal[TToken comparable](
-	root *Grammar[TToken],
-	rules map[GrammarLabel]*Grammar[TToken],
+func ComputeAnalysisGlobal[TToken, TNodeKind comparable](
+	root *Grammar[TToken, TNodeKind],
+	rules map[GrammarLabel]*Grammar[TToken, TNodeKind],
 ) *GrammarAnalysis[TToken] {
 	nullable := make(map[NodeKey]bool)
 	first := make(map[NodeKey]TokenSet[TToken])
@@ -481,9 +481,9 @@ func ComputeAnalysisGlobal[TToken comparable](
 propagateNullable evaluates if a node can derive the empty string, updating the map.
 It evaluates safely across graph boundaries using the global rules map.
 */
-func propagateNullable[TToken comparable](
-	g *Grammar[TToken],
-	rules map[GrammarLabel]*Grammar[TToken],
+func propagateNullable[TToken, TNodeKind comparable](
+	g *Grammar[TToken, TNodeKind],
+	rules map[GrammarLabel]*Grammar[TToken, TNodeKind],
 	nullable map[NodeKey]bool,
 ) bool {
 	if g == nil {
@@ -544,10 +544,10 @@ func propagateNullable[TToken comparable](
 // FIRST
 // ============================================================
 
-func propagateFirst[TToken comparable](
-	g *Grammar[TToken],
+func propagateFirst[TToken, TNodeKind comparable](
+	g *Grammar[TToken, TNodeKind],
 	currentRule GrammarLabel,
-	rules map[GrammarLabel]*Grammar[TToken],
+	rules map[GrammarLabel]*Grammar[TToken, TNodeKind],
 	nullable map[NodeKey]bool,
 	out map[NodeKey]TokenSet[TToken],
 ) bool {
@@ -611,10 +611,10 @@ func propagateFirst[TToken comparable](
 // FOLLOW
 // ============================================================
 
-func propagateFollow[TToken comparable](
-	g *Grammar[TToken],
+func propagateFollow[TToken, TNodeKind comparable](
+	g *Grammar[TToken, TNodeKind],
 	currentRule GrammarLabel,
-	rules map[GrammarLabel]*Grammar[TToken],
+	rules map[GrammarLabel]*Grammar[TToken, TNodeKind],
 	nullable map[NodeKey]bool,
 	first map[NodeKey]TokenSet[TToken],
 	follow map[NodeKey]TokenSet[TToken],
@@ -658,7 +658,7 @@ func propagateFollow[TToken comparable](
 	return changed
 }
 
-func handleFollowChoice[TToken comparable](g *Grammar[TToken], follow map[NodeKey]TokenSet[TToken], parentKey NodeKey) bool {
+func handleFollowChoice[TToken, TNodeKind comparable](g *Grammar[TToken, TNodeKind], follow map[NodeKey]TokenSet[TToken], parentKey NodeKey) bool {
 	changed := false
 	for _, c := range g.Children {
 		childKey := NodeKeyFromPath(*c.NodePath)
@@ -669,8 +669,8 @@ func handleFollowChoice[TToken comparable](g *Grammar[TToken], follow map[NodeKe
 	return changed
 }
 
-func handleFollowConcat[TToken comparable](
-	g *Grammar[TToken],
+func handleFollowConcat[TToken, TNodeKind comparable](
+	g *Grammar[TToken, TNodeKind],
 	nullable map[NodeKey]bool,
 	first, follow map[NodeKey]TokenSet[TToken],
 	parentKey NodeKey,
@@ -705,7 +705,7 @@ func handleFollowConcat[TToken comparable](
 	return changed
 }
 
-func handleFollowRepeat[TToken comparable](g *Grammar[TToken], first, follow map[NodeKey]TokenSet[TToken], parentKey NodeKey) bool {
+func handleFollowRepeat[TToken, TNodeKind comparable](g *Grammar[TToken, TNodeKind], first, follow map[NodeKey]TokenSet[TToken], parentKey NodeKey) bool {
 	changed := false
 	body := g.Children[0]
 	bodyKey := NodeKeyFromPath(*body.NodePath)
@@ -720,13 +720,13 @@ func handleFollowRepeat[TToken comparable](g *Grammar[TToken], first, follow map
 	return changed
 }
 
-func handleFollowOptional[TToken comparable](g *Grammar[TToken], follow map[NodeKey]TokenSet[TToken], parentKey NodeKey) bool {
+func handleFollowOptional[TToken, TNodeKind comparable](g *Grammar[TToken, TNodeKind], follow map[NodeKey]TokenSet[TToken], parentKey NodeKey) bool {
 	body := g.Children[0]
 	bodyKey := NodeKeyFromPath(*body.NodePath)
 	return mergeInto(getOrInit(follow, bodyKey), follow[parentKey])
 }
 
-func handleFollowNest[TToken comparable](g *Grammar[TToken], follow map[NodeKey]TokenSet[TToken]) bool {
+func handleFollowNest[TToken, TNodeKind comparable](g *Grammar[TToken, TNodeKind], follow map[NodeKey]TokenSet[TToken]) bool {
 	body := g.Children[0]
 	bodyKey := NodeKeyFromPath(*body.NodePath)
 	bodyFollow := getOrInit(follow, bodyKey)
@@ -738,9 +738,9 @@ func handleFollowNest[TToken comparable](g *Grammar[TToken], follow map[NodeKey]
 	return false
 }
 
-func handleFollowReference[TToken comparable](
-	g *Grammar[TToken],
-	rules map[GrammarLabel]*Grammar[TToken],
+func handleFollowReference[TToken, TNodeKind comparable](
+	g *Grammar[TToken, TNodeKind],
+	rules map[GrammarLabel]*Grammar[TToken, TNodeKind],
 	follow map[NodeKey]TokenSet[TToken],
 	parentKey NodeKey,
 ) bool {
@@ -760,8 +760,8 @@ func getOrInit[TToken comparable](m map[NodeKey]TokenSet[TToken], key NodeKey) T
 	return m[key]
 }
 
-func initializeFollow[TToken comparable](
-	g *Grammar[TToken],
+func initializeFollow[TToken, TNodeKind comparable](
+	g *Grammar[TToken, TNodeKind],
 	currentRule GrammarLabel,
 	follow map[NodeKey]TokenSet[TToken],
 ) {
