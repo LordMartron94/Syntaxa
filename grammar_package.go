@@ -170,9 +170,9 @@ func ProducePackage[
 		tokensUsed = append(tokensUsed, t)
 	}
 
-	coreCFG := SyntaxaTreeToContextaGrammar(root, additionalRules, rules)
+	coreCFG, ruleNameToNodeKey := SyntaxaTreeToContextaGrammar(root, additionalRules, rules)
 	patternAnalysis := pattern.ComputeAnalysis(coreCFG)
-	analysis := grammarAnalysisFromPattern(patternAnalysis)
+	analysis := grammarAnalysisFromPattern(patternAnalysis, ruleNameToNodeKey)
 
 	pathToGrammarLabel := buildPathToGrammarLabel(root, additionalRules)
 
@@ -198,9 +198,11 @@ func ProducePackage[
 
 /*
 grammarAnalysisFromPattern builds Syntaxa's GrammarAnalysis from pattern's analysis.
-Rule names in pattern are NodePaths, so they map 1:1 to NodeKey.
+ruleNameToNodeKey maps pattern rule names (readable Label_hash) to NodeKey; when present
+each pattern key is copied to the corresponding NodeKey. When nil, pattern keys are
+used as NodeKey directly (backward compatibility).
 */
-func grammarAnalysisFromPattern[TToken comparable](pa *pattern.GrammarAnalysis[TToken]) *GrammarAnalysis[TToken] {
+func grammarAnalysisFromPattern[TToken comparable](pa *pattern.GrammarAnalysis[TToken], ruleNameToNodeKey map[string]NodeKey) *GrammarAnalysis[TToken] {
 	if pa == nil {
 		return &GrammarAnalysis[TToken]{
 			Nullable: make(map[NodeKey]bool),
@@ -211,22 +213,30 @@ func grammarAnalysisFromPattern[TToken comparable](pa *pattern.GrammarAnalysis[T
 	nullable := make(map[NodeKey]bool)
 	first := make(map[NodeKey]TokenSet[TToken])
 	follow := make(map[NodeKey]TokenSet[TToken])
+	nodeKey := func(ruleName string) NodeKey {
+		if ruleNameToNodeKey != nil {
+			if k, ok := ruleNameToNodeKey[ruleName]; ok {
+				return k
+			}
+		}
+		return NodeKey(ruleName)
+	}
 	for k, v := range pa.Nullable {
-		nullable[NodeKey(k)] = v
+		nullable[nodeKey(k)] = v
 	}
 	for k, s := range pa.First {
 		dst := make(TokenSet[TToken])
 		for t := range s {
 			dst[t] = struct{}{}
 		}
-		first[NodeKey(k)] = dst
+		first[nodeKey(k)] = dst
 	}
 	for k, s := range pa.Follow {
 		dst := make(TokenSet[TToken])
 		for t := range s {
 			dst[t] = struct{}{}
 		}
-		follow[NodeKey(k)] = dst
+		follow[nodeKey(k)] = dst
 	}
 	return &GrammarAnalysis[TToken]{Nullable: nullable, First: first, Follow: follow}
 }

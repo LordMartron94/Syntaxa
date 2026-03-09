@@ -1,26 +1,33 @@
 package syntaxa
 
 import (
+	"fmt"
+	"unicode"
+
 	"autarch/pattern"
+	"foundation/hash"
 )
 
 /*
 SyntaxaTreeToContextaGrammar converts a Syntaxa grammar tree (and rule map) into a
-pattern.Grammar (Contexta IR). One pattern rule is emitted per Syntaxa node, with
-rule name equal to that node's NodePath, so pattern's analysis (keyed by rule name)
-maps 1:1 to Syntaxa's NodeKey.
+pattern.Grammar (Contexta IR). One pattern rule is emitted per Syntaxa node. Rule names
+are readable: GrammarLabel (or "n" if empty) plus an XXH3 hash of NodePath for uniqueness,
+so the CFG dump is human-readable while remaining deterministic.
 
 root and rules must have NodePath set on every node (e.g. after FinalizeNodePaths and
 ProducePackage's collectAll). rules is used to resolve GReference targets to their
 NodePath. additionalRules are disconnected roots to include in the graph.
+
+Returns the grammar and ruleNameToNodeKey so analysis (keyed by rule name) can be
+mapped back to NodeKey for Syntaxa's GrammarAnalysis.
 */
 func SyntaxaTreeToContextaGrammar[TToken, TNodeKind comparable](
 	root *Grammar[TToken, TNodeKind],
 	additionalRules []*Grammar[TToken, TNodeKind],
 	rules map[GrammarLabel]*Grammar[TToken, TNodeKind],
-) *pattern.Grammar[TToken] {
+) (*pattern.Grammar[TToken], map[string]NodeKey) {
 	if root == nil {
-		return nil
+		return nil, nil
 	}
 
 	// Post-order collect all nodes (so children are defined before parents)
@@ -31,8 +38,20 @@ func SyntaxaTreeToContextaGrammar[TToken, TNodeKind comparable](
 		collectPostOrder(r, &order, visited)
 	}
 
+	hasher := hash.XXH3HasherCreateWithSeed(0)
+	pathToRuleName := make(map[NodePath]string)
+	ruleNameToNodeKey := make(map[string]NodeKey)
+	for _, g := range order {
+		if g.NodePath == nil {
+			continue
+		}
+		name := contextaRuleName(hasher, g)
+		pathToRuleName[*g.NodePath] = name
+		ruleNameToNodeKey[name] = NodeKey(*g.NodePath)
+	}
+
 	cfg := &pattern.Grammar[TToken]{
-		StartSymbol: string(*root.NodePath),
+		StartSymbol: pathToRuleName[*root.NodePath],
 		Rules:       make(map[string]*pattern.Rule[TToken]),
 	}
 
@@ -40,11 +59,46 @@ func SyntaxaTreeToContextaGrammar[TToken, TNodeKind comparable](
 		if g.NodePath == nil {
 			continue
 		}
-		name := string(*g.NodePath)
-		cfg.Rules[name] = syntaxaNodeToContextaRule(g, rules)
+		name := pathToRuleName[*g.NodePath]
+		cfg.Rules[name] = syntaxaNodeToContextaRule(g, rules, pathToRuleName)
 	}
 
-	return cfg
+	return cfg, ruleNameToNodeKey
+}
+
+// contextaRuleName returns a readable, unique rule name: sanitized GrammarLabel (or "n") + "_" + hex(XXH3(path)).
+func contextaRuleName[TToken, TNodeKind comparable](hasher *hash.XXH3Hasher, g *Grammar[TToken, TNodeKind]) string {
+	path := *g.NodePath
+	h := hash.XXH3HasherHash64(hasher, []byte(path))
+	label := string(g.GrammarLabel)
+	if label == "" {
+		label = "n"
+	} else {
+		label = sanitizeLabelForRuleName(label)
+		if label == "" {
+			label = "n"
+		}
+	}
+	return fmt.Sprintf("%s_%016x", label, h)
+}
+
+// sanitizeLabelForRuleName turns a GrammarLabel into a valid rule-name segment (alphanumeric + underscore).
+func sanitizeLabelForRuleName(s string) string {
+	var b []byte
+	for _, r := range s {
+		if r == '_' || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			b = append(b, byte(r))
+		} else if unicode.IsSpace(r) || unicode.IsPunct(r) {
+			if len(b) > 0 && b[len(b)-1] != '_' {
+				b = append(b, '_')
+			}
+		}
+	}
+	// trim trailing underscore
+	for len(b) > 0 && b[len(b)-1] == '_' {
+		b = b[:len(b)-1]
+	}
+	return string(b)
 }
 
 func collectPostOrder[TToken, TNodeKind comparable](
@@ -69,8 +123,9 @@ func collectPostOrder[TToken, TNodeKind comparable](
 func syntaxaNodeToContextaRule[TToken, TNodeKind comparable](
 	g *Grammar[TToken, TNodeKind],
 	rules map[GrammarLabel]*Grammar[TToken, TNodeKind],
+	pathToRuleName map[NodePath]string,
 ) *pattern.Rule[TToken] {
-	rule := &pattern.Rule[TToken]{NonTerminal: string(*g.NodePath), Productions: nil}
+	rule := &pattern.Rule[TToken]{NonTerminal: pathToRuleName[*g.NodePath], Productions: nil}
 
 	switch g.Kind {
 	case GToken:
@@ -90,7 +145,7 @@ func syntaxaNodeToContextaRule[TToken, TNodeKind comparable](
 		}
 		if target != nil && target.NodePath != nil {
 			rule.Productions = []pattern.Production[TToken]{
-				{Symbols: []pattern.Symbol[TToken]{{Type: pattern.SYMBOL_NON_TERMINAL, Name: string(*target.NodePath)}}},
+				{Symbols: []pattern.Symbol[TToken]{{Type: pattern.SYMBOL_NON_TERMINAL, Name: pathToRuleName[*target.NodePath]}}},
 			}
 		} else {
 			rule.Productions = []pattern.Production[TToken]{
@@ -101,7 +156,7 @@ func syntaxaNodeToContextaRule[TToken, TNodeKind comparable](
 		syms := make([]pattern.Symbol[TToken], 0, len(g.Children))
 		for _, c := range g.Children {
 			if c != nil && c.NodePath != nil {
-				syms = append(syms, pattern.Symbol[TToken]{Type: pattern.SYMBOL_NON_TERMINAL, Name: string(*c.NodePath)})
+				syms = append(syms, pattern.Symbol[TToken]{Type: pattern.SYMBOL_NON_TERMINAL, Name: pathToRuleName[*c.NodePath]})
 			}
 		}
 		rule.Productions = []pattern.Production[TToken]{{Symbols: syms}}
@@ -110,7 +165,7 @@ func syntaxaNodeToContextaRule[TToken, TNodeKind comparable](
 		for _, c := range g.Children {
 			if c != nil && c.NodePath != nil {
 				prods = append(prods, pattern.Production[TToken]{
-					Symbols: []pattern.Symbol[TToken]{{Type: pattern.SYMBOL_NON_TERMINAL, Name: string(*c.NodePath)}},
+					Symbols: []pattern.Symbol[TToken]{{Type: pattern.SYMBOL_NON_TERMINAL, Name: pathToRuleName[*c.NodePath]}},
 				})
 			}
 		}
@@ -125,7 +180,7 @@ func syntaxaNodeToContextaRule[TToken, TNodeKind comparable](
 			} else {
 				rule.Productions = []pattern.Production[TToken]{
 					{Symbols: []pattern.Symbol[TToken]{{Type: pattern.SYMBOL_EPSILON}}},
-					{Symbols: []pattern.Symbol[TToken]{{Type: pattern.SYMBOL_NON_TERMINAL, Name: string(*bodyPath)}}},
+					{Symbols: []pattern.Symbol[TToken]{{Type: pattern.SYMBOL_NON_TERMINAL, Name: pathToRuleName[*bodyPath]}}},
 				}
 			}
 		}
@@ -142,18 +197,18 @@ func syntaxaNodeToContextaRule[TToken, TNodeKind comparable](
 				rule.Productions = []pattern.Production[TToken]{
 					{Symbols: []pattern.Symbol[TToken]{{Type: pattern.SYMBOL_EPSILON}}},
 					{Symbols: []pattern.Symbol[TToken]{
-						{Type: pattern.SYMBOL_NON_TERMINAL, Name: string(*bodyPath)},
-						{Type: pattern.SYMBOL_NON_TERMINAL, Name: string(selfPath)},
+						{Type: pattern.SYMBOL_NON_TERMINAL, Name: pathToRuleName[*bodyPath]},
+						{Type: pattern.SYMBOL_NON_TERMINAL, Name: pathToRuleName[selfPath]},
 					}},
 				}
 			} else {
 				// 1..* or 1..N: body self | body (for exactly 1 we'd need more productions; minimal: body self | body)
 				rule.Productions = []pattern.Production[TToken]{
 					{Symbols: []pattern.Symbol[TToken]{
-						{Type: pattern.SYMBOL_NON_TERMINAL, Name: string(*bodyPath)},
-						{Type: pattern.SYMBOL_NON_TERMINAL, Name: string(selfPath)},
+						{Type: pattern.SYMBOL_NON_TERMINAL, Name: pathToRuleName[*bodyPath]},
+						{Type: pattern.SYMBOL_NON_TERMINAL, Name: pathToRuleName[selfPath]},
 					}},
-					{Symbols: []pattern.Symbol[TToken]{{Type: pattern.SYMBOL_NON_TERMINAL, Name: string(*bodyPath)}}},
+					{Symbols: []pattern.Symbol[TToken]{{Type: pattern.SYMBOL_NON_TERMINAL, Name: pathToRuleName[*bodyPath]}}},
 				}
 			}
 		}
@@ -169,7 +224,7 @@ func syntaxaNodeToContextaRule[TToken, TNodeKind comparable](
 					{
 						Symbols: []pattern.Symbol[TToken]{
 							{Type: pattern.SYMBOL_TERMINAL, Token: *g.OpenToken},
-							{Type: pattern.SYMBOL_NON_TERMINAL, Name: string(*bodyPath)},
+							{Type: pattern.SYMBOL_NON_TERMINAL, Name: pathToRuleName[*bodyPath]},
 							{Type: pattern.SYMBOL_TERMINAL, Token: *g.CloseToken},
 						},
 					},
