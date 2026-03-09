@@ -1941,16 +1941,17 @@ GetDefinedGrammars exports the structural IR of all defined context boundaries.
 
 Pass this into syntaxa.ProducePackage as the 'additionalRules' parameter
 so the analysis phase can compute FIRST/FOLLOW sets for disconnected sub-graphs.
+Includes auxiliary grammars (e.g. Pratt level roots) so GReference targets resolve.
 */
 func (rb *RuleBuilder[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) GetDefinedGrammars() []*syntaxa.Grammar[TToken, TNodeKind] {
-	grammars := make([]*syntaxa.Grammar[TToken, TNodeKind], 0, len(rb.sharedCore.registry))
+	grammars := make([]*syntaxa.Grammar[TToken, TNodeKind], 0, len(rb.sharedCore.registry)+len(rb.sharedCore.auxiliaryGrammars))
 
 	for _, rule := range rb.sharedCore.registry {
 		if g := rule.GetGrammar(); g != nil {
 			grammars = append(grammars, g)
 		}
 	}
-
+	grammars = append(grammars, rb.sharedCore.auxiliaryGrammars...)
 	return grammars
 }
 
@@ -2011,10 +2012,12 @@ func RuleBuilderCreate[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState
 sharedCore holds the token formatter, the rule registry for the core engine, and rule construction
 helpers: result builders, identity/contract creation, and constructRule variants (structural, skipping,
 optional, virtual). Context-boundary rules are automatically added to the registry when constructed.
+Auxiliary grammars (e.g. Pratt level roots) are appended for ProducePackage so refs resolve.
 */
 type sharedCore[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable] struct {
-	tokenFormatter func(token TToken) string
-	registry       syntaxa.RuleRegistry[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
+	tokenFormatter    func(token TToken) string
+	registry         syntaxa.RuleRegistry[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
+	auxiliaryGrammars []*syntaxa.Grammar[TToken, TNodeKind]
 }
 
 /*
@@ -2037,6 +2040,14 @@ func (s *sharedCore[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) f
 	}
 
 	return fmt.Sprintf("%#v", t)
+}
+
+/*
+appendAuxiliaryGrammars appends grammar roots that must be in the package (e.g. Pratt level rules)
+so GReference targets resolve. Call from Pratt Expression() when using level refs.
+*/
+func (s *sharedCore[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) appendAuxiliaryGrammars(roots []*syntaxa.Grammar[TToken, TNodeKind]) {
+	s.auxiliaryGrammars = append(s.auxiliaryGrammars, roots...)
 }
 
 /*

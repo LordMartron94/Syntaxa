@@ -462,9 +462,8 @@ func validateRuleSuccess[
 	if rule.grammar != nil && rule.grammar.Kind == GReference {
 		if targetRule, exists := parser.registry[rule.grammar.ReferenceTarget]; exists {
 			contract = targetRule.contract
-		} else {
-			return fmt.Errorf("engine validation error: unresolved reference target '%s'", rule.grammar.ReferenceTarget)
 		}
+		// If target is not in the registry (e.g. Pratt level grammar-only refs), use this rule's contract.
 	}
 
 	if endPos == startPos && contract.MustConsume && lexemePreRule.Token != parser.eofToken {

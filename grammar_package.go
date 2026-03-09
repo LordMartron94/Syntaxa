@@ -318,7 +318,7 @@ func collectAll[TToken, TNodeKind comparable](
 	// We only add to the 'Rules' map or 'Nests' slice if we haven't seen this LABEL before.
 	_, labelSeen := visitedLabels[g.GrammarLabel]
 
-	if g.IsContextBoundary && g.Kind != GReference && !labelSeen {
+	if g.IsContextBoundary && !labelSeen {
 		if existing, seen := rules[g.GrammarLabel]; seen && existing != g {
 			duplicateContextBoundaryLabels[g.GrammarLabel] = struct{}{}
 		}
