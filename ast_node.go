@@ -396,3 +396,60 @@ func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) walkChildren() []*Synt
 
 	return out
 }
+
+/*
+FindDirectChild inspects only the immediate children and slots.
+Returns the first node satisfying the predicate, or nil.
+*/
+func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) FindDirectChild(
+	predicate func(*SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) bool,
+) *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind] {
+
+	for _, child := range n.walkChildren() {
+		if predicate(child) {
+			return child
+		}
+	}
+
+	return nil
+}
+
+/*
+FindAllDirectChildren returns all immediate children satisfying the predicate.
+*/
+func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) FindAllDirectChildren(
+	predicate func(*SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) bool,
+) []*SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind] {
+
+	var out []*SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]
+
+	for _, child := range n.walkChildren() {
+		if predicate(child) {
+			out = append(out, child)
+		}
+	}
+
+	return out
+}
+
+/*
+FindDirectChildKind returns the first immediate child of the specified kind.
+Use this to resolve grammatical unions and structural boundaries.
+*/
+func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) FindDirectChildKind(
+	kind TKind,
+) *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind] {
+
+	return n.FindDirectChild(func(cur *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) bool {
+		return cur.kind == kind
+	})
+}
+
+/*
+HasDirectChildKind reports if an immediate child of the specified kind exists.
+*/
+func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) HasDirectChildKind(
+	kind TKind,
+) bool {
+	return n.FindDirectChildKind(kind) != nil
+}
