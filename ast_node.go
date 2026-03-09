@@ -481,3 +481,52 @@ func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) Unwrap(
 		current = children[0]
 	}
 }
+
+/*
+FlattenByKind returns a slice of nodes by recursively flattening the subtree when the
+current node has the given kind. If the node's kind is not the given kind, returns
+a single-element slice containing the node. Otherwise returns the concatenation of
+FlattenByKind applied to each child (including slots). Use for associative chains
+(e.g. expression lists, alternations).
+*/
+func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) FlattenByKind(
+	kind TKind,
+) []*SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind] {
+	if n.kind != kind {
+		return []*SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]{n}
+	}
+	children := n.walkChildren()
+	if len(children) == 0 {
+		return []*SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]{n}
+	}
+	var out []*SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]
+	for _, ch := range children {
+		out = append(out, ch.FlattenByKind(kind)...)
+	}
+	return out
+}
+
+/*
+SingleChild returns the single logical child and true if the node has exactly one child
+(including slots). Otherwise returns (nil, false).
+*/
+func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) SingleChild() (*SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind], bool) {
+	children := n.walkChildren()
+	if len(children) != 1 {
+		return nil, false
+	}
+	return children[0], true
+}
+
+/*
+RequireSingleChild returns the single logical child (including slots). Panics if the node
+does not have exactly one child.
+*/
+func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) RequireSingleChild() *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind] {
+	child, ok := n.SingleChild()
+	if !ok {
+		children := n.walkChildren()
+		panic(fmt.Sprintf("expected exactly one child, got %d", len(children)))
+	}
+	return child
+}
