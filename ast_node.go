@@ -453,3 +453,31 @@ func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) HasDirectChildKind(
 ) bool {
 	return n.FindDirectChildKind(kind) != nil
 }
+
+/*
+Unwrap traverses down a chain of single-child wrapper nodes of specific kinds.
+It stops and returns the first node that is NOT in the allowed wrappers list,
+or the first node that has multiple children.
+*/
+func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) Unwrap(
+	allowedWrappers ...TKind,
+) *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind] {
+
+	current := n
+	wrapperSet := make(map[TKind]struct{}, len(allowedWrappers))
+	for _, w := range allowedWrappers {
+		wrapperSet[w] = struct{}{}
+	}
+
+	for {
+		_, isWrapper := wrapperSet[current.kind]
+		children := current.walkChildren()
+
+		// If it's not a wrapper, or it branches, stop unwrapping.
+		if !isWrapper || len(children) != 1 {
+			return current
+		}
+
+		current = children[0]
+	}
+}
