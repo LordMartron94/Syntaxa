@@ -244,31 +244,49 @@ func parseWithContext[
 		defer editor.Freeze()
 	}
 
-	editor.begin() // No defer end here because end resets the editor.
+	editor.begin()
 
 	programResult := syntaxaParserExecuteRule(parser, ctx, parser.programRule, ExecutionNormal)
 
+	// 1. Intercept top-level NoMatch and upgrade it to a diagnostic error
+	if !programResult.Succeeded && programResult.Kind == FailureNoMatch {
+		peeked := ctx.Token.Peek(0)
+		ctx.Error.ReportAt(
+			"SYNTAXA ENGINE",
+			peeked,
+			fmt.Sprintf("unexpected %v, expected valid program start", peeked.Token),
+		)
+	}
+
+	// 2. Report Lexer Errors
 	if lexErr := ctx.lastLexingError(); lexErr != nil {
 		ctx.Error.reportLexerError(lexErr.StartLine, lexErr.StartColumn, fmt.Sprintf("lexing error: %s", lexErr.Error()))
 	}
 
+	// 3. Finalize AST
 	editor.setRoot(programResult.Node)
 	if editor.root != nil {
 		editor.ComputeSpans()
 	}
 
-	peeked := ctx.Token.Peek(0)
-	if peeked.Token != parser.eofToken {
-		ctx.Error.ReportAt(
-			"SYNTAXA ENGINE",
-			peeked,
-			fmt.Sprintf("unexpected %v, expected end of file", peeked.Token),
-		)
+	// 4. Check for EOF ONLY if the program parse succeeded
+	if programResult.Succeeded {
+		peeked := ctx.Token.Peek(0)
+		if peeked.Token != parser.eofToken {
+			ctx.Error.ReportAt(
+				"SYNTAXA ENGINE",
+				peeked,
+				fmt.Sprintf("unexpected %v, expected end of file", peeked.Token),
+			)
+			programResult.Succeeded = false
+		}
 	}
 
+	// 5. Handle Final Failure State
 	if !programResult.Succeeded {
-		return programResult.Node, ctx.trace, fmt.Errorf("parse failed")
+		return programResult.Node, ctx.trace, fmt.Errorf("parsing failed with %d errors", len(ctx.Error.sink.Errors))
 	}
+
 	return programResult.Node, ctx.trace, nil
 }
 
@@ -334,7 +352,7 @@ func syntaxaParserExecuteRule[
 							string(rule.GetName()),
 							lexemePreRule,
 							fmt.Sprintf(
-								"unexpected %v, expected %s",
+								"unexpected %v, expected '%s'",
 								lexemePreRule.Token,
 								rule.identity.ExpectedLabel,
 							),
@@ -367,12 +385,9 @@ func syntaxaParserExecuteRule[
 						ctx.Token.ConsumeRaw()
 					}
 				}
-
 			} else {
 				ctx.Error.sink.popFrame(false)
 			}
-		} else {
-			ctx.Error.sink.popFrame(false)
 		}
 
 		return ruleResult

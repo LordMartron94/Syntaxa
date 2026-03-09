@@ -3,6 +3,7 @@ package rule
 import (
 	"cmp"
 	"fmt"
+	"slices"
 	"syntaxa"
 )
 
@@ -334,35 +335,109 @@ func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 	grammarLabel syntaxa.GrammarLabel,
 	config PrattConfig[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 ) *syntaxa.Grammar[TToken, TNodeKind] {
-	children := []*syntaxa.Grammar[TToken, TNodeKind]{config.Primary.GetGrammar()}
+
+	// 1. Group operators by their Binding Power
+	type prattLevel struct {
+		BP          int
+		Prefixes    []*syntaxa.Grammar[TToken, TNodeKind]
+		Postfixes   []*syntaxa.Grammar[TToken, TNodeKind]
+		Infixes     []*syntaxa.Grammar[TToken, TNodeKind]
+		HasImplicit bool
+	}
+
+	levelsMap := make(map[int]*prattLevel)
+	getLvl := func(bp int) *prattLevel {
+		if _, ok := levelsMap[bp]; !ok {
+			levelsMap[bp] = &prattLevel{BP: bp}
+		}
+		return levelsMap[bp]
+	}
 
 	for _, op := range config.PrefixOps {
-		children = append(children, syntaxa.Token[TToken, TNodeKind](op.TokenGrammarLabel, op.Token))
+		getLvl(op.RightBP).Prefixes = append(getLvl(op.RightBP).Prefixes, syntaxa.Token[TToken, TNodeKind](op.TokenGrammarLabel, op.Token))
 	}
 	for _, op := range config.PrefixRuleOps {
-		children = append(children, op.Rule.GetGrammar())
-	}
-	for _, op := range config.PostfixOps {
-		children = append(children, syntaxa.Token[TToken, TNodeKind](op.TokenGrammarLabel, op.Token))
-	}
-	for _, op := range config.PostfixRuleOps {
-		children = append(children, op.Rule.GetGrammar())
-	}
-	for _, op := range config.InfixOps {
-		children = append(children, syntaxa.Token[TToken, TNodeKind](op.TokenGrammarLabel, op.Token))
-	}
-	for _, op := range config.InfixRuleOps {
-		children = append(children, op.Rule.GetGrammar())
+		getLvl(op.RightBP).Prefixes = append(getLvl(op.RightBP).Prefixes, op.Rule.GetGrammar())
 	}
 
-	if len(children) == 1 {
-		return children[0]
+	for _, op := range config.PostfixOps {
+		getLvl(op.LeftBP).Postfixes = append(getLvl(op.LeftBP).Postfixes, syntaxa.Token[TToken, TNodeKind](op.TokenGrammarLabel, op.Token))
 	}
-	grammar := syntaxa.Choice[TToken, TNodeKind](grammarLabel, children...)
-	if primaryGrammar := config.Primary.GetGrammar(); primaryGrammar != nil && primaryGrammar.OutputNodeKind != nil {
-		grammar.OutputNodeKind = primaryGrammar.OutputNodeKind
+	for _, op := range config.PostfixRuleOps {
+		getLvl(op.LeftBP).Postfixes = append(getLvl(op.LeftBP).Postfixes, op.Rule.GetGrammar())
 	}
-	return grammar
+
+	for _, op := range config.InfixOps {
+		getLvl(op.LeftBP).Infixes = append(getLvl(op.LeftBP).Infixes, syntaxa.Token[TToken, TNodeKind](op.TokenGrammarLabel, op.Token))
+	}
+	for _, op := range config.InfixRuleOps {
+		getLvl(op.LeftBP).Infixes = append(getLvl(op.LeftBP).Infixes, op.Rule.GetGrammar())
+	}
+
+	if config.ImplicitInfix != nil {
+		getLvl(config.ImplicitInfix.LeftBP).HasImplicit = true
+	}
+
+	// 2. Sort BPs descending (highest precedence binds tightest)
+	var bps []int
+	for bp := range levelsMap {
+		bps = append(bps, bp)
+	}
+	slices.SortFunc(bps, func(a, b int) int { return cmp.Compare(b, a) })
+
+	// 3. Build the cascade from the inside out
+	currentLevel := config.Primary.GetGrammar()
+
+	for _, bp := range bps {
+		lvl := levelsMap[bp]
+
+		// Apply Prefixes: (Prefix)* CurrentLevel
+		if len(lvl.Prefixes) > 0 {
+			prefixChoice := p.safeChoice(grammarLabel, lvl.Prefixes)
+			prefixLoop := syntaxa.ZeroOrMore(grammarLabel, prefixChoice)
+			currentLevel = syntaxa.Concat(grammarLabel, prefixLoop, currentLevel)
+		}
+
+		// Apply Postfixes, Infixes, and Implicit Concat
+		var suffixChoices []*syntaxa.Grammar[TToken, TNodeKind]
+
+		if len(lvl.Postfixes) > 0 {
+			suffixChoices = append(suffixChoices, p.safeChoice(grammarLabel, lvl.Postfixes))
+		}
+
+		if len(lvl.Infixes) > 0 {
+			infixChoice := p.safeChoice(grammarLabel, lvl.Infixes)
+			// Infix CurrentLevel
+			infixConcat := syntaxa.Concat(grammarLabel, infixChoice, currentLevel)
+			suffixChoices = append(suffixChoices, infixConcat)
+		}
+
+		if lvl.HasImplicit {
+			suffixChoices = append(suffixChoices, currentLevel)
+		}
+
+		// CurrentLevel (Suffixes)*
+		if len(suffixChoices) > 0 {
+			suffixLoop := syntaxa.ZeroOrMore(grammarLabel, p.safeChoice(grammarLabel, suffixChoices))
+			currentLevel = syntaxa.Concat(grammarLabel, currentLevel, suffixLoop)
+		}
+	}
+
+	if primary := config.Primary.GetGrammar(); primary != nil && primary.OutputNodeKind != nil {
+		currentLevel.OutputNodeKind = primary.OutputNodeKind
+	}
+
+	return currentLevel
+}
+
+func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) safeChoice(
+	label syntaxa.GrammarLabel,
+	options []*syntaxa.Grammar[TToken, TNodeKind],
+) *syntaxa.Grammar[TToken, TNodeKind] {
+	if len(options) == 1 {
+		return options[0]
+	}
+	return syntaxa.Choice(label, options...)
 }
 
 func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) runPrattExpression(
