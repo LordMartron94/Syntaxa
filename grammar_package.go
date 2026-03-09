@@ -1,6 +1,7 @@
 package syntaxa
 
 import (
+	"autarch/pattern"
 	"cmp"
 	"fmt"
 	"foundation/formatting"
@@ -33,7 +34,8 @@ type TokenSet[TToken comparable] map[TToken]struct{}
 GrammarPackage is the flattened, analyzed form of a grammar tree.
 
 It contains the rule map, tokens used, nest specs, and computed nullable/first/follow analysis.
-Produced by ProducePackage from a root Grammar node.
+CoreCFG is the canonical CFG in pattern/Contexta IR; analysis is derived from it via
+pattern.ComputeAnalysis. Produced by ProducePackage from a root Grammar node.
 
 PathToGrammarLabel maps each node's path (NodeKey) to its GrammarLabel for debug display.
 NodeByGrammarKey is 1:1 unique instance lookup. NodesByGrammarLabel is 1:N by semantic type.
@@ -46,6 +48,7 @@ type GrammarPackage[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind, TLe
 	Version             string
 	EntryRule           GrammarLabel
 	Grammars            map[GrammarLabel]*Grammar[TToken, TNodeKind]
+	CoreCFG             *pattern.Grammar[TToken]
 	TokensUsed          []TToken
 	Nests               []NestSpec[TToken, TNodeKind]
 	Analysis            *GrammarAnalysis[TToken]
@@ -167,7 +170,10 @@ func ProducePackage[
 		tokensUsed = append(tokensUsed, t)
 	}
 
-	analysis := ComputeAnalysisGlobal(root, rules)
+	coreCFG := SyntaxaTreeToContextaGrammar(root, additionalRules, rules)
+	patternAnalysis := pattern.ComputeAnalysis(coreCFG)
+	analysis := grammarAnalysisFromPattern(patternAnalysis)
+
 	pathToGrammarLabel := buildPathToGrammarLabel(root, additionalRules)
 
 	return GrammarPackage[TObservation, TToken, TTokenRole, TNodeKind, TLexerState]{
@@ -175,6 +181,7 @@ func ProducePackage[
 		Version:             version,
 		EntryRule:           root.GrammarLabel,
 		Grammars:            rules,
+		CoreCFG:             coreCFG,
 		TokensUsed:          tokensUsed,
 		Nests:               nests,
 		Analysis:            analysis,
@@ -183,6 +190,45 @@ func ProducePackage[
 		NodesByGrammarLabel: nodesByGrammarLabel,
 		EntryRuleParserRule: entryRule,
 	}
+}
+
+// ============================================================
+// ANALYSIS (DELEGATED TO PATTERN)
+// ============================================================
+
+/*
+grammarAnalysisFromPattern builds Syntaxa's GrammarAnalysis from pattern's analysis.
+Rule names in pattern are NodePaths, so they map 1:1 to NodeKey.
+*/
+func grammarAnalysisFromPattern[TToken comparable](pa *pattern.GrammarAnalysis[TToken]) *GrammarAnalysis[TToken] {
+	if pa == nil {
+		return &GrammarAnalysis[TToken]{
+			Nullable: make(map[NodeKey]bool),
+			First:    make(map[NodeKey]TokenSet[TToken]),
+			Follow:   make(map[NodeKey]TokenSet[TToken]),
+		}
+	}
+	nullable := make(map[NodeKey]bool)
+	first := make(map[NodeKey]TokenSet[TToken])
+	follow := make(map[NodeKey]TokenSet[TToken])
+	for k, v := range pa.Nullable {
+		nullable[NodeKey(k)] = v
+	}
+	for k, s := range pa.First {
+		dst := make(TokenSet[TToken])
+		for t := range s {
+			dst[t] = struct{}{}
+		}
+		first[NodeKey(k)] = dst
+	}
+	for k, s := range pa.Follow {
+		dst := make(TokenSet[TToken])
+		for t := range s {
+			dst[t] = struct{}{}
+		}
+		follow[NodeKey(k)] = dst
+	}
+	return &GrammarAnalysis[TToken]{Nullable: nullable, First: first, Follow: follow}
 }
 
 // ============================================================
@@ -421,368 +467,10 @@ func setResolvedReferences[TToken, TNodeKind comparable](
 }
 
 // ============================================================
-// ANALYSIS (GLOBAL GRAPH)
+// HELPERS
 // ============================================================
 
-/*
-ComputeAnalysisGlobal runs nullable, first, and follow analysis on the entire grammar graph.
-
-It uses fixed-point iteration over the global rules registry to resolve cyclic GReference nodes.
-*/
-func ComputeAnalysisGlobal[TToken, TNodeKind comparable](
-	root *Grammar[TToken, TNodeKind],
-	rules map[GrammarLabel]*Grammar[TToken, TNodeKind],
-) *GrammarAnalysis[TToken] {
-	nullable := make(map[NodeKey]bool)
-	first := make(map[NodeKey]TokenSet[TToken])
-	follow := make(map[NodeKey]TokenSet[TToken])
-
-	// 1. Nullable (Fixed-point iteration over all rules)
-	for changed := true; changed; {
-		changed = false
-		for _, ruleRoot := range rules {
-			if propagateNullable(ruleRoot, rules, nullable) {
-				changed = true
-			}
-		}
-	}
-
-	// 2. First Sets (Fixed-point iteration over all rules)
-	for changed := true; changed; {
-		changed = false
-		for _, ruleRoot := range rules {
-			if propagateFirst(ruleRoot, ruleRoot.GrammarLabel, rules, nullable, first) {
-				changed = true
-			}
-		}
-	}
-
-	// 3. Follow Sets (Initialize, then Fixed-point iteration over all rules)
-	for _, ruleRoot := range rules {
-		initializeFollow(ruleRoot, ruleRoot.GrammarLabel, follow)
-	}
-	for changed := true; changed; {
-		changed = false
-		for _, ruleRoot := range rules {
-			if propagateFollow(ruleRoot, ruleRoot.GrammarLabel, rules, nullable, first, follow) {
-				changed = true
-			}
-		}
-	}
-
-	return &GrammarAnalysis[TToken]{Nullable: nullable, First: first, Follow: follow}
-}
-
-// ============================================================
-// NULLABLE
-// ============================================================
-
-/*
-propagateNullable evaluates if a node can derive the empty string, updating the map.
-It evaluates safely across graph boundaries using the global rules map.
-*/
-func propagateNullable[TToken, TNodeKind comparable](
-	g *Grammar[TToken, TNodeKind],
-	rules map[GrammarLabel]*Grammar[TToken, TNodeKind],
-	nullable map[NodeKey]bool,
-) bool {
-	if g == nil {
-		return false
-	}
-
-	changed := false
-	for _, c := range g.Children {
-		if propagateNullable(c, rules, nullable) {
-			changed = true
-		}
-	}
-
-	key := NodeKeyFromPath(*g.NodePath)
-	if nullable[key] {
-		return changed // Already true, cannot regress to false
-	}
-
-	isNullable := false
-	switch g.Kind {
-	case GEpsilon, GOptional:
-		isNullable = true
-	case GToken, GNest:
-		isNullable = false
-	case GRepeat:
-		isNullable = g.Min == 0 || nullable[NodeKeyFromPath(*g.Children[0].NodePath)]
-	case GChoice:
-		for _, c := range g.Children {
-			if nullable[NodeKeyFromPath(*c.NodePath)] {
-				isNullable = true
-				break
-			}
-		}
-	case GConcat:
-		isNullable = true
-		for _, c := range g.Children {
-			if !nullable[NodeKeyFromPath(*c.NodePath)] {
-				isNullable = false
-				break
-			}
-		}
-	case GReference:
-		target, ok := rules[g.ReferenceTarget]
-		if ok && target.NodePath != nil {
-			isNullable = nullable[NodeKeyFromPath(*target.NodePath)]
-		}
-	}
-
-	if isNullable && !nullable[key] {
-		nullable[key] = true
-		changed = true
-	}
-
-	return changed
-}
-
-// ============================================================
-// FIRST
-// ============================================================
-
-func propagateFirst[TToken, TNodeKind comparable](
-	g *Grammar[TToken, TNodeKind],
-	currentRule GrammarLabel,
-	rules map[GrammarLabel]*Grammar[TToken, TNodeKind],
-	nullable map[NodeKey]bool,
-	out map[NodeKey]TokenSet[TToken],
-) bool {
-	if g == nil {
-		return false
-	}
-	if g.IsContextBoundary {
-		currentRule = g.GrammarLabel
-	}
-
-	key := NodeKeyFromPath(*g.NodePath)
-	changed := false
-	set := getOrInit(out, key)
-
-	switch g.Kind {
-	case GToken:
-		if _, exists := set[g.Token]; !exists {
-			set[g.Token] = struct{}{}
-			changed = true
-		}
-	case GChoice, GOptional, GRepeat:
-		for _, c := range g.Children {
-			if mergeInto(set, out[NodeKeyFromPath(*c.NodePath)]) {
-				changed = true
-			}
-		}
-	case GConcat:
-		for _, c := range g.Children {
-			childKey := NodeKeyFromPath(*c.NodePath)
-			if mergeInto(set, out[childKey]) {
-				changed = true
-			}
-			if !nullable[childKey] {
-				break
-			}
-		}
-	case GNest:
-		if _, exists := set[*g.OpenToken]; !exists {
-			set[*g.OpenToken] = struct{}{}
-			changed = true
-		}
-	case GReference:
-		target, ok := rules[g.ReferenceTarget]
-		if ok && target.NodePath != nil {
-			targetKey := NodeKeyFromPath(*target.NodePath)
-			if mergeInto(set, out[targetKey]) {
-				changed = true
-			}
-		}
-	}
-
-	for _, c := range g.Children {
-		if propagateFirst(c, currentRule, rules, nullable, out) {
-			changed = true
-		}
-	}
-	return changed
-}
-
-// ============================================================
-// FOLLOW
-// ============================================================
-
-func propagateFollow[TToken, TNodeKind comparable](
-	g *Grammar[TToken, TNodeKind],
-	currentRule GrammarLabel,
-	rules map[GrammarLabel]*Grammar[TToken, TNodeKind],
-	nullable map[NodeKey]bool,
-	first map[NodeKey]TokenSet[TToken],
-	follow map[NodeKey]TokenSet[TToken],
-) bool {
-	if g == nil {
-		return false
-	}
-
-	if g.IsContextBoundary {
-		currentRule = g.GrammarLabel
-	}
-
-	changed := false
-	parentKey := NodeKeyFromPath(*g.NodePath)
-
-	if follow[parentKey] == nil {
-		follow[parentKey] = make(TokenSet[TToken])
-	}
-
-	switch g.Kind {
-	case GChoice:
-		changed = handleFollowChoice(g, follow, parentKey) || changed
-	case GConcat:
-		changed = handleFollowConcat(g, nullable, first, follow, parentKey) || changed
-	case GRepeat:
-		changed = handleFollowRepeat(g, first, follow, parentKey) || changed
-	case GOptional:
-		changed = handleFollowOptional(g, follow, parentKey) || changed
-	case GNest:
-		changed = handleFollowNest(g, follow) || changed
-	case GReference:
-		changed = handleFollowReference(g, rules, follow, parentKey) || changed
-	}
-
-	for _, c := range g.Children {
-		if propagateFollow(c, currentRule, rules, nullable, first, follow) {
-			changed = true
-		}
-	}
-
-	return changed
-}
-
-func handleFollowChoice[TToken, TNodeKind comparable](g *Grammar[TToken, TNodeKind], follow map[NodeKey]TokenSet[TToken], parentKey NodeKey) bool {
-	changed := false
-	for _, c := range g.Children {
-		childKey := NodeKeyFromPath(*c.NodePath)
-		if mergeInto(getOrInit(follow, childKey), follow[parentKey]) {
-			changed = true
-		}
-	}
-	return changed
-}
-
-func handleFollowConcat[TToken, TNodeKind comparable](
-	g *Grammar[TToken, TNodeKind],
-	nullable map[NodeKey]bool,
-	first, follow map[NodeKey]TokenSet[TToken],
-	parentKey NodeKey,
-) bool {
-	changed := false
-	for i := 0; i < len(g.Children); i++ {
-		A := g.Children[i]
-		AKey := NodeKeyFromPath(*A.NodePath)
-		targetFollow := getOrInit(follow, AKey)
-
-		allRightNullable := true
-		for j := i + 1; j < len(g.Children); j++ {
-			B := g.Children[j]
-			BKey := NodeKeyFromPath(*B.NodePath)
-
-			if mergeInto(targetFollow, first[BKey]) {
-				changed = true
-			}
-
-			if !nullable[BKey] {
-				allRightNullable = false
-				break
-			}
-		}
-
-		if allRightNullable {
-			if mergeInto(targetFollow, follow[parentKey]) {
-				changed = true
-			}
-		}
-	}
-	return changed
-}
-
-func handleFollowRepeat[TToken, TNodeKind comparable](g *Grammar[TToken, TNodeKind], first, follow map[NodeKey]TokenSet[TToken], parentKey NodeKey) bool {
-	changed := false
-	body := g.Children[0]
-	bodyKey := NodeKeyFromPath(*body.NodePath)
-	bodyFollow := getOrInit(follow, bodyKey)
-
-	if mergeInto(bodyFollow, first[bodyKey]) {
-		changed = true
-	}
-	if mergeInto(bodyFollow, follow[parentKey]) {
-		changed = true
-	}
-	return changed
-}
-
-func handleFollowOptional[TToken, TNodeKind comparable](g *Grammar[TToken, TNodeKind], follow map[NodeKey]TokenSet[TToken], parentKey NodeKey) bool {
-	body := g.Children[0]
-	bodyKey := NodeKeyFromPath(*body.NodePath)
-	return mergeInto(getOrInit(follow, bodyKey), follow[parentKey])
-}
-
-func handleFollowNest[TToken, TNodeKind comparable](g *Grammar[TToken, TNodeKind], follow map[NodeKey]TokenSet[TToken]) bool {
-	body := g.Children[0]
-	bodyKey := NodeKeyFromPath(*body.NodePath)
-	bodyFollow := getOrInit(follow, bodyKey)
-
-	if _, exists := bodyFollow[*g.CloseToken]; !exists {
-		bodyFollow[*g.CloseToken] = struct{}{}
-		return true
-	}
-	return false
-}
-
-func handleFollowReference[TToken, TNodeKind comparable](
-	g *Grammar[TToken, TNodeKind],
-	rules map[GrammarLabel]*Grammar[TToken, TNodeKind],
-	follow map[NodeKey]TokenSet[TToken],
-	parentKey NodeKey,
-) bool {
-	target, ok := rules[g.ReferenceTarget]
-	if ok && target.NodePath != nil {
-		targetKey := NodeKeyFromPath(*target.NodePath)
-		return mergeInto(getOrInit(follow, targetKey), follow[parentKey])
-	}
-	return false
-}
-
-// Helper to clean up map initialization
-func getOrInit[TToken comparable](m map[NodeKey]TokenSet[TToken], key NodeKey) TokenSet[TToken] {
-	if m[key] == nil {
-		m[key] = make(TokenSet[TToken])
-	}
-	return m[key]
-}
-
-func initializeFollow[TToken, TNodeKind comparable](
-	g *Grammar[TToken, TNodeKind],
-	currentRule GrammarLabel,
-	follow map[NodeKey]TokenSet[TToken],
-) {
-	if g.GrammarLabel != currentRule {
-		currentRule = g.GrammarLabel
-	}
-
-	key := NodeKeyFromPath(*g.NodePath)
-	if follow[key] == nil {
-		follow[key] = make(TokenSet[TToken])
-	}
-
-	for _, c := range g.Children {
-		initializeFollow(c, currentRule, follow)
-	}
-}
-
-func mergeInto[TToken comparable](
-	dst TokenSet[TToken],
-	src TokenSet[TToken],
-) bool {
+func mergeInto[TToken comparable](dst TokenSet[TToken], src TokenSet[TToken]) bool {
 	changed := false
 	for t := range src {
 		if _, exists := dst[t]; !exists {
@@ -792,10 +480,6 @@ func mergeInto[TToken comparable](
 	}
 	return changed
 }
-
-// ============================================================
-// HELPERS
-// ============================================================
 
 /*
 NodeKeyFromPath builds a NodeKey from a node path.
