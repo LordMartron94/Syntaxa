@@ -18,16 +18,16 @@ root and rules must have NodePath set on every node (e.g. after FinalizeNodePath
 ProducePackage's collectAll). rules is used to resolve GReference targets to their
 NodePath. additionalRules are disconnected roots to include in the graph.
 
-Returns the grammar and ruleNameToNodeKey so analysis (keyed by rule name) can be
-mapped back to NodeKey for Syntaxa's GrammarAnalysis.
+Returns the grammar, ruleNameToNodeKey (Contexta rule name -> NodeKey), and
+ruleNameToRecovery (Contexta rule name -> recovery tokens for that rule root).
 */
 func SyntaxaTreeToContextaGrammar[TToken, TNodeKind comparable](
 	root *Grammar[TToken, TNodeKind],
 	additionalRules []*Grammar[TToken, TNodeKind],
 	rules map[GrammarLabel]*Grammar[TToken, TNodeKind],
-) (*pattern.Grammar[TToken], map[string]NodeKey) {
+) (*pattern.Grammar[TToken], map[string]NodeKey, map[string]RecoverySpec[TToken]) {
 	if root == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	// Post-order collect all nodes (so children are defined before parents)
@@ -41,6 +41,7 @@ func SyntaxaTreeToContextaGrammar[TToken, TNodeKind comparable](
 	hasher := hash.XXH3HasherCreateWithSeed(0)
 	pathToRuleName := make(map[NodePath]string)
 	ruleNameToNodeKey := make(map[string]NodeKey)
+	ruleNameToRecovery := make(map[string]RecoverySpec[TToken])
 	for _, g := range order {
 		if g.NodePath == nil {
 			continue
@@ -48,6 +49,12 @@ func SyntaxaTreeToContextaGrammar[TToken, TNodeKind comparable](
 		name := contextaRuleName(hasher, g)
 		pathToRuleName[*g.NodePath] = name
 		ruleNameToNodeKey[name] = NodeKey(*g.NodePath)
+		if len(g.RecoveryTokens) > 0 || len(g.NoConsumeOnRecoveryTokens) > 0 {
+			ruleNameToRecovery[name] = RecoverySpec[TToken]{
+				Tokens:    append([]TToken(nil), g.RecoveryTokens...),
+				NoConsume: append([]TToken(nil), g.NoConsumeOnRecoveryTokens...),
+			}
+		}
 	}
 
 	cfg := &pattern.Grammar[TToken]{
@@ -63,7 +70,7 @@ func SyntaxaTreeToContextaGrammar[TToken, TNodeKind comparable](
 		cfg.Rules[name] = syntaxaNodeToContextaRule(g, rules, pathToRuleName)
 	}
 
-	return cfg, ruleNameToNodeKey
+	return cfg, ruleNameToNodeKey, ruleNameToRecovery
 }
 
 // contextaRuleName returns a readable, unique rule name: sanitized GrammarLabel (or "n") + "_" + hex(XXH3(path)).

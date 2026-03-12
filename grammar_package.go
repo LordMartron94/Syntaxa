@@ -39,6 +39,8 @@ pattern.ComputeAnalysis. Produced by ProducePackage from a root Grammar node.
 
 PathToGrammarLabel maps each node's path (NodeKey) to its GrammarLabel for debug display.
 NodeByGrammarKey is 1:1 unique instance lookup. NodesByGrammarLabel is 1:N by semantic type.
+RuleNameToNodeKey maps Contexta rule name (from CoreCFG) to NodeKey for consistent Analysis lookups.
+RuleNameToRecovery maps Contexta rule name to recovery tokens for Editor IR error resync.
 
 EntryRuleParserRule is the executable rule for the entry production; set when producing
 a package for the parser. Nil when the package is produced for analysis only (e.g. debug dumps).
@@ -53,6 +55,8 @@ type GrammarPackage[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind, TLe
 	Nests               []NestSpec[TToken, TNodeKind]
 	Analysis            *GrammarAnalysis[TToken]
 	PathToGrammarLabel  map[NodeKey]GrammarLabel
+	RuleNameToNodeKey   map[string]NodeKey
+	RuleNameToRecovery  map[string]RecoverySpec[TToken]
 	NodeByGrammarKey    map[GrammarKey]*Grammar[TToken, TNodeKind]
 	NodesByGrammarLabel map[GrammarLabel][]*Grammar[TToken, TNodeKind]
 	EntryRuleParserRule *ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
@@ -81,6 +85,17 @@ type GrammarAnalysis[TToken comparable] struct {
 	Nullable map[NodeKey]bool
 	First    map[NodeKey]TokenSet[TToken]
 	Follow   map[NodeKey]TokenSet[TToken]
+}
+
+/*
+RecoverySpec holds recovery token sets for a rule, used by Editor IR to resync on error.
+
+Tokens are sync tokens at which the engine resyncs (consumes until one is seen).
+NoConsume are sync tokens where the token is left in the stream for the parent.
+*/
+type RecoverySpec[TToken comparable] struct {
+	Tokens    []TToken
+	NoConsume []TToken
 }
 
 // ============================================================
@@ -170,7 +185,7 @@ func ProducePackage[
 		tokensUsed = append(tokensUsed, t)
 	}
 
-	coreCFG, ruleNameToNodeKey := SyntaxaTreeToContextaGrammar(root, additionalRules, rules)
+	coreCFG, ruleNameToNodeKey, ruleNameToRecovery := SyntaxaTreeToContextaGrammar(root, additionalRules, rules)
 	patternAnalysis := pattern.ComputeAnalysis(coreCFG)
 	analysis := grammarAnalysisFromPattern(patternAnalysis, ruleNameToNodeKey)
 
@@ -186,6 +201,8 @@ func ProducePackage[
 		Nests:               nests,
 		Analysis:            analysis,
 		PathToGrammarLabel:  pathToGrammarLabel,
+		RuleNameToNodeKey:   ruleNameToNodeKey,
+		RuleNameToRecovery:  ruleNameToRecovery,
 		NodeByGrammarKey:    nodeByGrammarKey,
 		NodesByGrammarLabel: nodesByGrammarLabel,
 		EntryRuleParserRule: entryRule,
