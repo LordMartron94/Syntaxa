@@ -128,7 +128,6 @@ func BuildStateGraph[
 	transitionsByID := make(map[string][]Transition[TToken, TNodeKind])
 	metaByID := make(map[string]ContextMeta)
 	nestBodyIDs := make(map[syntaxa.GrammarLabel]string)
-	counters := make(map[string]int)
 
 	entryTerminals, _ := lookahead[TToken, TNodeKind](entryRule, rules, make(visiting))
 	rootKey := lookaheadKey(entryTerminals, tokenHash, hasher)
@@ -155,7 +154,6 @@ func BuildStateGraph[
 				transitionsByID,
 				metaByID,
 				nestBodyIDs,
-				counters,
 				&queue,
 			)
 			if tr.TargetContextIDs != nil || tr.Operation == OpPop || tr.Operation == OpMatch {
@@ -173,7 +171,6 @@ func BuildStateGraph[
 		}
 	}
 	for id := range nestBodyIDs {
-		// Re-create the deterministic nest key to ensure it isn't skipped
 		nestKeyBytes := []byte("NEST_BODY:" + string(id))
 		nestKey := hash.XXH3HasherHash64(hasher, nestKeyBytes)
 		if c := ctxByKey[nestKey]; c != nil {
@@ -203,16 +200,15 @@ func buildTransition[TToken, TNodeKind comparable](
 	transitionsByID map[string][]Transition[TToken, TNodeKind],
 	metaByID map[string]ContextMeta,
 	nestBodyIDs map[syntaxa.GrammarLabel]string,
-	counters map[string]int,
 	queue *[]pendingEntry[TToken, TNodeKind],
 ) Transition[TToken, TNodeKind] {
 	isZeroOrMore, _ := outerFrameKind(term)
 
 	if term.nestNode != nil {
-		return buildNestTransition(term, isZeroOrMore, rules, tokenHash, hasher, ctxByKey, transitionsByID, metaByID, nestBodyIDs, counters, queue)
+		return buildNestTransition(term, isZeroOrMore, rules, tokenHash, hasher, ctxByKey, transitionsByID, metaByID, nestBodyIDs, queue)
 	}
 
-	return buildStandardTransition(term, nameHint, isZeroOrMore, rules, tokenHash, hasher, ctxByKey, metaByID, counters, queue)
+	return buildStandardTransition(term, nameHint, isZeroOrMore, rules, tokenHash, hasher, ctxByKey, metaByID, queue)
 }
 
 func getOrCreateContext[TToken, TNodeKind comparable](
@@ -223,7 +219,6 @@ func getOrCreateContext[TToken, TNodeKind comparable](
 	hasher *hash.XXH3Hasher,
 	ctxByKey map[uint64]*Context,
 	metaByID map[string]ContextMeta,
-	counters map[string]int,
 	queue *[]pendingEntry[TToken, TNodeKind],
 ) *Context {
 	key := lookaheadKey(terms, tokenHash, hasher)
@@ -239,9 +234,8 @@ func getOrCreateContext[TToken, TNodeKind comparable](
 	if base == "" {
 		base = "ctx"
 	}
-	n := counters[base]
-	counters[base] = n + 1
-	name := fmt.Sprintf("%s__%d", base, n)
+
+	name := fmt.Sprintf("%s_%08X", base, uint32(key))
 
 	c := &Context{ID: name, Label: name}
 	ctxByKey[key] = c
@@ -282,7 +276,6 @@ func getOrCreateNestBody[TToken, TNodeKind comparable](
 	hasher *hash.XXH3Hasher,
 	ctxByKey map[uint64]*Context,
 	metaByID map[string]ContextMeta,
-	counters map[string]int,
 	queue *[]pendingEntry[TToken, TNodeKind],
 	nestBodyIDs map[syntaxa.GrammarLabel]string,
 ) *Context {
@@ -323,10 +316,9 @@ func buildNestTransition[TToken, TNodeKind comparable](
 	transitionsByID map[string][]Transition[TToken, TNodeKind],
 	metaByID map[string]ContextMeta,
 	nestBodyIDs map[syntaxa.GrammarLabel]string,
-	counters map[string]int,
 	queue *[]pendingEntry[TToken, TNodeKind],
 ) Transition[TToken, TNodeKind] {
-	bodyCtx := getOrCreateNestBody(term.nestNode, rules, tokenHash, hasher, ctxByKey, metaByID, counters, queue, nestBodyIDs)
+	bodyCtx := getOrCreateNestBody(term.nestNode, rules, tokenHash, hasher, ctxByKey, metaByID, queue, nestBodyIDs)
 	ownerLabel := owningRule(term)
 	nestHint := term.nestNode.GrammarLabel
 	noNest := gTerminal[TToken, TNodeKind]{token: term.token, nodeKind: term.nodeKind, remaining: term.remaining, stack: term.stack, popOffset: term.popOffset}
@@ -350,7 +342,7 @@ func buildNestTransition[TToken, TNodeKind comparable](
 		}
 	}
 
-	afterCtx := getOrCreateContext(advTerminals, ownerLabel, nestHint, tokenHash, hasher, ctxByKey, metaByID, counters, queue)
+	afterCtx := getOrCreateContext(advTerminals, ownerLabel, nestHint, tokenHash, hasher, ctxByKey, metaByID, queue)
 
 	meta := metaByID[afterCtx.ID]
 	meta.HasOptionalContinuation = true
@@ -376,7 +368,6 @@ func buildStandardTransition[TToken, TNodeKind comparable](
 	hasher *hash.XXH3Hasher,
 	ctxByKey map[uint64]*Context,
 	metaByID map[string]ContextMeta,
-	counters map[string]int,
 	queue *[]pendingEntry[TToken, TNodeKind],
 ) Transition[TToken, TNodeKind] {
 	ownerLabel := owningRule(term)
@@ -400,7 +391,7 @@ func buildStandardTransition[TToken, TNodeKind comparable](
 		if advTerminals == nil {
 			return Transition[TToken, TNodeKind]{Token: term.token, NodeKind: term.nodeKind, Operation: OpMatch}
 		}
-		next := getOrCreateContext(advTerminals, ownerLabel, nameHint, tokenHash, hasher, ctxByKey, metaByID, counters, queue)
+		next := getOrCreateContext(advTerminals, ownerLabel, nameHint, tokenHash, hasher, ctxByKey, metaByID, queue)
 		return Transition[TToken, TNodeKind]{
 			Token:            term.token,
 			NodeKind:         term.nodeKind,
@@ -418,7 +409,7 @@ func buildStandardTransition[TToken, TNodeKind comparable](
 		}
 	}
 
-	next := getOrCreateContext(advTerminals, ownerLabel, nameHint, tokenHash, hasher, ctxByKey, metaByID, counters, queue)
+	next := getOrCreateContext(advTerminals, ownerLabel, nameHint, tokenHash, hasher, ctxByKey, metaByID, queue)
 	return Transition[TToken, TNodeKind]{
 		Token:            term.token,
 		NodeKind:         term.nodeKind,
