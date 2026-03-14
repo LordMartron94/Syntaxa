@@ -127,11 +127,13 @@ func NewGrammarPackageDebugger[TObservation cmp.Ordered, TToken, TTokenRole, TNo
 DumpTo writes the full debug dump of the grammar package to w.
 
 Sections: package info, rules, tokens, nests, analysis (nullable, first, follow).
-Returns any write error.
+getAnalysis is optional; when nil or when it returns nil, the analysis section shows "(none)".
+Use syntaxa/lowering.GetAnalysis(pkg) to supply analysis on demand.
 */
 func (d *GrammarPackageDebugger[TObservation, TToken, TTokenRole, TNodeKind, TLexerState]) DumpTo(
 	w io.Writer,
 	pkg *GrammarPackage[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
+	getAnalysis func() *GrammarAnalysis[TToken],
 ) error {
 	if pkg == nil {
 		_, err := io.WriteString(w, "<nil>\n")
@@ -203,7 +205,11 @@ func (d *GrammarPackageDebugger[TObservation, TToken, TTokenRole, TNodeKind, TLe
 		return err
 	}
 
-	if pkg.Analysis == nil {
+	var analysis *GrammarAnalysis[TToken]
+	if getAnalysis != nil {
+		analysis = getAnalysis()
+	}
+	if analysis == nil {
 		if _, err := io.WriteString(w, "=== Analysis ===\n  (none)\n"); err != nil {
 			return err
 		}
@@ -213,9 +219,9 @@ func (d *GrammarPackageDebugger[TObservation, TToken, TTokenRole, TNodeKind, TLe
 	if _, err := io.WriteString(w, "=== Analysis (nullable) ===\n"); err != nil {
 		return err
 	}
-	nullableKeys := sortedNodeKeys(pkg.Analysis.Nullable)
+	nullableKeys := sortedNodeKeys(analysis.Nullable)
 	for _, k := range nullableKeys {
-		v := pkg.Analysis.Nullable[k]
+		v := analysis.Nullable[k]
 		if _, err := fmt.Fprintf(w, "  %s -> %v\n", f.nodeKeyForAnalysis(pkg, k), v); err != nil {
 			return err
 		}
@@ -227,9 +233,9 @@ func (d *GrammarPackageDebugger[TObservation, TToken, TTokenRole, TNodeKind, TLe
 	if _, err := io.WriteString(w, "=== Analysis (first) ===\n"); err != nil {
 		return err
 	}
-	firstKeys := sortedNodeKeysFirst(pkg.Analysis.First)
+	firstKeys := sortedNodeKeysFirst(analysis.First)
 	for _, k := range firstKeys {
-		ts := pkg.Analysis.First[k]
+		ts := analysis.First[k]
 		if _, err := fmt.Fprintf(w, "  %s -> %s\n", f.nodeKeyForAnalysis(pkg, k), f.tokenSet(ts)); err != nil {
 			return err
 		}
@@ -241,9 +247,9 @@ func (d *GrammarPackageDebugger[TObservation, TToken, TTokenRole, TNodeKind, TLe
 	if _, err := io.WriteString(w, "=== Analysis (follow) ===\n"); err != nil {
 		return err
 	}
-	followKeys := sortedNodeKeysFirst(pkg.Analysis.Follow)
+	followKeys := sortedNodeKeysFirst(analysis.Follow)
 	for _, k := range followKeys {
-		ts := pkg.Analysis.Follow[k]
+		ts := analysis.Follow[k]
 		if _, err := fmt.Fprintf(w, "  %s -> %s\n", f.nodeKeyForAnalysis(pkg, k), f.tokenSet(ts)); err != nil {
 			return err
 		}
@@ -254,10 +260,14 @@ func (d *GrammarPackageDebugger[TObservation, TToken, TTokenRole, TNodeKind, TLe
 
 /*
 DumpString returns the full debug dump of the grammar package as a string.
+getAnalysis is optional; pass nil to omit analysis or lowering.GetAnalysis(pkg).
 */
-func (d *GrammarPackageDebugger[TObservation, TToken, TTokenRole, TNodeKind, TLexerState]) DumpString(pkg *GrammarPackage[TObservation, TToken, TTokenRole, TNodeKind, TLexerState]) string {
+func (d *GrammarPackageDebugger[TObservation, TToken, TTokenRole, TNodeKind, TLexerState]) DumpString(
+	pkg *GrammarPackage[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
+	getAnalysis func() *GrammarAnalysis[TToken],
+) string {
 	var b strings.Builder
-	_ = d.DumpTo(&b, pkg)
+	_ = d.DumpTo(&b, pkg, getAnalysis)
 	return b.String()
 }
 
@@ -286,11 +296,13 @@ func sortedNodeKeysFirst[TToken comparable](m map[NodeKey]TokenSet[TToken]) []No
 /*
 DebugDump produces a human-readable dump of the grammar package using the given formatter.
 
-Convenience wrapper around NewGrammarPackageDebugger and DumpString.
+getAnalysis is optional; when nil the analysis section shows "(none)". Use
+syntaxa/lowering.GetAnalysis(pkg) to include nullable/first/follow.
 */
 func (p *GrammarPackage[TObservation, TToken, TTokenRole, TNodeKind, TLexerState]) DebugDump(
 	formatter GrammarPackageDebugFormatter[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
+	getAnalysis func() *GrammarAnalysis[TToken],
 ) string {
 	dbg := NewGrammarPackageDebugger(formatter)
-	return dbg.DumpString(p)
+	return dbg.DumpString(p, getAnalysis)
 }
