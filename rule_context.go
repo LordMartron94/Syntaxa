@@ -561,7 +561,10 @@ func buildBaseContext[
 		Select:       selectCtx,
 		Finalization: finalCtx,
 		GetAnalysis: func() *GrammarAnalysis[TToken] {
-			return parser.grammarPackage.Analysis
+			if parser.getAnalysis != nil {
+				return parser.getAnalysis()
+			}
+			return nil
 		},
 	}
 

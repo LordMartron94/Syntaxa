@@ -138,6 +138,9 @@ type SyntaxaParser[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind, TLex
 
 	freezeAfterParse bool
 	debugTrace       bool
+
+	// getAnalysis returns nullable/first/follow when set; used by rule context. Optional.
+	getAnalysis func() *GrammarAnalysis[TToken]
 }
 
 /*
@@ -146,6 +149,8 @@ SyntaxaParserCreate constructs a new parser instance from a grammar package.
 The package must have been produced with an entry rule (ProducePackage(..., &programRule));
 panics if grammarPackage.EntryRuleParserRule is nil.
 nodePostProcessor is optional and allowed to be nil.
+getAnalysis is optional; when set, the rule context can use it for nullable/first/follow
+(e.g. for Predict or Pratt). Pass lowering.GetAnalysis(grammarPackage) or nil.
 */
 func SyntaxaParserCreate[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind, TLexerState comparable](
 	grammarPackage *GrammarPackage[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
@@ -156,6 +161,7 @@ func SyntaxaParserCreate[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind
 	eofToken TToken,
 	rootNodeKind, errorNodeKind TNodeKind,
 	freezeAfterParse bool,
+	getAnalysis func() *GrammarAnalysis[TToken],
 ) *SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TLexerState] {
 	if grammarPackage == nil || grammarPackage.EntryRuleParserRule == nil {
 		panic("SyntaxaParserCreate: grammar package must have EntryRuleParserRule set (produce package with entry rule)")
@@ -172,6 +178,7 @@ func SyntaxaParserCreate[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind
 		errorNodeKind:        errorNodeKind,
 		freezeAfterParse:     freezeAfterParse,
 		defaultSkipRoles:     nil,
+		getAnalysis:          getAnalysis,
 	}
 }
 

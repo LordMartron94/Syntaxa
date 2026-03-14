@@ -32,33 +32,31 @@ Implemented as map[TToken]struct{} for O(1) membership and easy merging.
 type TokenSet[TToken comparable] map[TToken]struct{}
 
 /*
-GrammarPackage is the flattened, analyzed form of a grammar tree.
+GrammarPackage is the flattened form of a grammar tree produced by ProducePackage.
 
-It contains the rule map, tokens used, nest specs, and computed nullable/first/follow analysis.
-CoreCFG is the canonical CFG in pattern/Contexta IR; analysis is derived from it via
-pattern.ComputeAnalysis. Produced by ProducePackage from a root Grammar node.
+It contains the rule map, tokens used, nest specs, and path/label maps. It does not contain
+the core CFG (pattern/Contexta IR) or nullable/first/follow analysis; those are produced
+on demand via syntaxa/lowering (ToPatternGrammar, GetAnalysis).
 
 PathToGrammarLabel maps each node's path (NodeKey) to its GrammarLabel for debug display.
 NodeByGrammarKey is 1:1 unique instance lookup. NodesByGrammarLabel is 1:N by semantic type.
-RuleNameToNodeKey maps Contexta rule name (from CoreCFG) to NodeKey for consistent Analysis lookups.
-RuleNameToRecovery maps Contexta rule name to recovery tokens for Editor IR error resync.
 
 EntryRuleParserRule is the executable rule for the entry production; set when producing
-a package for the parser. Nil when the package is produced for analysis only (e.g. debug dumps).
+a package for the parser. Nil when the package is produced for analysis-only use (e.g. debug dumps).
+
+Root and AdditionalRules are kept for on-demand lowering (e.g. ToPatternGrammar, BuildStateGraph).
 */
 type GrammarPackage[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind, TLexerState comparable] struct {
 	Name                string
 	Version             string
 	EntryRule           GrammarLabel
+	Root                *Grammar[TToken, TNodeKind]
+	AdditionalRules     []*Grammar[TToken, TNodeKind]
 	Grammars            map[GrammarLabel]*Grammar[TToken, TNodeKind]
 	SortedGrammarLabels []GrammarLabel
-	CoreCFG             *pattern.Grammar[TToken]
 	TokensUsed          []TToken
 	Nests               []NestSpec[TToken, TNodeKind]
-	Analysis            *GrammarAnalysis[TToken]
 	PathToGrammarLabel  map[NodeKey]GrammarLabel
-	RuleNameToNodeKey   map[string]NodeKey
-	RuleNameToRecovery  map[string]RecoverySpec[TToken]
 	NodeByGrammarKey    map[GrammarKey]*Grammar[TToken, TNodeKind]
 	NodesByGrammarLabel map[GrammarLabel][]*Grammar[TToken, TNodeKind]
 	EntryRuleParserRule *ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
@@ -202,25 +200,22 @@ func ProducePackage[
 		return sortedGrammarLabels[i] < sortedGrammarLabels[j]
 	})
 
-	coreCFG, ruleNameToNodeKey, ruleNameToRecovery := SyntaxaTreeToContextaGrammar(root, additionalRules, rules)
-	patternAnalysis := pattern.ComputeAnalysis(coreCFG)
-	analysis := grammarAnalysisFromPattern(patternAnalysis, ruleNameToNodeKey)
-
 	pathToGrammarLabel := buildPathToGrammarLabel(root, additionalRules)
+
+	additionalCopy := make([]*Grammar[TToken, TNodeKind], len(additionalRules))
+	copy(additionalCopy, additionalRules)
 
 	return GrammarPackage[TObservation, TToken, TTokenRole, TNodeKind, TLexerState]{
 		Name:                name,
 		Version:             version,
 		EntryRule:           root.GrammarLabel,
+		Root:                root,
+		AdditionalRules:     additionalCopy,
 		Grammars:            rules,
 		SortedGrammarLabels: sortedGrammarLabels,
-		CoreCFG:             coreCFG,
 		TokensUsed:          tokensUsed,
 		Nests:               nests,
-		Analysis:            analysis,
 		PathToGrammarLabel:  pathToGrammarLabel,
-		RuleNameToNodeKey:   ruleNameToNodeKey,
-		RuleNameToRecovery:  ruleNameToRecovery,
 		NodeByGrammarKey:    nodeByGrammarKey,
 		NodesByGrammarLabel: nodesByGrammarLabel,
 		EntryRuleParserRule: entryRule,
@@ -232,12 +227,12 @@ func ProducePackage[
 // ============================================================
 
 /*
-grammarAnalysisFromPattern builds Syntaxa's GrammarAnalysis from pattern's analysis.
+GrammarAnalysisFromPattern builds Syntaxa's GrammarAnalysis from pattern's analysis.
 ruleNameToNodeKey maps pattern rule names (readable Label_hash) to NodeKey; when present
 each pattern key is copied to the corresponding NodeKey. When nil, pattern keys are
-used as NodeKey directly (backward compatibility).
+used as NodeKey directly (backward compatibility). Exported for use by syntaxa/lowering.
 */
-func grammarAnalysisFromPattern[TToken comparable](pa *pattern.GrammarAnalysis[TToken], ruleNameToNodeKey map[string]NodeKey) *GrammarAnalysis[TToken] {
+func GrammarAnalysisFromPattern[TToken comparable](pa *pattern.GrammarAnalysis[TToken], ruleNameToNodeKey map[string]NodeKey) *GrammarAnalysis[TToken] {
 	if pa == nil {
 		return &GrammarAnalysis[TToken]{
 			Nullable: make(map[NodeKey]bool),

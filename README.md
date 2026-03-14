@@ -15,7 +15,7 @@ Key features:
 - **Transactional execution**: Rule failure rolls back token consumption and LST mutations; only committed successes affect state.
 - **Execution modes**: Normal (committed, report errors) vs Probe (speculative, no diagnostics) for optionals and choice.
 - **Recovery**: Rules declare recovery tokens; on FailureError the engine consumes until a sync token (e.g. `}`, `)`) before continuing.
-- **Grammar package**: Root grammar can be turned into a `GrammarPackage` with nullable/first/follow analysis for tooling and diagnostics.
+- **Grammar package**: Root grammar is turned into a `GrammarPackage` (rules map, tokens, nests, path/label maps). The core CFG and nullable/first/follow analysis are not stored on the package; they are produced on demand via `syntaxa/lowering` (see below).
 - **Multiple input sources**: Slice of lexemes, lexarch `LexerSession`, or lexarch `StreamingLexerSession` via `BuildExecRuleContext*` and `SyntaxaParserParseWithContext`.
 
 ## Design Philosophy
@@ -29,7 +29,7 @@ Key features:
 
 - **Hot path**: Rule execution is function calls and slice/index operations; no reflection. Token stream is either a slice index (slice context) or lexer calls (session/streaming).
 - **Rollback**: Implemented by snapshot/restore of token position and trimming the LST editor’s created list; no per-node copy.
-- **Grammar analysis**: Nullable/first/follow are computed once when building a `GrammarPackage`; fixed-point iteration over the grammar tree.
+- **Grammar analysis**: Nullable/first/follow are computed on demand via `syntaxa/lowering.GetAnalysis(pkg)`; the core package does not store them.
 - **Allocations**: LST nodes and rule results are allocated during parsing; rule construction (factory or manual) allocates grammar nodes and closures.
 
 ## Integration
@@ -52,10 +52,19 @@ syntaxa
 - **Grammar IR**: `Grammar[TToken, TNodeKind]` with kinds GToken, GConcat, GChoice, GRepeat, GOptional, GEpsilon, GNest. Optional `OutputNodeKind` for the LST node kind produced when the grammar is the root of a rule. Constructors: `Token`, `Concat`, `Choice`, `Repeat`, `Optional`, `ZeroOrMore`, `OneOrMore`, `Nest`, etc.
 - **Rules**: `ParserRule` (identity, executor, contract, recovery tokens, grammar). Created with `ParserRuleCreate`. Executed by the engine; never called directly by the user.
 - **Context**: `ExecRuleContext` exposes `Token` (stream), `Recovery`, `Skip`, `Error`, `ExecuteRule`, `Editor`, `SetLexerState`, `Select`, `Finalization`. Built via `BuildExecRuleContextFromSlice`, `BuildExecRuleContextFromLexerSession`, or `BuildExecRuleContextFromStreamingSession`.
-- **Parser**: `SyntaxaParser` is built from a grammar package (with entry rule set). `SyntaxaParserCreate(grammarPackage, ...)` takes a `GrammarPackage`; the package must have been produced with an entry rule so the parser can run it. `SyntaxaParserParseWithContext(parser, ctx)` runs the parse.
+- **Parser**: `SyntaxaParser` is built from a grammar package (with entry rule set). `SyntaxaParserCreate(grammarPackage, ..., getAnalysis)` takes a `GrammarPackage` and an optional `getAnalysis` (e.g. `lowering.GetAnalysis(grammarPackage)`) for nullable/first/follow when using Predict or Pratt; pass nil otherwise. `SyntaxaParserParseWithContext(parser, ctx)` runs the parse.
 - **LST**: `SyntaxaLSTNode` (kind, parent, children, tokens, attributes, span). `LSTEditor` is the only way to create/mutate nodes during parsing (`NewNode`, `NewTransientNode`, `AttachChild`, `Detach`, etc.).
-- **Grammar package**: `ProducePackage(rootGrammar, name, version, entryRule)` builds a `GrammarPackage` (entry rule ID, rules map, tokens, nests, analysis, and optionally the entry `ParserRule` for the parser). Pass a non-nil `entryRule` when the package will be used to create a parser; pass nil for analysis-only use. Duplicate rule-root GrammarIDs panic. Analysis contains nullable, first, and follow sets keyed by `NodeKey` (from `NodePath`).
+- **Grammar package**: `ProducePackage(rootGrammar, name, version, entryRule)` builds a `GrammarPackage` (entry rule ID, rules map, tokens, nests, path/label maps, and optionally the entry `ParserRule`). It does **not** store the core CFG (pattern/Contexta IR) or nullable/first/follow analysis; those are produced on demand via `syntaxa/lowering` (ToPatternGrammar, GetAnalysis, CompileEngine). Pass a non-nil `entryRule` when the package will be used to create a parser; pass nil for analysis-only use. Duplicate rule-root GrammarIDs panic.
 - **Grammar traversal**: `Walk`, `WalkPre`, `WalkPost`, `WalkBreadth` for strategy-based walks; `GrammarWalkPreWithContext` for pre-order with inherited context (e.g. sync tokens, repeat nesting).
+
+### `syntaxa/lowering`
+
+On-demand lowering of a `GrammarPackage` into other representations. The core package does not produce or store these; call these when you need them.
+
+- **ToPatternGrammar(root, additionalRules, rules)** → `(*pattern.Grammar, ruleNameToNodeKey, ruleNameToRecovery)`. Converts the syntaxa grammar tree into the Contexta/pattern CFG. Use for CFG debug dumps or as input to PDA compilation.
+- **GetAnalysis(pkg)** → `*GrammarAnalysis`. Computes nullable, first, and follow sets keyed by `NodeKey`. Use when creating a parser (pass as `getAnalysis` to `SyntaxaParserCreate`) or when dumping analysis in the grammar package debugger.
+- **CompileEngine(pkg, allocFn, config)** → `(*PDAEngine, error)`. Compiles the package into a DPDA or NPDA; uses `ToPatternGrammar` internally. Types `PDAEngine` and `NPDAConfig` (and presets `NPDAConfigSmall`, `NPDAConfigMedium`, `NPDAConfigLarge`) live in this package.
+- **BuildStateGraph(pkg, tokenFormatter)** → `(*StateGraph, error)`. Generic state graph for editor backends (e.g. Editor IR). Types `StateGraph`, `Context`, `ContextMeta`, `Transition`, and `StackOp` are documented in the package.
 
 ### `syntaxa/rule` (rule factory)
 
@@ -103,12 +112,14 @@ func main() {
 		NodeList, NodeItem, true, rule.TrailingOptional,
 	)
 	root := rb.Rule.Root("ROOT", NodeList, false, list)
+	grammarPkg := syntaxa.ProducePackage(root.GetGrammar(), nil, "app", "0.0.0", &root)
+	registry := rb.GetRegistry()
 
 	// 3) Parser and context from a slice of lexemes
 	eofTok := TokenKind(-1)
 	parser := syntaxa.SyntaxaParserCreate(
-		root, tokenFmt, lexarch.RuneFormatterDefault(), nil,
-		eofTok, NodeList, NodeKind(-1), true,
+		&grammarPkg, registry, tokenFmt, lexarch.RuneFormatterDefault(), nil,
+		eofTok, NodeList, NodeKind(-1), true, nil, // getAnalysis nil unless using Predict/Pratt
 	)
 
 	lexemes := []lexarch.Lexeme[rune, TokenKind, int]{ /* ... */ }
