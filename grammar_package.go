@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"foundation/formatting"
 	"foundation/hash"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -50,6 +51,7 @@ type GrammarPackage[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind, TLe
 	Version             string
 	EntryRule           GrammarLabel
 	Grammars            map[GrammarLabel]*Grammar[TToken, TNodeKind]
+	SortedGrammarLabels []GrammarLabel
 	CoreCFG             *pattern.Grammar[TToken]
 	TokensUsed          []TToken
 	Nests               []NestSpec[TToken, TNodeKind]
@@ -144,6 +146,10 @@ func ProducePackage[
 	visitedLabels := make(map[GrammarLabel]struct{}) // To prevent duplicate Rules/Nests
 	visitedPaths := make(map[GrammarKey]struct{})    // To prevent infinite recursion in graph walks
 
+	slices.SortFunc(additionalRules, func(a, b *Grammar[TToken, TNodeKind]) int {
+		return cmp.Compare(a.GrammarLabel, b.GrammarLabel)
+	})
+
 	// 2. Collect everything from the entry point
 	collectAll(hasher, root, rules, tokenSet, &nests, nodeByGrammarKey, nodesByGrammarLabel, duplicateContextBoundaryLabels, visitedLabels, visitedPaths)
 
@@ -158,11 +164,14 @@ func ProducePackage[
 			ids = append(ids, string(id))
 		}
 		sort.Strings(ids)
+
 		list := formatting.FormatStringSlice(ids, formatting.FormatSliceOptions[string]{
-			Separator: ", ",
+			Separator: "\n  - ",
+			Prefix:    "\n  - ",
 			Quote:     true,
 		})
-		panic(fmt.Sprintf("syntaxa: duplicate grammar labels among context-boundary nodes (engine error): %s", list))
+
+		panic(fmt.Sprintf("syntaxa: duplicate grammar labels among context-boundary nodes (engine error):%s", list))
 	}
 
 	unresolvedRefs := collectUnresolvedReferences(root, additionalRules, rules)
@@ -185,6 +194,14 @@ func ProducePackage[
 		tokensUsed = append(tokensUsed, t)
 	}
 
+	sortedGrammarLabels := make([]GrammarLabel, 0, len(rules))
+	for label := range rules {
+		sortedGrammarLabels = append(sortedGrammarLabels, label)
+	}
+	sort.Slice(sortedGrammarLabels, func(i, j int) bool {
+		return sortedGrammarLabels[i] < sortedGrammarLabels[j]
+	})
+
 	coreCFG, ruleNameToNodeKey, ruleNameToRecovery := SyntaxaTreeToContextaGrammar(root, additionalRules, rules)
 	patternAnalysis := pattern.ComputeAnalysis(coreCFG)
 	analysis := grammarAnalysisFromPattern(patternAnalysis, ruleNameToNodeKey)
@@ -196,6 +213,7 @@ func ProducePackage[
 		Version:             version,
 		EntryRule:           root.GrammarLabel,
 		Grammars:            rules,
+		SortedGrammarLabels: sortedGrammarLabels,
 		CoreCFG:             coreCFG,
 		TokensUsed:          tokensUsed,
 		Nests:               nests,
@@ -387,16 +405,16 @@ func collectAll[TToken, TNodeKind comparable](
 		nodesByGrammarLabel[g.GrammarLabel] = append(nodesByGrammarLabel[g.GrammarLabel], g)
 	}
 
-	// 2. Semantic Registration (Rules & Nests)
-	// We only add to the 'Rules' map or 'Nests' slice if we haven't seen this LABEL before.
 	_, labelSeen := visitedLabels[g.GrammarLabel]
 
-	if g.IsContextBoundary && !labelSeen {
-		if existing, seen := rules[g.GrammarLabel]; seen && existing != g {
-			duplicateContextBoundaryLabels[g.GrammarLabel] = struct{}{}
+	if g.IsContextBoundary {
+		if existing, seen := rules[g.GrammarLabel]; seen {
+			if existing != g {
+				duplicateContextBoundaryLabels[g.GrammarLabel] = struct{}{}
+			}
+		} else {
+			rules[g.GrammarLabel] = g
 		}
-		rules[g.GrammarLabel] = g
-		// Note: We don't mark visitedLabels here yet because GNest logic below needs to see it too
 	}
 
 	switch g.Kind {
@@ -414,7 +432,6 @@ func collectAll[TToken, TNodeKind comparable](
 				OwnerRule: g.GrammarLabel,
 				Node:      g,
 			})
-			visitedLabels[g.GrammarLabel] = struct{}{}
 		}
 	}
 
