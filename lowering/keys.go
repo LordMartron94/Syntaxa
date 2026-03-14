@@ -1,138 +1,196 @@
 package lowering
 
 import (
-	"fmt"
+	"foundation/hash"
 	"sort"
-	"strings"
 	"syntaxa"
+	"unsafe"
 )
 
 func lookaheadKey[TToken, TNodeKind comparable](
 	terms []gTerminal[TToken, TNodeKind],
-	tokenFmt func(TToken) string,
-) string {
-	keys := make([]string, len(terms))
-	for i, t := range terms {
-		keys[i] = terminalKey(t, tokenFmt)
+	tokenHash func(TToken) uint64,
+	hasher *hash.XXH3Hasher,
+) uint64 {
+	if len(terms) == 0 {
+		return 0
 	}
-	sort.Strings(keys)
-	return strings.Join(keys, "|")
+
+	keys := make([]uint64, len(terms))
+	for i, t := range terms {
+		keys[i] = terminalKey(t, tokenHash, hasher)
+	}
+
+	sort.Slice(keys, func(i, j int) bool {
+		return keys[i] < keys[j]
+	})
+
+	byteLen := len(keys) * 8
+	byteData := unsafe.Slice((*byte)(unsafe.Pointer(&keys[0])), byteLen)
+
+	return hash.XXH3HasherHash64(hasher, byteData)
 }
 
 func terminalKey[TToken, TNodeKind comparable](
 	t gTerminal[TToken, TNodeKind],
-	tokenFmt func(TToken) string,
-) string {
-	var sb strings.Builder
-	sb.WriteString(tokenFmt(t.token))
-	if t.nestNode != nil {
-		sb.WriteString(":NEST(")
-		sb.WriteString(string(t.nestNode.GrammarLabel))
-		sb.WriteString(")")
-	}
-	sb.WriteString(":(")
-	sb.WriteString(grammarNodesKey(t.remaining, tokenFmt))
-	sb.WriteString(")")
+	tokenHash func(TToken) uint64,
+	hasher *hash.XXH3Hasher,
+) uint64 {
+	var buf [128]uint64
+	b := buf[:0]
 
-	seenLabels := make(map[syntaxa.GrammarLabel]bool)
-	seenReps := make(map[*syntaxa.Grammar[TToken, TNodeKind]]bool)
+	b = append(b, tokenHash(t.token))
+	b = appendNestMarker(b, t.nestNode, hasher)
+	b = appendRemaining(b, t.remaining, tokenHash, hasher)
+	b = appendStackData(b, t.stack, tokenHash, hasher)
+	b = append(b, uint64(t.popOffset))
 
-	for _, e := range t.stack {
-		if e.isRepetition {
-			if seenReps[e.repeatNode] {
-				break
-			}
-			seenReps[e.repeatNode] = true
-			sb.WriteString(":R[")
-			sb.WriteString(grammarNodesKey(e.remaining, tokenFmt))
-			sb.WriteString("]")
-		} else {
-			if e.label != "" && seenLabels[e.label] {
-				break
-			}
-			if e.label != "" {
-				seenLabels[e.label] = true
-			}
-			sb.WriteString(":V(")
-			sb.WriteString(string(e.label))
-			sb.WriteString(",")
-			sb.WriteString(grammarNodesKey(e.remaining, tokenFmt))
-			sb.WriteString(")")
-		}
-	}
-	if t.popOffset > 0 {
-		fmt.Fprintf(&sb, ":PO%d", t.popOffset)
-	}
-	return sb.String()
+	byteLen := len(b) * 8
+	byteData := unsafe.Slice((*byte)(unsafe.Pointer(&b[0])), byteLen)
+
+	return hash.XXH3HasherHash64(hasher, byteData)
 }
 
-func grammarNodesKey[TToken, TNodeKind comparable](
-	nodes []*syntaxa.Grammar[TToken, TNodeKind],
-	tokenFmt func(TToken) string,
-) string {
-	parts := make([]string, len(nodes))
-	for i, n := range nodes {
-		parts[i] = grammarNodeKey(n, tokenFmt)
+func appendNestMarker[TToken, TNodeKind comparable](
+	b []uint64,
+	nestNode *syntaxa.Grammar[TToken, TNodeKind],
+	hasher *hash.XXH3Hasher,
+) []uint64 {
+	if nestNode == nil {
+		return append(b, 0)
 	}
-	return strings.Join(parts, ",")
+	b = append(b, 1)
+	return append(b, strHash(string(nestNode.GrammarLabel), hasher))
+}
+
+func appendRemaining[TToken, TNodeKind comparable](
+	b []uint64,
+	remaining []*syntaxa.Grammar[TToken, TNodeKind],
+	tokenHash func(TToken) uint64,
+	hasher *hash.XXH3Hasher,
+) []uint64 {
+	b = append(b, uint64(len(remaining)))
+	for _, n := range remaining {
+		b = append(b, grammarNodeKey(n, tokenHash, hasher))
+	}
+	return b
+}
+
+func appendStackData[TToken, TNodeKind comparable](
+	b []uint64,
+	stack []gStackEntry[TToken, TNodeKind],
+	tokenHash func(TToken) uint64,
+	hasher *hash.XXH3Hasher,
+) []uint64 {
+	var seenLabels [16]syntaxa.GrammarLabel
+	var seenReps [16]*syntaxa.Grammar[TToken, TNodeKind]
+	labelsCount, repsCount := 0, 0
+
+	b = append(b, uint64(len(stack)))
+	for _, e := range stack {
+		var stop bool
+		b, labelsCount, repsCount, stop = processStackEntry(
+			b, e, seenLabels[:], labelsCount, seenReps[:], repsCount, tokenHash, hasher,
+		)
+		if stop {
+			break
+		}
+	}
+	return b
+}
+
+func processStackEntry[TToken, TNodeKind comparable](
+	b []uint64,
+	e gStackEntry[TToken, TNodeKind],
+	seenLabels []syntaxa.GrammarLabel, labelsCount int,
+	seenReps []*syntaxa.Grammar[TToken, TNodeKind], repsCount int,
+	tokenHash func(TToken) uint64,
+	hasher *hash.XXH3Hasher,
+) ([]uint64, int, int, bool) {
+	if e.isRepetition {
+		if containsRep(seenReps[:repsCount], e.repeatNode) {
+			return b, labelsCount, repsCount, true
+		}
+		repsCount = trackRep(seenReps, repsCount, e.repeatNode)
+		b = append(b, 2)
+		b = appendRemaining(b, e.remaining, tokenHash, hasher)
+
+		return b, labelsCount, repsCount, false
+	}
+
+	if e.label != "" && containsLabel(seenLabels[:labelsCount], e.label) {
+		return b, labelsCount, repsCount, true
+	}
+	labelsCount = trackLabel(seenLabels, labelsCount, e.label)
+	b = append(b, 3)
+	b = append(b, strHash(string(e.label), hasher))
+	b = appendRemaining(b, e.remaining, tokenHash, hasher)
+
+	return b, labelsCount, repsCount, false
+}
+
+func containsLabel(list []syntaxa.GrammarLabel, label syntaxa.GrammarLabel) bool {
+	for _, l := range list {
+		if l == label {
+			return true
+		}
+	}
+	return false
+}
+
+func trackLabel(seen []syntaxa.GrammarLabel, count int, label syntaxa.GrammarLabel) int {
+	if label != "" && count < len(seen) {
+		seen[count] = label
+		return count + 1
+	}
+	return count
+}
+
+func containsRep[TToken, TNodeKind comparable](
+	list []*syntaxa.Grammar[TToken, TNodeKind],
+	node *syntaxa.Grammar[TToken, TNodeKind],
+) bool {
+	for _, n := range list {
+		if n == node {
+			return true
+		}
+	}
+	return false
+}
+
+func trackRep[TToken, TNodeKind comparable](
+	seen []*syntaxa.Grammar[TToken, TNodeKind],
+	count int,
+	node *syntaxa.Grammar[TToken, TNodeKind],
+) int {
+	if count < len(seen) {
+		seen[count] = node
+		return count + 1
+	}
+	return count
 }
 
 func grammarNodeKey[TToken, TNodeKind comparable](
 	n *syntaxa.Grammar[TToken, TNodeKind],
-	tokenFmt func(TToken) string,
-) string {
+	tokenHash func(TToken) uint64,
+	hasher *hash.XXH3Hasher,
+) uint64 {
 	if n == nil {
-		return "nil"
+		return 0
 	}
 	if n.NodePath != nil {
-		return string(*n.NodePath)
+		return strHash(string(*n.NodePath), hasher)
 	}
 	if n.Kind == syntaxa.GToken {
-		return "ST:" + tokenFmt(n.Token)
+		return tokenHash(n.Token)
 	}
-	return string(n.GrammarLabel)
+	return strHash(string(n.GrammarLabel), hasher)
 }
 
-func owningRule[TToken, TNodeKind comparable](term gTerminal[TToken, TNodeKind]) syntaxa.GrammarLabel {
-	for i := 0; i < len(term.stack); i++ {
-		if !term.stack[i].isRepetition && term.stack[i].label != "" {
-			return term.stack[i].label
-		}
+func strHash(s string, hasher *hash.XXH3Hasher) uint64 {
+	if len(s) == 0 {
+		return 0
 	}
-	for i := 0; i < len(term.stack); i++ {
-		if term.stack[i].isRepetition && term.stack[i].label != "" {
-			return term.stack[i].label
-		}
-	}
-	return "anon"
-}
-
-func outerFrameKind[TToken, TNodeKind comparable](term gTerminal[TToken, TNodeKind]) (zeroOrMore bool, optional bool) {
-	if len(term.stack) == 0 {
-		return false, false
-	}
-	outer := term.stack[len(term.stack)-1]
-	if outer.repeatNode == nil {
-		return false, false
-	}
-	if outer.repeatNode.Kind == syntaxa.GRepeat {
-		return true, false
-	}
-	if outer.repeatNode.Kind == syntaxa.GOptional {
-		return false, true
-	}
-	return false, false
-}
-
-func allOptionalTerminals[TToken, TNodeKind comparable](terminals []gTerminal[TToken, TNodeKind]) bool {
-	if len(terminals) == 0 {
-		return false
-	}
-	for _, t := range terminals {
-		_, isOpt := outerFrameKind(t)
-		if !isOpt {
-			return false
-		}
-	}
-	return true
+	b := unsafe.Slice(unsafe.StringData(s), len(s))
+	return hash.XXH3HasherHash64(hasher, b)
 }

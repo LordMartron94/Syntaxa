@@ -3,6 +3,7 @@ package lowering
 import (
 	"cmp"
 	"fmt"
+	"foundation/hash"
 	"strings"
 	"unicode"
 
@@ -84,7 +85,7 @@ const rootLabel = "root"
 
 type pendingEntry[TToken, TNodeKind comparable] struct {
 	ctxID    string
-	ctxKey   string
+	ctxKey   uint64 // Updated to support binary hashing
 	terms    []gTerminal[TToken, TNodeKind]
 	nameHint syntaxa.GrammarLabel
 }
@@ -92,15 +93,15 @@ type pendingEntry[TToken, TNodeKind comparable] struct {
 /*
 BuildStateGraph builds a generic StateGraph from a GrammarPackage.
 
-tokenFormatter is used for deterministic context keys. Transition order is discovery
-order; PopAmount reflects grammar stack frames exited. The editor layer (e.g.
-langspec/editor) applies priority sort, nest split, and fallthrough.
+tokenHash and hasher are used for high-performance, zero-allocation context keys.
+Transition order is discovery order; PopAmount reflects grammar stack frames exited.
+The editor layer (e.g. langspec/editor) applies priority sort, nest split, and fallthrough.
 
 Prerequisites:
-- pkg must be non-nil with a valid entry rule; tokenFormatter must be non-nil.
+- pkg must be non-nil with a valid entry rule; tokenHash and hasher must be non-nil.
 
 Edge cases:
-- Returns an error if the entry rule is missing or tokenFormatter is nil.
+- Returns an error if the entry rule is missing or hashing components are nil.
 */
 func BuildStateGraph[
 	TObservation cmp.Ordered,
@@ -110,10 +111,11 @@ func BuildStateGraph[
 	TLexerState comparable,
 ](
 	pkg *syntaxa.GrammarPackage[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
-	tokenFormatter func(TToken) string,
+	tokenHash func(TToken) uint64,
+	hasher *hash.XXH3Hasher,
 ) (*StateGraph[TToken, TNodeKind], error) {
-	if pkg == nil || tokenFormatter == nil {
-		return nil, fmt.Errorf("BuildStateGraph: nil package or tokenFormatter")
+	if pkg == nil || tokenHash == nil || hasher == nil {
+		return nil, fmt.Errorf("BuildStateGraph: nil package, tokenHash, or hasher")
 	}
 	entryLabel := pkg.EntryRule
 	rules := pkg.Grammars
@@ -122,14 +124,14 @@ func BuildStateGraph[
 		return nil, fmt.Errorf("BuildStateGraph: entry rule %q not found", entryLabel)
 	}
 
-	ctxByKey := make(map[string]*Context)
+	ctxByKey := make(map[uint64]*Context)
 	transitionsByID := make(map[string][]Transition[TToken, TNodeKind])
 	metaByID := make(map[string]ContextMeta)
 	nestBodyIDs := make(map[syntaxa.GrammarLabel]string)
 	counters := make(map[string]int)
 
 	entryTerminals, _ := lookahead[TToken, TNodeKind](entryRule, rules, make(visiting))
-	rootKey := lookaheadKey(entryTerminals, tokenFormatter)
+	rootKey := lookaheadKey(entryTerminals, tokenHash, hasher)
 	rootCtx := &Context{ID: rootLabel, Label: rootLabel}
 	ctxByKey[rootKey] = rootCtx
 	if allOptionalTerminals(entryTerminals) {
@@ -147,7 +149,8 @@ func BuildStateGraph[
 				term,
 				p.nameHint,
 				rules,
-				tokenFormatter,
+				tokenHash,
+				hasher,
 				ctxByKey,
 				transitionsByID,
 				metaByID,
@@ -170,7 +173,10 @@ func BuildStateGraph[
 		}
 	}
 	for id := range nestBodyIDs {
-		if c := ctxByKey["NEST_BODY:"+string(id)]; c != nil {
+		// Re-create the deterministic nest key to ensure it isn't skipped
+		nestKeyBytes := []byte("NEST_BODY:" + string(id))
+		nestKey := hash.XXH3HasherHash64(hasher, nestKeyBytes)
+		if c := ctxByKey[nestKey]; c != nil {
 			if _, ok := seen[c.ID]; !ok {
 				seen[c.ID] = struct{}{}
 				contexts = append(contexts, *c)
@@ -191,8 +197,9 @@ func buildTransition[TToken, TNodeKind comparable](
 	term gTerminal[TToken, TNodeKind],
 	nameHint syntaxa.GrammarLabel,
 	rules map[syntaxa.GrammarLabel]*syntaxa.Grammar[TToken, TNodeKind],
-	tokenFormatter func(TToken) string,
-	ctxByKey map[string]*Context,
+	tokenHash func(TToken) uint64,
+	hasher *hash.XXH3Hasher,
+	ctxByKey map[uint64]*Context,
 	transitionsByID map[string][]Transition[TToken, TNodeKind],
 	metaByID map[string]ContextMeta,
 	nestBodyIDs map[syntaxa.GrammarLabel]string,
@@ -202,23 +209,24 @@ func buildTransition[TToken, TNodeKind comparable](
 	isZeroOrMore, _ := outerFrameKind(term)
 
 	if term.nestNode != nil {
-		return buildNestTransition(term, isZeroOrMore, rules, tokenFormatter, ctxByKey, transitionsByID, metaByID, nestBodyIDs, counters, queue)
+		return buildNestTransition(term, isZeroOrMore, rules, tokenHash, hasher, ctxByKey, transitionsByID, metaByID, nestBodyIDs, counters, queue)
 	}
 
-	return buildStandardTransition(term, nameHint, isZeroOrMore, rules, tokenFormatter, ctxByKey, metaByID, counters, queue)
+	return buildStandardTransition(term, nameHint, isZeroOrMore, rules, tokenHash, hasher, ctxByKey, metaByID, counters, queue)
 }
 
 func getOrCreateContext[TToken, TNodeKind comparable](
 	terms []gTerminal[TToken, TNodeKind],
 	ownerLabel syntaxa.GrammarLabel,
 	nameHint syntaxa.GrammarLabel,
-	tokenFormatter func(TToken) string,
-	ctxByKey map[string]*Context,
+	tokenHash func(TToken) uint64,
+	hasher *hash.XXH3Hasher,
+	ctxByKey map[uint64]*Context,
 	metaByID map[string]ContextMeta,
 	counters map[string]int,
 	queue *[]pendingEntry[TToken, TNodeKind],
 ) *Context {
-	key := lookaheadKey(terms, tokenFormatter)
+	key := lookaheadKey(terms, tokenHash, hasher)
 	if c, ok := ctxByKey[key]; ok {
 		return c
 	}
@@ -270,14 +278,17 @@ func sanitizeForLabel(s string) string {
 func getOrCreateNestBody[TToken, TNodeKind comparable](
 	nestNode *syntaxa.Grammar[TToken, TNodeKind],
 	rules map[syntaxa.GrammarLabel]*syntaxa.Grammar[TToken, TNodeKind],
-	tokenFormatter func(TToken) string,
-	ctxByKey map[string]*Context,
+	tokenHash func(TToken) uint64,
+	hasher *hash.XXH3Hasher,
+	ctxByKey map[uint64]*Context,
 	metaByID map[string]ContextMeta,
 	counters map[string]int,
 	queue *[]pendingEntry[TToken, TNodeKind],
 	nestBodyIDs map[syntaxa.GrammarLabel]string,
 ) *Context {
-	nestKey := "NEST_BODY:" + string(nestNode.GrammarLabel)
+	nestKeyBytes := []byte("NEST_BODY:" + string(nestNode.GrammarLabel))
+	nestKey := hash.XXH3HasherHash64(hasher, nestKeyBytes)
+
 	if c, ok := ctxByKey[nestKey]; ok {
 		return c
 	}
@@ -306,15 +317,16 @@ func buildNestTransition[TToken, TNodeKind comparable](
 	term gTerminal[TToken, TNodeKind],
 	isZeroOrMore bool,
 	rules map[syntaxa.GrammarLabel]*syntaxa.Grammar[TToken, TNodeKind],
-	tokenFormatter func(TToken) string,
-	ctxByKey map[string]*Context,
+	tokenHash func(TToken) uint64,
+	hasher *hash.XXH3Hasher,
+	ctxByKey map[uint64]*Context,
 	transitionsByID map[string][]Transition[TToken, TNodeKind],
 	metaByID map[string]ContextMeta,
 	nestBodyIDs map[syntaxa.GrammarLabel]string,
 	counters map[string]int,
 	queue *[]pendingEntry[TToken, TNodeKind],
 ) Transition[TToken, TNodeKind] {
-	bodyCtx := getOrCreateNestBody(term.nestNode, rules, tokenFormatter, ctxByKey, metaByID, counters, queue, nestBodyIDs)
+	bodyCtx := getOrCreateNestBody(term.nestNode, rules, tokenHash, hasher, ctxByKey, metaByID, counters, queue, nestBodyIDs)
 	ownerLabel := owningRule(term)
 	nestHint := term.nestNode.GrammarLabel
 	noNest := gTerminal[TToken, TNodeKind]{token: term.token, nodeKind: term.nodeKind, remaining: term.remaining, stack: term.stack, popOffset: term.popOffset}
@@ -338,7 +350,7 @@ func buildNestTransition[TToken, TNodeKind comparable](
 		}
 	}
 
-	afterCtx := getOrCreateContext(advTerminals, ownerLabel, nestHint, tokenFormatter, ctxByKey, metaByID, counters, queue)
+	afterCtx := getOrCreateContext(advTerminals, ownerLabel, nestHint, tokenHash, hasher, ctxByKey, metaByID, counters, queue)
 
 	meta := metaByID[afterCtx.ID]
 	meta.HasOptionalContinuation = true
@@ -360,8 +372,9 @@ func buildStandardTransition[TToken, TNodeKind comparable](
 	nameHint syntaxa.GrammarLabel,
 	isZeroOrMore bool,
 	rules map[syntaxa.GrammarLabel]*syntaxa.Grammar[TToken, TNodeKind],
-	tokenFormatter func(TToken) string,
-	ctxByKey map[string]*Context,
+	tokenHash func(TToken) uint64,
+	hasher *hash.XXH3Hasher,
+	ctxByKey map[uint64]*Context,
 	metaByID map[string]ContextMeta,
 	counters map[string]int,
 	queue *[]pendingEntry[TToken, TNodeKind],
@@ -387,7 +400,7 @@ func buildStandardTransition[TToken, TNodeKind comparable](
 		if advTerminals == nil {
 			return Transition[TToken, TNodeKind]{Token: term.token, NodeKind: term.nodeKind, Operation: OpMatch}
 		}
-		next := getOrCreateContext(advTerminals, ownerLabel, nameHint, tokenFormatter, ctxByKey, metaByID, counters, queue)
+		next := getOrCreateContext(advTerminals, ownerLabel, nameHint, tokenHash, hasher, ctxByKey, metaByID, counters, queue)
 		return Transition[TToken, TNodeKind]{
 			Token:            term.token,
 			NodeKind:         term.nodeKind,
@@ -405,7 +418,7 @@ func buildStandardTransition[TToken, TNodeKind comparable](
 		}
 	}
 
-	next := getOrCreateContext(advTerminals, ownerLabel, nameHint, tokenFormatter, ctxByKey, metaByID, counters, queue)
+	next := getOrCreateContext(advTerminals, ownerLabel, nameHint, tokenHash, hasher, ctxByKey, metaByID, counters, queue)
 	return Transition[TToken, TNodeKind]{
 		Token:            term.token,
 		NodeKind:         term.nodeKind,
@@ -418,4 +431,52 @@ func propagatePopOffset[TToken, TNodeKind comparable](terminals []gTerminal[TTok
 	for i := range terminals {
 		terminals[i].popOffset = offset
 	}
+}
+
+func owningRule[TToken, TNodeKind comparable](term gTerminal[TToken, TNodeKind]) syntaxa.GrammarLabel {
+	// Priority 1: Named non-repetition references (Direct rule calls)
+	for i := 0; i < len(term.stack); i++ {
+		if !term.stack[i].isRepetition && term.stack[i].label != "" {
+			return term.stack[i].label
+		}
+	}
+	// Priority 2: Named repetitions
+	for i := 0; i < len(term.stack); i++ {
+		if term.stack[i].isRepetition && term.stack[i].label != "" {
+			return term.stack[i].label
+		}
+	}
+	return "anon"
+}
+
+func outerFrameKind[TToken, TNodeKind comparable](term gTerminal[TToken, TNodeKind]) (zeroOrMore bool, optional bool) {
+	if len(term.stack) == 0 {
+		return false, false
+	}
+	outer := term.stack[len(term.stack)-1]
+	if outer.repeatNode == nil {
+		return false, false
+	}
+
+	switch outer.repeatNode.Kind {
+	case syntaxa.GRepeat:
+		return true, false
+	case syntaxa.GOptional:
+		return false, true
+	default:
+		return false, false
+	}
+}
+
+func allOptionalTerminals[TToken, TNodeKind comparable](terminals []gTerminal[TToken, TNodeKind]) bool {
+	if len(terminals) == 0 {
+		return false
+	}
+	for _, t := range terminals {
+		_, isOpt := outerFrameKind(t)
+		if !isOpt {
+			return false
+		}
+	}
+	return true
 }
