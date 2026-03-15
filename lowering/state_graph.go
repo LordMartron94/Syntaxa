@@ -16,6 +16,20 @@ StackOp is the kind of stack operation for a transition in the generic state gra
 Match consumes a token with no stack change. Push, Pop, and Set are standard stack
 operations. PopAmount for OpPop is the number of grammar stack frames exited; the
 editor backend may add +1 when it injects wrapper states.
+
+OpRecoverPop and OpRecoverNoConsume are recovery-only operations emitted for every
+state that has active recovery tokens (i.e. the union of RecoveryTokens and
+NoConsumeOnRecoveryTokens from all grammar rules in the terminal stack for that
+state). They mirror the behaviour of performRecovery in the parser:
+
+  - OpRecoverPop: the token is a sync point and should be consumed; the consumer
+    should pop the appropriate number of frames and resume normal parsing.
+  - OpRecoverNoConsume: the token is a sync point but must NOT be consumed; the
+    consumer should pop frame(s) and leave the token in the stream so an ancestor
+    context can process it via its own normal transitions.
+
+For both recovery operations PopAmount is 0, indicating that the consumer is
+responsible for determining the correct pop depth from its own runtime stack.
 */
 type StackOp uint8
 
@@ -24,6 +38,8 @@ const (
 	OpPush
 	OpPop
 	OpSet
+	OpRecoverPop       // recovery sync token: consume and pop frame(s)
+	OpRecoverNoConsume // recovery sync token: do NOT consume, pop frame(s)
 )
 
 /*
@@ -57,6 +73,10 @@ On Token (with optional semantic NodeKind for highlighting scope), apply Operati
 and move to TargetContextIDs. PopAmount is used when Operation is OpPop and holds
 the number of grammar stack frames exited. NodeKind identifies what is being matched
 for editor backends (e.g. syntax highlighting scope).
+
+Recovery transitions (OpRecoverPop, OpRecoverNoConsume) are added for every token
+in the union of all active grammar rule recovery sets at that state. These transitions
+have PopAmount = 0; the consumer determines the correct pop depth at runtime.
 */
 type Transition[TToken, TNodeKind comparable] struct {
 	Token            TToken
@@ -73,6 +93,12 @@ Contexts are nodes; Transitions are keyed by context ID. RootContextID is the en
 state. NestBodyContextIDs maps nest grammar labels to the context ID for that nest's
 body. Transition order per state is discovery order; the editor backend sorts by
 lexer priority.
+
+Every state that has active recovery tokens (from the grammar rules in the terminal
+stack for that state) will also contain OpRecoverPop and/or OpRecoverNoConsume
+transitions in its Transitions entry. These recovery transitions carry the union of
+all recovery sets from all enclosing grammar frames, exactly mirroring the
+currentRecoveryAllFrames() computation performed by the parser at runtime.
 */
 type StateGraph[TToken, TNodeKind comparable] struct {
 	Contexts           []Context
@@ -97,6 +123,11 @@ BuildStateGraph builds a generic StateGraph from a GrammarPackage.
 tokenHash and hasher are used for high-performance, zero-allocation context keys.
 Transition order is discovery order; PopAmount reflects grammar stack frames exited.
 The editor layer (e.g. langspec/editor) applies priority sort, nest split, and fallthrough.
+
+Every state whose terminal stack references grammar rules with recovery tokens will
+have OpRecoverPop (consume) and/or OpRecoverNoConsume transitions appended. These
+mirror the parser's currentRecoveryAllFrames() recovery set for that state, so
+consumers can implement identical recovery behaviour without access to the parser.
 
 Prerequisites:
 - pkg must be non-nil with a valid entry rule; tokenHash and hasher must be non-nil.
@@ -153,6 +184,8 @@ func BuildStateGraph[
 				transitionsByID[p.ctxID] = append(transitionsByID[p.ctxID], tr)
 			}
 		}
+
+		addRecoveryTransitions(p.terms, rules, p.ctxID, transitionsByID)
 	}
 
 	contexts := make([]Context, 0, len(ctxByKey))
@@ -468,4 +501,77 @@ func allOptionalTerminals[TToken, TNodeKind comparable](terminals []gTerminal[TT
 		}
 	}
 	return true
+}
+
+/*
+addRecoveryTransitions appends OpRecoverPop and OpRecoverNoConsume transitions to the
+given context for every token in the union of all recovery sets from the grammar rules
+referenced in the terminal stacks.
+
+This mirrors the parser's currentRecoveryAllFrames() semantics: every grammar rule
+that is "active" at this state (i.e. appears anywhere in the terminal stack) contributes
+its RecoveryTokens and NoConsumeOnRecoveryTokens to the recovery set for that state.
+
+NoConsumeOnRecoveryTokens takes precedence over RecoveryTokens for the same token
+(matching the parser's ruleHasNoConsumeToken check). Tokens that appear in neither
+set are not emitted. All recovery transitions have PopAmount = 0; consumers determine
+the correct pop depth from their own runtime stack.
+*/
+func addRecoveryTransitions[TToken, TNodeKind comparable](
+	terms []gTerminal[TToken, TNodeKind],
+	rules map[syntaxa.GrammarLabel]*syntaxa.Grammar[TToken, TNodeKind],
+	ctxID string,
+	transitionsByID map[string][]Transition[TToken, TNodeKind],
+) {
+	// Collect labels present in terminal stacks to avoid redundant rule lookups.
+	seenLabels := make(map[syntaxa.GrammarLabel]struct{}, len(terms))
+	for _, term := range terms {
+		for _, entry := range term.stack {
+			if entry.label != "" {
+				seenLabels[entry.label] = struct{}{}
+			}
+		}
+	}
+	if len(seenLabels) == 0 {
+		return
+	}
+
+	consumeSet := make(map[TToken]struct{}, 4)
+	noConsumeSet := make(map[TToken]struct{}, 4)
+
+	for label := range seenLabels {
+		rule := rules[label]
+		if rule == nil {
+			continue
+		}
+		for _, t := range rule.RecoveryTokens {
+			consumeSet[t] = struct{}{}
+		}
+		for _, t := range rule.NoConsumeOnRecoveryTokens {
+			noConsumeSet[t] = struct{}{}
+		}
+	}
+
+	if len(consumeSet) == 0 && len(noConsumeSet) == 0 {
+		return
+	}
+
+	// NoConsume takes precedence: remove tokens that are in the no-consume set from
+	// the consume set (matching the parser's ruleHasNoConsumeToken precedence).
+	for t := range noConsumeSet {
+		delete(consumeSet, t)
+	}
+
+	for t := range consumeSet {
+		transitionsByID[ctxID] = append(transitionsByID[ctxID], Transition[TToken, TNodeKind]{
+			Token:     t,
+			Operation: OpRecoverPop,
+		})
+	}
+	for t := range noConsumeSet {
+		transitionsByID[ctxID] = append(transitionsByID[ctxID], Transition[TToken, TNodeKind]{
+			Token:     t,
+			Operation: OpRecoverNoConsume,
+		})
+	}
 }
