@@ -5,9 +5,10 @@ import "syntaxa"
 func advanceTerminal[TToken, TNodeKind comparable](
 	term gTerminal[TToken, TNodeKind],
 	rules map[syntaxa.GrammarLabel]*syntaxa.Grammar[TToken, TNodeKind],
-) []gTerminal[TToken, TNodeKind] {
+) ([]gTerminal[TToken, TNodeKind], bool) {
 	levels := len(term.stack) + 1
 	var result []gTerminal[TToken, TNodeKind]
+	isNullable := true
 
 	for i := 0; i < levels; i++ {
 		remaining, isRep, repNode := extractFrameDetails(term, i)
@@ -20,14 +21,15 @@ func advanceTerminal[TToken, TNodeKind comparable](
 		result = appendLookaheadWithStack(la, term.stack[i:], result)
 
 		if !nullable {
+			isNullable = false
 			break
 		}
 	}
 
 	if len(result) == 0 {
-		return nil
+		return nil, true
 	}
-	return result
+	return result, isNullable
 }
 
 func extractFrameDetails[TToken, TNodeKind comparable](

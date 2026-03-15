@@ -85,7 +85,6 @@ type PrattConfig[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNod
 	InfixOps       []PrattInfixOp[TToken, TNodeKind]
 	InfixRuleOps   []PrattInfixRuleOp[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 	ImplicitInfix  *PrattImplicitInfix[TToken, TNodeKind]
-	RecoveryTokens []TToken
 }
 
 // ------------------------------------------------------------- INTERNAL STATE
@@ -185,16 +184,11 @@ func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 		return p.runPrattExpression(ctx, maps, 0)
 	}
 
-	recovery := config.RecoveryTokens
-	if recovery == nil {
-		recovery = []TToken{}
-	}
-
 	return p.sharedCore.constructRule(
 		identity,
 		p.sharedCore.createContract(true, true),
 		exec,
-		recovery,
+		nil,
 		nil,
 		grammar,
 	)
