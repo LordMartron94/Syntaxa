@@ -77,13 +77,22 @@ for editor backends (e.g. syntax highlighting scope).
 Recovery transitions (OpRecoverPop, OpRecoverNoConsume) are added for every token
 in the union of all active grammar rule recovery sets at that state. These transitions
 have PopAmount = 0; the consumer determines the correct pop depth at runtime.
+
+IsRecoveryTransition is true when the transition is a sync-point recovery edge
+(Operation is OpRecoverPop or OpRecoverNoConsume). The Token is a valid sync
+token with its normal semantic scope carried by NodeKind; it is NOT an error.
+Consumers must use NodeKind for syntax-highlighting and must NOT apply an error
+scope to these transitions. The invalid.illegal.unexpected-token scope should
+instead be applied to a synthesised catch-all rule for input that matches none
+of the normal or recovery transitions.
 */
 type Transition[TToken, TNodeKind comparable] struct {
-	Token            TToken
-	NodeKind         *TNodeKind
-	Operation        StackOp
-	TargetContextIDs []string
-	PopAmount        int
+	Token                TToken
+	NodeKind             *TNodeKind
+	Operation            StackOp
+	TargetContextIDs     []string
+	PopAmount            int
+	IsRecoveryTransition bool
 }
 
 /*
@@ -564,14 +573,16 @@ func addRecoveryTransitions[TToken, TNodeKind comparable](
 
 	for t := range consumeSet {
 		transitionsByID[ctxID] = append(transitionsByID[ctxID], Transition[TToken, TNodeKind]{
-			Token:     t,
-			Operation: OpRecoverPop,
+			Token:                t,
+			Operation:            OpRecoverPop,
+			IsRecoveryTransition: true,
 		})
 	}
 	for t := range noConsumeSet {
 		transitionsByID[ctxID] = append(transitionsByID[ctxID], Transition[TToken, TNodeKind]{
-			Token:     t,
-			Operation: OpRecoverNoConsume,
+			Token:                t,
+			Operation:            OpRecoverNoConsume,
+			IsRecoveryTransition: true,
 		})
 	}
 }
