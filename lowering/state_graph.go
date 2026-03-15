@@ -120,10 +120,11 @@ type StateGraph[TToken, TNodeKind comparable] struct {
 const rootLabel = "root"
 
 type pendingEntry[TToken, TNodeKind comparable] struct {
-	ctxID    string
-	ctxKey   uint64 // Updated to support binary hashing
-	terms    []gTerminal[TToken, TNodeKind]
-	nameHint syntaxa.GrammarLabel
+	ctxID          string
+	ctxKey         uint64
+	terms          []gTerminal[TToken, TNodeKind]
+	nameHint       syntaxa.GrammarLabel
+	inheritedSyncs []TToken
 }
 
 /*
@@ -178,7 +179,9 @@ func BuildStateGraph[
 		metaByID[rootLabel] = ContextMeta{HasOptionalContinuation: true}
 	}
 
-	queue := []pendingEntry[TToken, TNodeKind]{{rootLabel, rootKey, entryTerminals, entryLabel}}
+	queue := []pendingEntry[TToken, TNodeKind]{{
+		ctxID: rootLabel, ctxKey: rootKey, terms: entryTerminals, nameHint: entryLabel, inheritedSyncs: nil,
+	}}
 
 	for len(queue) > 0 {
 		p := queue[0]
@@ -187,14 +190,14 @@ func BuildStateGraph[
 		for _, term := range p.terms {
 			tr := buildTransition(
 				term, p.nameHint, rules, tokenHash, hasher,
-				ctxByKey, transitionsByID, metaByID, nestBodyIDs, &queue,
+				ctxByKey, transitionsByID, metaByID, nestBodyIDs, &queue, p.inheritedSyncs,
 			)
 			if tr.TargetContextIDs != nil || tr.Operation == OpPop || tr.Operation == OpMatch {
 				transitionsByID[p.ctxID] = append(transitionsByID[p.ctxID], tr)
 			}
 		}
 
-		addRecoveryTransitions(p.terms, rules, p.ctxID, transitionsByID)
+		addRecoveryTransitions(p.terms, rules, p.ctxID, transitionsByID, p.inheritedSyncs)
 	}
 
 	contexts := make([]Context, 0, len(ctxByKey))
@@ -226,14 +229,15 @@ func buildTransition[TToken, TNodeKind comparable](
 	metaByID map[string]ContextMeta,
 	nestBodyIDs map[syntaxa.GrammarLabel]string,
 	queue *[]pendingEntry[TToken, TNodeKind],
+	inheritedSyncs []TToken,
 ) Transition[TToken, TNodeKind] {
 	isZeroOrMore, _ := outerFrameKind(term)
 
 	if term.nestNode != nil {
-		return buildNestTransition(term, isZeroOrMore, rules, tokenHash, hasher, ctxByKey, transitionsByID, metaByID, nestBodyIDs, queue)
+		return buildNestTransition(term, isZeroOrMore, rules, tokenHash, hasher, ctxByKey, transitionsByID, metaByID, nestBodyIDs, queue, inheritedSyncs)
 	}
 
-	return buildStandardTransition(term, nameHint, isZeroOrMore, rules, tokenHash, hasher, ctxByKey, metaByID, queue)
+	return buildStandardTransition(term, nameHint, isZeroOrMore, rules, tokenHash, hasher, ctxByKey, metaByID, queue, inheritedSyncs)
 }
 
 func getOrCreateContext[TToken, TNodeKind comparable](
@@ -245,6 +249,7 @@ func getOrCreateContext[TToken, TNodeKind comparable](
 	ctxByKey map[uint64]*Context,
 	metaByID map[string]ContextMeta,
 	queue *[]pendingEntry[TToken, TNodeKind],
+	inheritedSyncs []TToken,
 ) *Context {
 	key := lookaheadKey(terms, tokenHash, hasher)
 	if c, ok := ctxByKey[key]; ok {
@@ -276,7 +281,9 @@ func getOrCreateContext[TToken, TNodeKind comparable](
 		}
 	}
 
-	*queue = append(*queue, pendingEntry[TToken, TNodeKind]{ctxID: name, ctxKey: key, terms: terms, nameHint: effectiveLabel})
+	*queue = append(*queue, pendingEntry[TToken, TNodeKind]{
+		ctxID: name, ctxKey: key, terms: terms, nameHint: effectiveLabel, inheritedSyncs: inheritedSyncs,
+	})
 	return c
 }
 
@@ -303,6 +310,7 @@ func getOrCreateNestBody[TToken, TNodeKind comparable](
 	metaByID map[string]ContextMeta,
 	queue *[]pendingEntry[TToken, TNodeKind],
 	nestBodyIDs map[syntaxa.GrammarLabel]string,
+	inheritedSyncs []TToken,
 ) *Context {
 	nestKeyBytes := []byte("NEST_BODY:" + string(nestNode.GrammarLabel))
 	nestKey := hash.XXH3HasherHash64(hasher, nestKeyBytes)
@@ -335,12 +343,18 @@ func getOrCreateNestBody[TToken, TNodeKind comparable](
 
 	propagatePopOffset(bodyTerminals, 1)
 
+	newSyncs := append([]TToken(nil), inheritedSyncs...)
+	if nestNode.CloseToken != nil {
+		newSyncs = append(newSyncs, *nestNode.CloseToken)
+	}
+
 	if len(bodyTerminals) > 0 {
 		*queue = append(*queue, pendingEntry[TToken, TNodeKind]{
-			ctxID:    contentName,
-			ctxKey:   contentKey,
-			terms:    bodyTerminals,
-			nameHint: nestNode.GrammarLabel,
+			ctxID:          contentName,
+			ctxKey:         contentKey,
+			terms:          bodyTerminals,
+			nameHint:       nestNode.GrammarLabel,
+			inheritedSyncs: newSyncs,
 		})
 	}
 	return c
@@ -357,8 +371,9 @@ func buildNestTransition[TToken, TNodeKind comparable](
 	metaByID map[string]ContextMeta,
 	nestBodyIDs map[syntaxa.GrammarLabel]string,
 	queue *[]pendingEntry[TToken, TNodeKind],
+	inheritedSyncs []TToken,
 ) Transition[TToken, TNodeKind] {
-	bodyCtx := getOrCreateNestBody(term.nestNode, rules, tokenHash, hasher, ctxByKey, metaByID, queue, nestBodyIDs)
+	bodyCtx := getOrCreateNestBody(term.nestNode, rules, tokenHash, hasher, ctxByKey, metaByID, queue, nestBodyIDs, inheritedSyncs)
 	ownerLabel := owningRule(term)
 	nestHint := term.nestNode.GrammarLabel
 	noNest := gTerminal[TToken, TNodeKind]{token: term.token, nodeKind: term.nodeKind, remaining: term.remaining, stack: term.stack, popOffset: term.popOffset}
@@ -382,7 +397,7 @@ func buildNestTransition[TToken, TNodeKind comparable](
 		}
 	}
 
-	afterCtx := getOrCreateContext(advTerminals, ownerLabel, nestHint, tokenHash, hasher, ctxByKey, metaByID, queue)
+	afterCtx := getOrCreateContext(advTerminals, ownerLabel, nestHint, tokenHash, hasher, ctxByKey, metaByID, queue, inheritedSyncs)
 
 	meta := metaByID[afterCtx.ID]
 	meta.HasOptionalContinuation = true
@@ -409,6 +424,7 @@ func buildStandardTransition[TToken, TNodeKind comparable](
 	ctxByKey map[uint64]*Context,
 	metaByID map[string]ContextMeta,
 	queue *[]pendingEntry[TToken, TNodeKind],
+	inheritedSyncs []TToken,
 ) Transition[TToken, TNodeKind] {
 	ownerLabel := owningRule(term)
 
@@ -431,7 +447,7 @@ func buildStandardTransition[TToken, TNodeKind comparable](
 		if advTerminals == nil {
 			return Transition[TToken, TNodeKind]{Token: term.token, NodeKind: term.nodeKind, Operation: OpMatch}
 		}
-		next := getOrCreateContext(advTerminals, ownerLabel, nameHint, tokenHash, hasher, ctxByKey, metaByID, queue)
+		next := getOrCreateContext(advTerminals, ownerLabel, nameHint, tokenHash, hasher, ctxByKey, metaByID, queue, inheritedSyncs)
 		return Transition[TToken, TNodeKind]{
 			Token:            term.token,
 			NodeKind:         term.nodeKind,
@@ -449,7 +465,7 @@ func buildStandardTransition[TToken, TNodeKind comparable](
 		}
 	}
 
-	next := getOrCreateContext(advTerminals, ownerLabel, nameHint, tokenHash, hasher, ctxByKey, metaByID, queue)
+	next := getOrCreateContext(advTerminals, ownerLabel, nameHint, tokenHash, hasher, ctxByKey, metaByID, queue, inheritedSyncs)
 	return Transition[TToken, TNodeKind]{
 		Token:            term.token,
 		NodeKind:         term.nodeKind,
@@ -512,27 +528,13 @@ func allOptionalTerminals[TToken, TNodeKind comparable](terminals []gTerminal[TT
 	return true
 }
 
-/*
-addRecoveryTransitions appends OpRecoverPop and OpRecoverNoConsume transitions to the
-given context for every token in the union of all recovery sets from the grammar rules
-referenced in the terminal stacks.
-
-This mirrors the parser's currentRecoveryAllFrames() semantics: every grammar rule
-that is "active" at this state (i.e. appears anywhere in the terminal stack) contributes
-its RecoveryTokens and NoConsumeOnRecoveryTokens to the recovery set for that state.
-
-NoConsumeOnRecoveryTokens takes precedence over RecoveryTokens for the same token
-(matching the parser's ruleHasNoConsumeToken check). Tokens that appear in neither
-set are not emitted. All recovery transitions have PopAmount = 0; consumers determine
-the correct pop depth from their own runtime stack.
-*/
 func addRecoveryTransitions[TToken, TNodeKind comparable](
 	terms []gTerminal[TToken, TNodeKind],
 	rules map[syntaxa.GrammarLabel]*syntaxa.Grammar[TToken, TNodeKind],
 	ctxID string,
 	transitionsByID map[string][]Transition[TToken, TNodeKind],
+	inheritedSyncs []TToken,
 ) {
-	// Collect labels present in terminal stacks to avoid redundant rule lookups.
 	seenLabels := make(map[syntaxa.GrammarLabel]struct{}, len(terms))
 	for _, term := range terms {
 		for _, entry := range term.stack {
@@ -541,12 +543,14 @@ func addRecoveryTransitions[TToken, TNodeKind comparable](
 			}
 		}
 	}
-	if len(seenLabels) == 0 {
-		return
-	}
 
 	consumeSet := make(map[TToken]struct{}, 4)
-	noConsumeSet := make(map[TToken]struct{}, 4)
+	noConsumeSet := make(map[TToken]struct{}, 4+len(inheritedSyncs))
+
+	// Treat parent boundaries as no-consume tokens so the parent state can execute the pop naturally
+	for _, t := range inheritedSyncs {
+		noConsumeSet[t] = struct{}{}
+	}
 
 	for label := range seenLabels {
 		rule := rules[label]
@@ -565,8 +569,6 @@ func addRecoveryTransitions[TToken, TNodeKind comparable](
 		return
 	}
 
-	// NoConsume takes precedence: remove tokens that are in the no-consume set from
-	// the consume set (matching the parser's ruleHasNoConsumeToken precedence).
 	for t := range noConsumeSet {
 		delete(consumeSet, t)
 	}
