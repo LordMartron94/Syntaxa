@@ -38,8 +38,8 @@ const (
 	OpPush
 	OpPop
 	OpSet
-	OpRecoverPop       // recovery sync token: consume and pop frame(s)
-	OpRecoverNoConsume // recovery sync token: do NOT consume, pop frame(s)
+	OpSyncToken          // recovery sync token: consume and pop frame(s)
+	OpSyncTokenNoConsume // recovery sync token: do NOT consume, pop frame(s)
 )
 
 /*
@@ -170,7 +170,7 @@ func BuildStateGraph[
 	metaByID := make(map[string]ContextMeta)
 	nestBodyIDs := make(map[syntaxa.GrammarLabel]string)
 
-	entryTerminals, _ := lookahead[TToken, TNodeKind](entryRule, rules, make(visiting))
+	entryTerminals, _ := lookahead(entryRule, rules, make(visiting))
 	rootKey := lookaheadKey(entryTerminals, tokenHash, hasher)
 	rootCtx := &Context{ID: rootLabel, Label: rootLabel}
 	ctxByKey[rootKey] = rootCtx
@@ -574,14 +574,14 @@ func addRecoveryTransitions[TToken, TNodeKind comparable](
 	for t := range consumeSet {
 		transitionsByID[ctxID] = append(transitionsByID[ctxID], Transition[TToken, TNodeKind]{
 			Token:                t,
-			Operation:            OpRecoverPop,
+			Operation:            OpSyncToken,
 			IsRecoveryTransition: true,
 		})
 	}
 	for t := range noConsumeSet {
 		transitionsByID[ctxID] = append(transitionsByID[ctxID], Transition[TToken, TNodeKind]{
 			Token:                t,
-			Operation:            OpRecoverNoConsume,
+			Operation:            OpSyncTokenNoConsume,
 			IsRecoveryTransition: true,
 		})
 	}
