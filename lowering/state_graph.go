@@ -197,7 +197,7 @@ func BuildStateGraph[
 			}
 		}
 
-		addRecoveryTransitions(p.terms, rules, p.ctxID, transitionsByID, p.inheritedSyncs)
+		addRecoveryTransitions(p.terms, p.ctxID, transitionsByID, p.inheritedSyncs)
 	}
 
 	contexts := make([]Context, 0, len(ctxByKey))
@@ -530,38 +530,25 @@ func allOptionalTerminals[TToken, TNodeKind comparable](terminals []gTerminal[TT
 
 func addRecoveryTransitions[TToken, TNodeKind comparable](
 	terms []gTerminal[TToken, TNodeKind],
-	rules map[syntaxa.GrammarLabel]*syntaxa.Grammar[TToken, TNodeKind],
 	ctxID string,
 	transitionsByID map[string][]Transition[TToken, TNodeKind],
 	inheritedSyncs []TToken,
 ) {
-	seenLabels := make(map[syntaxa.GrammarLabel]struct{}, len(terms))
-	for _, term := range terms {
-		for _, entry := range term.stack {
-			if entry.label != "" {
-				seenLabels[entry.label] = struct{}{}
-			}
-		}
-	}
-
 	consumeSet := make(map[TToken]struct{}, 4)
 	noConsumeSet := make(map[TToken]struct{}, 4+len(inheritedSyncs))
 
-	// Treat parent boundaries as no-consume tokens so the parent state can execute the pop naturally
 	for _, t := range inheritedSyncs {
 		noConsumeSet[t] = struct{}{}
 	}
 
-	for label := range seenLabels {
-		rule := rules[label]
-		if rule == nil {
-			continue
-		}
-		for _, t := range rule.RecoveryTokens {
-			consumeSet[t] = struct{}{}
-		}
-		for _, t := range rule.NoConsumeOnRecoveryTokens {
-			noConsumeSet[t] = struct{}{}
+	for _, term := range terms {
+		for _, entry := range term.stack {
+			for _, t := range entry.recovery {
+				consumeSet[t] = struct{}{}
+			}
+			for _, t := range entry.noConsume {
+				noConsumeSet[t] = struct{}{}
+			}
 		}
 	}
 

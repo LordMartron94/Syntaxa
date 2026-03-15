@@ -7,6 +7,9 @@ type gStackEntry[TToken, TNodeKind comparable] struct {
 	label        syntaxa.GrammarLabel
 	repeatNode   *syntaxa.Grammar[TToken, TNodeKind]
 	remaining    []*syntaxa.Grammar[TToken, TNodeKind]
+
+	recovery  []TToken
+	noConsume []TToken
 }
 
 type gTerminal[TToken, TNodeKind comparable] struct {
@@ -36,24 +39,40 @@ func lookahead[TToken, TNodeKind comparable](
 		return nil, true
 	}
 
+	var ts []gTerminal[TToken, TNodeKind]
+	var n bool
+
 	switch node.Kind {
 	case syntaxa.GToken:
-		return []gTerminal[TToken, TNodeKind]{{token: node.Token, nodeKind: node.OutputNodeKind}}, false
+		ts, n = []gTerminal[TToken, TNodeKind]{{token: node.Token, nodeKind: node.OutputNodeKind}}, false
 	case syntaxa.GEpsilon:
-		return nil, true
+		ts, n = nil, true
 	case syntaxa.GConcat:
-		return lookaheadConcat(node.Children, rules, visiting)
+		ts, n = lookaheadConcat(node.Children, rules, visiting)
 	case syntaxa.GChoice:
-		return lookaheadChoice(node, rules, visiting)
+		ts, n = lookaheadChoice(node, rules, visiting)
 	case syntaxa.GRepeat, syntaxa.GOptional:
-		return lookaheadRepetition(node, rules, visiting)
+		ts, n = lookaheadRepetition(node, rules, visiting)
 	case syntaxa.GReference:
-		return lookaheadReference(node, rules, visiting)
+		ts, n = lookaheadReference(node, rules, visiting)
 	case syntaxa.GNest:
-		return lookaheadNest(node)
+		ts, n = lookaheadNest(node)
 	}
 
-	return nil, false
+	if node.Kind != syntaxa.GRepeat && node.Kind != syntaxa.GOptional && node.Kind != syntaxa.GReference {
+		if len(node.RecoveryTokens) > 0 || len(node.NoConsumeOnRecoveryTokens) > 0 {
+			for i := range ts {
+				ts[i].stack = append(ts[i].stack, gStackEntry[TToken, TNodeKind]{
+					isRepetition: false,
+					label:        node.GrammarLabel,
+					recovery:     node.RecoveryTokens,
+					noConsume:    node.NoConsumeOnRecoveryTokens,
+				})
+			}
+		}
+	}
+
+	return ts, n
 }
 
 func lookaheadChoice[TToken, TNodeKind comparable](
@@ -83,6 +102,8 @@ func lookaheadRepetition[TToken, TNodeKind comparable](
 			isRepetition: true,
 			repeatNode:   node,
 			label:        node.GrammarLabel,
+			recovery:     node.RecoveryTokens,
+			noConsume:    node.NoConsumeOnRecoveryTokens,
 		})
 	}
 	return ts, node.Min == 0 || node.Kind == syntaxa.GOptional
@@ -107,6 +128,8 @@ func lookaheadReference[TToken, TNodeKind comparable](
 		ts[i].stack = append(ts[i].stack, gStackEntry[TToken, TNodeKind]{
 			isRepetition: false,
 			label:        node.ReferenceTarget,
+			recovery:     node.RecoveryTokens,
+			noConsume:    node.NoConsumeOnRecoveryTokens,
 		})
 	}
 	return ts, n
