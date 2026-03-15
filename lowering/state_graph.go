@@ -72,6 +72,14 @@ state. NestBodyContextIDs maps nest grammar labels to the context ID for that ne
 body. Transition order per state is discovery order; the editor backend sorts by
 lexer priority.
 
+Nest transitions:
+  - Optional / mandatory nests (not in a ZeroOrMore): OpSet with targets
+    [afterCtxID, bodyCtxID]. After the body closes the machine is in afterCtxID.
+  - ZeroOrMore nests: OpPush with a single target [bodyCtxID]. No separate afterCtx
+    frame is pushed; after the body closes via OpPop the machine returns to the
+    calling context, which already holds all loop re-entry and outer follow-set
+    transitions via lookaheadConcat suffix propagation.
+
 For contexts where all grammar transitions are optional, explicit OpPop transitions
 are emitted for each token in the follow set (the First set of remaining grammar rules
 after the optional block). These ensure that a parent context's expected tokens trigger
@@ -104,12 +112,19 @@ Transition order is discovery order; PopAmount reflects grammar stack frames exi
 The editor layer (e.g. langspec/editor) applies priority sort, nest split, and invalid
 fallback handling.
 
-When all transitions from a context are optional (GOptional or GRepeat frames), the
-lowering pass computes the First set of remaining grammar rules after the optional block
-and emits explicit OpPop transitions for those follow-set tokens. This replaces the
-former HasOptionalContinuation/FallthroughPopAmount hint with precise, grammar-driven
-pop edges. Tokens not covered by any normal or follow-set transition are handled by
-the editor backend's invalid fallback (e.g. \S catch-all).
+ZeroOrMore nests emit OpPush with a single target [bodyCtxID]. After the body closes
+via OpPop the machine returns to the calling context, which already contains all loop
+re-entry and outer follow-set transitions. This avoids a per-iteration afterCtx frame
+that would cause outer close tokens to be consumed at the wrong stack level.
+
+For Optional nests and mandatory nests, OpSet is used with two targets
+[afterCtxID, bodyCtxID]; the afterCtx holds the continuation.
+
+When all transitions from a context are optional (GOptional frames), the lowering pass
+computes the First set of remaining grammar rules after the optional block and emits
+explicit OpPop transitions for those follow-set tokens. Tokens not covered by any
+normal or follow-set transition are handled by the editor backend's invalid fallback
+(e.g. \S catch-all).
 
 Prerequisites:
 - pkg must be non-nil with a valid entry rule; tokenHash and hasher must be non-nil.
@@ -216,7 +231,7 @@ func buildTransition[TToken, TNodeKind comparable](
 	isZeroOrMore, _ := outerFrameKind(term)
 
 	if term.nestNode != nil {
-		return buildNestTransition(term, isZeroOrMore, rules, tokenHash, hasher, ctxByKey, transitionsByID, metaByID, nestBodyIDs, queue)
+		return buildNestTransition(term, isZeroOrMore, rules, tokenHash, hasher, ctxByKey, metaByID, nestBodyIDs, queue)
 	}
 
 	return buildStandardTransition(term, nameHint, isZeroOrMore, rules, tokenHash, hasher, ctxByKey, metaByID, queue)
@@ -328,31 +343,49 @@ func buildNestTransition[TToken, TNodeKind comparable](
 	tokenHash func(TToken) uint64,
 	hasher *hash.XXH3Hasher,
 	ctxByKey map[uint64]*Context,
-	transitionsByID map[string][]Transition[TToken, TNodeKind],
 	metaByID map[string]ContextMeta,
 	nestBodyIDs map[syntaxa.GrammarLabel]string,
 	queue *[]pendingEntry[TToken, TNodeKind],
 ) Transition[TToken, TNodeKind] {
 	bodyCtx := getOrCreateNestBody(term.nestNode, rules, tokenHash, hasher, ctxByKey, metaByID, queue, nestBodyIDs)
+
+	// For ZeroOrMore nests (op=OpPush) we do NOT create a separate afterCtx.
+	//
+	// The calling context already holds every transition that would appear in an
+	// afterCtx frame, because lookaheadConcat propagated the suffix of the
+	// surrounding grammar into the calling context's terminal set when that context
+	// was first computed. This means:
+	//   - Loop re-entry tokens (the next ZeroOrMore iteration) are present.
+	//   - Outer follow-set tokens (e.g. a parent nest's close token) are present
+	//     with their correct popOffset, producing the right OpPop(N) amount.
+	//
+	// If we pushed an afterCtx frame for each iteration, outer close tokens would
+	// fire OpPop(1) inside that extra frame—consuming the token before the parent
+	// context could handle it, leaving the parent's close transition unreachable
+	// and causing all subsequent tokens to be marked invalid.
+	//
+	// After OpPop closes the nest body, the machine returns directly to the calling
+	// context which naturally handles both loop re-entry and outer continuation.
+	if isZeroOrMore {
+		return Transition[TToken, TNodeKind]{
+			Token:            term.token,
+			NodeKind:         term.nodeKind,
+			Operation:        OpPush,
+			TargetContextIDs: []string{bodyCtx.ID},
+		}
+	}
+
 	ownerLabel := owningRule(term)
 	nestHint := term.nestNode.GrammarLabel
 	noNest := gTerminal[TToken, TNodeKind]{token: term.token, nodeKind: term.nodeKind, remaining: term.remaining, stack: term.stack, popOffset: term.popOffset}
 	advTerminals := advanceTerminal(noNest, rules)
-
-	op := OpSet
-	if isZeroOrMore {
-		op = OpPush
-	}
-
-	if op == OpSet {
-		propagatePopOffset(advTerminals, term.popOffset)
-	}
+	propagatePopOffset(advTerminals, term.popOffset)
 
 	if advTerminals == nil {
 		return Transition[TToken, TNodeKind]{
 			Token:            term.token,
 			NodeKind:         term.nodeKind,
-			Operation:        op,
+			Operation:        OpSet,
 			TargetContextIDs: []string{bodyCtx.ID},
 		}
 	}
@@ -362,7 +395,7 @@ func buildNestTransition[TToken, TNodeKind comparable](
 	return Transition[TToken, TNodeKind]{
 		Token:            term.token,
 		NodeKind:         term.nodeKind,
-		Operation:        op,
+		Operation:        OpSet,
 		TargetContextIDs: []string{afterCtx.ID, bodyCtx.ID},
 	}
 }
@@ -515,6 +548,12 @@ func computeFollowSetTransitions[TToken, TNodeKind comparable](
 		// stack[len-1] is the outermost enclosing repetition or reference. For an
 		// all-optional context, outerFrameKind checks stack[len-1] and returns optional
 		// only when that outermost frame is a GOptional node.
+		// outerFrameKind returns (false, false) for an empty stack, so isOpt is false
+		// and we continue before reaching here; the length check is therefore always
+		// satisfied, but is made explicit below for clarity.
+		if len(term.stack) == 0 {
+			continue
+		}
 		optFrame := term.stack[len(term.stack)-1]
 		outerStack := term.stack[:len(term.stack)-1]
 
