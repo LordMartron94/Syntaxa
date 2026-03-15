@@ -196,6 +196,8 @@ type ParserRule[
 	noConsumeOnRecoveryTokens []TToken
 
 	grammar *Grammar[TToken, TNodeKind]
+
+	isRecoveryBarrier bool
 }
 
 func (p *ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) GetIdentity() RuleIdentity {
@@ -227,6 +229,15 @@ func (p *ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) G
 
 func (p *ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) GetGrammar() *Grammar[TToken, TNodeKind] {
 	return p.grammar
+}
+
+func (r ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) WithRecoveryBarrier() ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
+	r.isRecoveryBarrier = true
+	return r
+}
+
+func (r ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) IsRecoveryBarrier() bool {
+	return r.isRecoveryBarrier
 }
 
 /*

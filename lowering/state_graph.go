@@ -535,17 +535,19 @@ func addRecoveryTransitions[TToken, TNodeKind comparable](
 	transitionsByID map[string][]Transition[TToken, TNodeKind],
 	inheritedSyncs []TToken,
 ) {
-	consumeSet := make(map[TToken]struct{}, 4)
+	// Merge all recovery tokens into a single lookahead set
 	noConsumeSet := make(map[TToken]struct{}, 4+len(inheritedSyncs))
 
+	// 1. Inherited parent boundaries
 	for _, t := range inheritedSyncs {
 		noConsumeSet[t] = struct{}{}
 	}
 
+	// 2. Native rule boundaries
 	for _, term := range terms {
 		for _, entry := range term.stack {
 			for _, t := range entry.recovery {
-				consumeSet[t] = struct{}{}
+				noConsumeSet[t] = struct{}{}
 			}
 			for _, t := range entry.noConsume {
 				noConsumeSet[t] = struct{}{}
@@ -553,21 +555,11 @@ func addRecoveryTransitions[TToken, TNodeKind comparable](
 		}
 	}
 
-	if len(consumeSet) == 0 && len(noConsumeSet) == 0 {
+	if len(noConsumeSet) == 0 {
 		return
 	}
 
-	for t := range noConsumeSet {
-		delete(consumeSet, t)
-	}
-
-	for t := range consumeSet {
-		transitionsByID[ctxID] = append(transitionsByID[ctxID], Transition[TToken, TNodeKind]{
-			Token:                t,
-			Operation:            OpSyncToken,
-			IsRecoveryTransition: true,
-		})
-	}
+	// Emit ALL recovery points strictly as lookahead pops
 	for t := range noConsumeSet {
 		transitionsByID[ctxID] = append(transitionsByID[ctxID], Transition[TToken, TNodeKind]{
 			Token:                t,

@@ -801,7 +801,13 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 			result := ctx.ExecuteRule(rule, syntaxa.ExecutionNormal)
 			if result.Kind == syntaxa.FailureNoMatch {
 				peeked := ctx.Token.Peek(0)
-				ctx.Error.ReportAt(string(identity.RuleName), peeked, errMessage)
+
+				if lastLex, ok := ctx.GetLastConsumedLexeme(); ok {
+					ctx.Error.ReportAtEnd(string(identity.RuleName), lastLex, errMessage)
+				} else {
+					ctx.Error.ReportAt(string(identity.RuleName), peeked, errMessage)
+				}
+
 				return r.sharedCore.buildFailureRuleResult(nil, syntaxa.FailureError)
 			}
 			return result
@@ -979,7 +985,7 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 		expectedLabel = string(grammarID)
 	}
 	identity := r.sharedCore.createRuleIdentity(name, grammarID, expectedLabel)
-	return r.listCore(identity, nodeKind, []TToken{blockEndToken}, rules...)
+	return r.listCore(identity, nodeKind, []TToken{blockEndToken}, rules...).WithRecoveryBarrier()
 }
 
 /*
@@ -1092,7 +1098,7 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 				currentMarker := ctx.Token.PeekRaw(0).TokenNumber
 				effectiveKind := sequenceCommitmentFailureKind(startMarker, currentMarker, result.Kind)
 
-				if effectiveKind == syntaxa.FailureError {
+				if effectiveKind == syntaxa.FailureError && result.Kind != syntaxa.FailureError {
 					peeked := ctx.Token.Peek(0)
 					msg := fmt.Sprintf(
 						"unexpected %s, expected '%s'",
@@ -1100,7 +1106,11 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 						rule.GetExpectedLabel(),
 					)
 
-					ctx.Error.ReportAt(string(rule.GetName()), peeked, msg)
+					if lastLex, ok := ctx.GetLastConsumedLexeme(); ok {
+						ctx.Error.ReportAtEnd(string(rule.GetName()), lastLex, msg)
+					} else {
+						ctx.Error.ReportAt(string(rule.GetName()), peeked, msg)
+					}
 				}
 
 				return r.sharedCore.buildFailureRuleResult(nil, effectiveKind)
@@ -1500,11 +1510,14 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 
 		closeLex := ctx.Token.Peek(0)
 		if closeLex.Token != closeToken {
-			ctx.Error.ReportAt(
-				string(name),
-				closeLex,
-				r.sharedCore.formatUnexpectedExpected(closeLex.Token, closeToken),
-			)
+			msg := r.sharedCore.formatUnexpectedExpected(closeLex.Token, closeToken)
+
+			if lastLex, ok := ctx.GetLastConsumedLexeme(); ok {
+				ctx.Error.ReportAtEnd(string(name), lastLex, msg)
+			} else {
+				ctx.Error.ReportAt(string(name), closeLex, msg)
+			}
+
 			return r.sharedCore.buildFailureRuleResult(nil, syntaxa.FailureError)
 		}
 		ctx.Token.Consume()
@@ -1527,7 +1540,7 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 		[]TToken{closeToken}, // recovery boundary
 		nil,
 		grammar,
-	)
+	).WithRecoveryBarrier()
 }
 
 func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) TransparentNest(
@@ -1570,7 +1583,7 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 		[]TToken{closeToken},
 		nil,
 		grammar,
-	)
+	).WithRecoveryBarrier()
 }
 
 /*

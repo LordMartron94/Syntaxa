@@ -71,11 +71,16 @@ func (ts *tokenStream[TObs, TToken, TTokenRole]) ConsumeRaw() lexarch.Lexeme[TOb
 
 // -------------------------------------------------------------
 
+type recoveryFrame[TToken comparable] struct {
+	tokens  tokenSet[TToken]
+	barrier bool
+}
+
 type recoveryCore[TObservation cmp.Ordered, TToken, TTokenRole comparable] struct {
 	ts *tokenStream[TObservation, TToken, TTokenRole]
 
 	defaultRecovery tokenSet[TToken]
-	stack           []tokenSet[TToken]
+	stack           []recoveryFrame[TToken]
 }
 
 func (rc *recoveryCore[_, TToken, _]) setDefaultRecovery(tokens ...TToken) {
@@ -86,12 +91,12 @@ func (rc *recoveryCore[_, TToken, _]) setDefaultRecovery(tokens ...TToken) {
 	rc.defaultRecovery = set
 }
 
-func (rc *recoveryCore[_, TToken, _]) pushRecovery(tokens ...TToken) {
+func (rc *recoveryCore[_, TToken, _]) pushRecovery(barrier bool, tokens ...TToken) {
 	set := make(tokenSet[TToken])
 	for _, r := range tokens {
 		set[r] = struct{}{}
 	}
-	rc.stack = append(rc.stack, set)
+	rc.stack = append(rc.stack, recoveryFrame[TToken]{tokens: set, barrier: barrier})
 }
 
 func (rc *recoveryCore[_, TToken, _]) popRecovery() {
@@ -103,14 +108,18 @@ func (rc *recoveryCore[_, TToken, _]) popRecovery() {
 func (rc *recoveryCore[_, TToken, _]) currentRecovery() tokenSet[TToken] {
 	merged := make(tokenSet[TToken])
 
-	for t := range rc.defaultRecovery {
-		merged[t] = struct{}{}
-	}
-
 	if len(rc.stack) > 0 {
-		for t := range rc.stack[len(rc.stack)-1] {
+		frame := rc.stack[len(rc.stack)-1]
+		for t := range frame.tokens {
 			merged[t] = struct{}{}
 		}
+		if frame.barrier {
+			return merged
+		}
+	}
+
+	for t := range rc.defaultRecovery {
+		merged[t] = struct{}{}
 	}
 
 	return merged
@@ -125,14 +134,18 @@ Used only by performRecovery so recovery stops at any token that any enclosing r
 func (rc *recoveryCore[_, TToken, _]) currentRecoveryAllFrames() tokenSet[TToken] {
 	merged := make(tokenSet[TToken])
 
-	for t := range rc.defaultRecovery {
-		merged[t] = struct{}{}
-	}
-
-	for _, frame := range rc.stack {
-		for t := range frame {
+	for i := len(rc.stack) - 1; i >= 0; i-- {
+		frame := rc.stack[i]
+		for t := range frame.tokens {
 			merged[t] = struct{}{}
 		}
+		if frame.barrier {
+			return merged
+		}
+	}
+
+	for t := range rc.defaultRecovery {
+		merged[t] = struct{}{}
 	}
 
 	return merged

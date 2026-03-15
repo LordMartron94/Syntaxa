@@ -290,7 +290,9 @@ func parseWithContext[
 	}
 
 	// 5. Handle Final Failure State
-	if !programResult.Succeeded {
+	ctx.Error.sink.FlushFramesCommitAll()
+
+	if !programResult.Succeeded || len(ctx.Error.sink.Errors) > 0 {
 		return programResult.Node, ctx.trace, fmt.Errorf("parsing failed with %d errors", len(ctx.Error.sink.Errors))
 	}
 
@@ -320,7 +322,8 @@ func syntaxaParserExecuteRule[
 	// Recovery scope for this construct: INHERIT FROM PROXIES
 	if mode == ExecutionNormal {
 		inheritedTokens := getInheritedRecoveryTokens(parser, rule)
-		ctx.Recovery.pushRecovery(inheritedTokens...)
+
+		ctx.Recovery.pushRecovery(rule.IsRecoveryBarrier(), inheritedTokens...)
 		defer ctx.Recovery.popRecovery()
 	}
 
@@ -345,7 +348,6 @@ func syntaxaParserExecuteRule[
 	}
 
 	if !success {
-		ctx.restore(startSnap)
 		ctx.Editor.created = ctx.Editor.created[:startLSTNodeCreationIdx]
 
 		if mode == ExecutionNormal {
@@ -368,19 +370,6 @@ func syntaxaParserExecuteRule[
 				}
 
 				ctx.Error.sink.popFrame(true)
-				if isProgramRule {
-					ctx.Error.sink.FlushFramesCommitAll()
-					if n := len(ctx.Error.sink.Errors); n > 1 {
-						best := 0
-						for i := 1; i < n; i++ {
-							if ctx.Error.sink.Errors[i].TokenNumber > ctx.Error.sink.Errors[best].TokenNumber {
-								best = i
-							}
-						}
-						ctx.Error.sink.Errors[0], ctx.Error.sink.Errors[best] = ctx.Error.sink.Errors[best], ctx.Error.sink.Errors[0]
-						ctx.Error.sink.Errors = ctx.Error.sink.Errors[:1]
-					}
-				}
 
 				ctx.Error.sink.pushFrame()
 				recovered, landedOnOurs := performRecovery(ctx, parser, parser.eofToken, rule)
@@ -393,8 +382,12 @@ func syntaxaParserExecuteRule[
 					}
 				}
 			} else {
+				ctx.restore(startSnap)
 				ctx.Error.sink.popFrame(false)
 			}
+		} else {
+			ctx.restore(startSnap)
+			ctx.Error.sink.popFrame(false)
 		}
 
 		return ruleResult
