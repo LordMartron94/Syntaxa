@@ -16,20 +16,6 @@ StackOp is the kind of stack operation for a transition in the generic state gra
 Match consumes a token with no stack change. Push, Pop, and Set are standard stack
 operations. PopAmount for OpPop is the number of grammar stack frames exited; the
 editor backend may add +1 when it injects wrapper states.
-
-OpRecoverPop and OpRecoverNoConsume are recovery-only operations emitted for every
-state that has active recovery tokens (i.e. the union of RecoveryTokens and
-NoConsumeOnRecoveryTokens from all grammar rules in the terminal stack for that
-state). They mirror the behaviour of performRecovery in the parser:
-
-  - OpRecoverPop: the token is a sync point and should be consumed; the consumer
-    should pop the appropriate number of frames and resume normal parsing.
-  - OpRecoverNoConsume: the token is a sync point but must NOT be consumed; the
-    consumer should pop frame(s) and leave the token in the stream so an ancestor
-    context can process it via its own normal transitions.
-
-For both recovery operations PopAmount is 0, indicating that the consumer is
-responsible for determining the correct pop depth from its own runtime stack.
 */
 type StackOp uint8
 
@@ -38,8 +24,6 @@ const (
 	OpPush
 	OpPop
 	OpSet
-	OpSyncToken          // recovery sync token: consume and pop frame(s)
-	OpSyncTokenNoConsume // recovery sync token: do NOT consume, pop frame(s)
 )
 
 /*
@@ -56,14 +40,12 @@ type Context struct {
 /*
 ContextMeta holds optional metadata for a context in the state graph.
 
-HasOptionalContinuation is true when all transitions from this context are from
-optional or repeat grammar; the editor backend may use fallthrough pop. When set,
-FallthroughPopAmount is the number of stack frames to pop on fallthrough.
+ImmediatePushTargetID is set for nest body contexts and names the inner context
+that the editor backend should immediately push onto the stack when entering this
+state.
 */
 type ContextMeta struct {
-	HasOptionalContinuation bool
-	FallthroughPopAmount    int
-	ImmediatePushTargetID   string
+	ImmediatePushTargetID string
 }
 
 /*
@@ -73,26 +55,13 @@ On Token (with optional semantic NodeKind for highlighting scope), apply Operati
 and move to TargetContextIDs. PopAmount is used when Operation is OpPop and holds
 the number of grammar stack frames exited. NodeKind identifies what is being matched
 for editor backends (e.g. syntax highlighting scope).
-
-Recovery transitions (OpRecoverPop, OpRecoverNoConsume) are added for every token
-in the union of all active grammar rule recovery sets at that state. These transitions
-have PopAmount = 0; the consumer determines the correct pop depth at runtime.
-
-IsRecoveryTransition is true when the transition is a sync-point recovery edge
-(Operation is OpRecoverPop or OpRecoverNoConsume). The Token is a valid sync
-token with its normal semantic scope carried by NodeKind; it is NOT an error.
-Consumers must use NodeKind for syntax-highlighting and must NOT apply an error
-scope to these transitions. The invalid.illegal.unexpected-token scope should
-instead be applied to a synthesised catch-all rule for input that matches none
-of the normal or recovery transitions.
 */
 type Transition[TToken, TNodeKind comparable] struct {
-	Token                TToken
-	NodeKind             *TNodeKind
-	Operation            StackOp
-	TargetContextIDs     []string
-	PopAmount            int
-	IsRecoveryTransition bool
+	Token            TToken
+	NodeKind         *TNodeKind
+	Operation        StackOp
+	TargetContextIDs []string
+	PopAmount        int
 }
 
 /*
@@ -103,11 +72,12 @@ state. NestBodyContextIDs maps nest grammar labels to the context ID for that ne
 body. Transition order per state is discovery order; the editor backend sorts by
 lexer priority.
 
-Every state that has active recovery tokens (from the grammar rules in the terminal
-stack for that state) will also contain OpRecoverPop and/or OpRecoverNoConsume
-transitions in its Transitions entry. These recovery transitions carry the union of
-all recovery sets from all enclosing grammar frames, exactly mirroring the
-currentRecoveryAllFrames() computation performed by the parser at runtime.
+For contexts where all grammar transitions are optional, explicit OpPop transitions
+are emitted for each token in the follow set (the First set of remaining grammar rules
+after the optional block). These ensure that a parent context's expected tokens trigger
+a precise pop rather than relying on a wildcard fallthrough. Tokens that are not in
+the follow set and not otherwise handled are left for the editor backend's invalid
+fallback (e.g. a catch-all \S match that marks unrecognised input as invalid).
 */
 type StateGraph[TToken, TNodeKind comparable] struct {
 	Contexts           []Context
@@ -131,12 +101,15 @@ BuildStateGraph builds a generic StateGraph from a GrammarPackage.
 
 tokenHash and hasher are used for high-performance, zero-allocation context keys.
 Transition order is discovery order; PopAmount reflects grammar stack frames exited.
-The editor layer (e.g. langspec/editor) applies priority sort, nest split, and fallthrough.
+The editor layer (e.g. langspec/editor) applies priority sort, nest split, and invalid
+fallback handling.
 
-Every state whose terminal stack references grammar rules with recovery tokens will
-have OpRecoverPop (consume) and/or OpRecoverNoConsume transitions appended. These
-mirror the parser's currentRecoveryAllFrames() recovery set for that state, so
-consumers can implement identical recovery behaviour without access to the parser.
+When all transitions from a context are optional (GOptional or GRepeat frames), the
+lowering pass computes the First set of remaining grammar rules after the optional block
+and emits explicit OpPop transitions for those follow-set tokens. This replaces the
+former HasOptionalContinuation/FallthroughPopAmount hint with precise, grammar-driven
+pop edges. Tokens not covered by any normal or follow-set transition are handled by
+the editor backend's invalid fallback (e.g. \S catch-all).
 
 Prerequisites:
 - pkg must be non-nil with a valid entry rule; tokenHash and hasher must be non-nil.
@@ -174,9 +147,6 @@ func BuildStateGraph[
 	rootKey := lookaheadKey(entryTerminals, tokenHash, hasher)
 	rootCtx := &Context{ID: rootLabel, Label: rootLabel}
 	ctxByKey[rootKey] = rootCtx
-	if allOptionalTerminals(entryTerminals) {
-		metaByID[rootLabel] = ContextMeta{HasOptionalContinuation: true}
-	}
 
 	queue := []pendingEntry[TToken, TNodeKind]{{rootLabel, rootKey, entryTerminals, entryLabel}}
 
@@ -194,7 +164,23 @@ func BuildStateGraph[
 			}
 		}
 
-		addRecoveryTransitions(p.terms, rules, p.ctxID, transitionsByID)
+		// For contexts where every terminal is optional, emit explicit OpPop transitions
+		// for each token in the follow set (First set of grammar after the optional block).
+		// This replaces the former HasOptionalContinuation/FallthroughPopAmount fallthrough
+		// hint with precise, grammar-driven pop edges keyed on specific parent tokens.
+		if allOptionalTerminals(p.terms) {
+			popAmt := 1
+			if len(p.terms) > 0 && p.terms[0].popOffset > 0 {
+				popAmt = 1 + p.terms[0].popOffset
+			}
+			existing := make(map[TToken]struct{}, len(transitionsByID[p.ctxID]))
+			for _, tr := range transitionsByID[p.ctxID] {
+				existing[tr.Token] = struct{}{}
+			}
+			for _, tr := range computeFollowSetTransitions(p.terms, rules, existing, popAmt) {
+				transitionsByID[p.ctxID] = append(transitionsByID[p.ctxID], tr)
+			}
+		}
 	}
 
 	contexts := make([]Context, 0, len(ctxByKey))
@@ -264,17 +250,6 @@ func getOrCreateContext[TToken, TNodeKind comparable](
 
 	c := &Context{ID: name, Label: name}
 	ctxByKey[key] = c
-
-	if allOptionalTerminals(terms) {
-		popAmt := 1
-		if len(terms) > 0 && terms[0].popOffset > 0 {
-			popAmt = 1 + terms[0].popOffset
-		}
-		metaByID[name] = ContextMeta{
-			HasOptionalContinuation: true,
-			FallthroughPopAmount:    popAmt,
-		}
-	}
 
 	*queue = append(*queue, pendingEntry[TToken, TNodeKind]{ctxID: name, ctxKey: key, terms: terms, nameHint: effectiveLabel})
 	return c
@@ -383,13 +358,6 @@ func buildNestTransition[TToken, TNodeKind comparable](
 	}
 
 	afterCtx := getOrCreateContext(advTerminals, ownerLabel, nestHint, tokenHash, hasher, ctxByKey, metaByID, queue)
-
-	meta := metaByID[afterCtx.ID]
-	meta.HasOptionalContinuation = true
-	if op == OpSet && term.popOffset > 0 && meta.FallthroughPopAmount == 0 {
-		meta.FallthroughPopAmount = 1 + term.popOffset
-		metaByID[afterCtx.ID] = meta
-	}
 
 	return Transition[TToken, TNodeKind]{
 		Token:            term.token,
@@ -513,76 +481,72 @@ func allOptionalTerminals[TToken, TNodeKind comparable](terminals []gTerminal[TT
 }
 
 /*
-addRecoveryTransitions appends OpRecoverPop and OpRecoverNoConsume transitions to the
-given context for every token in the union of all recovery sets from the grammar rules
-referenced in the terminal stacks.
+computeFollowSetTransitions computes explicit OpPop transitions for every token in
+the follow set of an all-optional context.
 
-This mirrors the parser's currentRecoveryAllFrames() semantics: every grammar rule
-that is "active" at this state (i.e. appears anywhere in the terminal stack) contributes
-its RecoveryTokens and NoConsumeOnRecoveryTokens to the recovery set for that state.
+For each optional terminal (outerFrameKind returns optional), the follow set is the
+First set of the remaining grammar after the optional block. A synthetic terminal whose
+remaining is set to optFrame.remaining (the grammar nodes that follow the optional in
+the parent production) and whose stack is the outer frames above the optional is passed
+to advanceTerminal. The resulting lookahead terminals supply the follow-set tokens.
 
-NoConsumeOnRecoveryTokens takes precedence over RecoveryTokens for the same token
-(matching the parser's ruleHasNoConsumeToken check). Tokens that appear in neither
-set are not emitted. All recovery transitions have PopAmount = 0; consumers determine
-the correct pop depth from their own runtime stack.
+existing must contain the tokens already covered by normal transitions in the context;
+follow-set tokens already present are skipped to avoid ambiguous duplicates. popAmount
+is the number of machine stack frames to pop on each emitted OpPop transition.
 */
-func addRecoveryTransitions[TToken, TNodeKind comparable](
+func computeFollowSetTransitions[TToken, TNodeKind comparable](
 	terms []gTerminal[TToken, TNodeKind],
 	rules map[syntaxa.GrammarLabel]*syntaxa.Grammar[TToken, TNodeKind],
-	ctxID string,
-	transitionsByID map[string][]Transition[TToken, TNodeKind],
-) {
-	// Collect labels present in terminal stacks to avoid redundant rule lookups.
-	seenLabels := make(map[syntaxa.GrammarLabel]struct{}, len(terms))
+	existing map[TToken]struct{},
+	popAmount int,
+) []Transition[TToken, TNodeKind] {
+	seen := make(map[TToken]struct{})
+	var result []Transition[TToken, TNodeKind]
+
 	for _, term := range terms {
-		for _, entry := range term.stack {
-			if entry.label != "" {
-				seenLabels[entry.label] = struct{}{}
-			}
-		}
-	}
-	if len(seenLabels) == 0 {
-		return
-	}
-
-	consumeSet := make(map[TToken]struct{}, 4)
-	noConsumeSet := make(map[TToken]struct{}, 4)
-
-	for label := range seenLabels {
-		rule := rules[label]
-		if rule == nil {
+		_, isOpt := outerFrameKind(term)
+		if !isOpt {
 			continue
 		}
-		for _, t := range rule.RecoveryTokens {
-			consumeSet[t] = struct{}{}
+
+		// The optional frame is the outermost (last) stack entry. The stack is built
+		// innermost-first: lookaheadRepetition/lookaheadReference each append their
+		// frame to the end, so stack[0] is the innermost (closest to the token) and
+		// stack[len-1] is the outermost enclosing repetition or reference. For an
+		// all-optional context, outerFrameKind checks stack[len-1] and returns optional
+		// only when that outermost frame is a GOptional node.
+		optFrame := term.stack[len(term.stack)-1]
+		outerStack := term.stack[:len(term.stack)-1]
+
+		// Construct a synthetic terminal whose "remaining" is the grammar after the
+		// optional block and whose stack is the outer context. advanceTerminal uses
+		// only term.remaining and term.stack (never term.token), so term.token here is
+		// a zero-value placeholder. advanceTerminal computes the First set of that
+		// position, propagating through nullable outer frames exactly as it would for
+		// a real terminal.
+		synth := gTerminal[TToken, TNodeKind]{
+			remaining: optFrame.remaining,
+			stack:     outerStack,
+			popOffset: term.popOffset,
 		}
-		for _, t := range rule.NoConsumeOnRecoveryTokens {
-			noConsumeSet[t] = struct{}{}
+
+		exitTerms := advanceTerminal(synth, rules)
+		for _, et := range exitTerms {
+			if _, already := seen[et.token]; already {
+				continue
+			}
+			if _, inExisting := existing[et.token]; inExisting {
+				continue
+			}
+			seen[et.token] = struct{}{}
+			result = append(result, Transition[TToken, TNodeKind]{
+				Token:     et.token,
+				NodeKind:  et.nodeKind,
+				Operation: OpPop,
+				PopAmount: popAmount,
+			})
 		}
 	}
 
-	if len(consumeSet) == 0 && len(noConsumeSet) == 0 {
-		return
-	}
-
-	// NoConsume takes precedence: remove tokens that are in the no-consume set from
-	// the consume set (matching the parser's ruleHasNoConsumeToken precedence).
-	for t := range noConsumeSet {
-		delete(consumeSet, t)
-	}
-
-	for t := range consumeSet {
-		transitionsByID[ctxID] = append(transitionsByID[ctxID], Transition[TToken, TNodeKind]{
-			Token:                t,
-			Operation:            OpSyncToken,
-			IsRecoveryTransition: true,
-		})
-	}
-	for t := range noConsumeSet {
-		transitionsByID[ctxID] = append(transitionsByID[ctxID], Transition[TToken, TNodeKind]{
-			Token:                t,
-			Operation:            OpSyncTokenNoConsume,
-			IsRecoveryTransition: true,
-		})
-	}
+	return result
 }

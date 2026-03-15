@@ -64,7 +64,7 @@ On-demand lowering of a `GrammarPackage` into other representations. The core pa
 - **ToPatternGrammar(root, additionalRules, rules)** → `(*pattern.Grammar, ruleNameToNodeKey, ruleNameToRecovery)`. Converts the syntaxa grammar tree into the Contexta/pattern CFG. Use for CFG debug dumps or as input to PDA compilation.
 - **GetAnalysis(pkg)** → `*GrammarAnalysis`. Computes nullable, first, and follow sets keyed by `NodeKey`. Use when creating a parser (pass as `getAnalysis` to `SyntaxaParserCreate`) or when dumping analysis in the grammar package debugger.
 - **CompileEngine(pkg, allocFn, config)** → `(*PDAEngine, error)`. Compiles the package into a DPDA or NPDA; uses `ToPatternGrammar` internally. Types `PDAEngine` and `NPDAConfig` (and presets `NPDAConfigSmall`, `NPDAConfigMedium`, `NPDAConfigLarge`) live in this package.
-- **BuildStateGraph(pkg, tokenFormatter)** → `(*StateGraph, error)`. Generic state graph for editor backends (e.g. Editor IR). Types `StateGraph`, `Context`, `ContextMeta`, `Transition`, and `StackOp` are documented in the package.
+- **BuildStateGraph(pkg, tokenFormatter)** → `(*StateGraph, error)`. Generic state graph for editor backends (e.g. Editor IR). Types `StateGraph`, `Context`, `ContextMeta`, `Transition`, and `StackOp` are documented in the package. For all-optional contexts, explicit `OpPop` transitions are emitted for each token in the grammar-derived follow set; unrecognised tokens are handled by the editor backend's invalid fallback (e.g. `\S` catch-all). Sync-token recovery transitions are not emitted; the parser's recovery mechanism is separate.
 
 ### `syntaxa/rule` (rule factory)
 
