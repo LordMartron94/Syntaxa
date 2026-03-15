@@ -97,9 +97,12 @@ func lookaheadRepetition[TToken, TNodeKind comparable](
 ) ([]gTerminal[TToken, TNodeKind], bool) {
 	child := node.Children[0]
 	ts, _ := lookahead(child, rules, visiting)
+
+	isRep := node.Kind == syntaxa.GRepeat
+
 	for i := range ts {
 		ts[i].stack = append(ts[i].stack, gStackEntry[TToken, TNodeKind]{
-			isRepetition: true,
+			isRepetition: isRep,
 			repeatNode:   node,
 			label:        node.GrammarLabel,
 			recovery:     node.RecoveryTokens,

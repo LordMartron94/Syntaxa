@@ -403,8 +403,9 @@ func buildNestTransition[TToken, TNodeKind comparable](
 	meta.HasOptionalContinuation = true
 	if op == OpSet && term.popOffset > 0 && meta.FallthroughPopAmount == 0 {
 		meta.FallthroughPopAmount = 1 + term.popOffset
-		metaByID[afterCtx.ID] = meta
 	}
+
+	metaByID[afterCtx.ID] = meta
 
 	return Transition[TToken, TNodeKind]{
 		Token:            term.token,
