@@ -47,6 +47,7 @@ FallthroughPopAmount is the number of stack frames to pop on fallthrough.
 type ContextMeta struct {
 	HasOptionalContinuation bool
 	FallthroughPopAmount    int
+	ImmediatePushTargetID   string
 }
 
 /*
@@ -59,7 +60,7 @@ for editor backends (e.g. syntax highlighting scope).
 */
 type Transition[TToken, TNodeKind comparable] struct {
 	Token            TToken
-	NodeKind         *TNodeKind // optional; from grammar OutputNodeKind for this token
+	NodeKind         *TNodeKind
 	Operation        StackOp
 	TargetContextIDs []string
 	PopAmount        int
@@ -145,16 +146,8 @@ func BuildStateGraph[
 
 		for _, term := range p.terms {
 			tr := buildTransition(
-				term,
-				p.nameHint,
-				rules,
-				tokenHash,
-				hasher,
-				ctxByKey,
-				transitionsByID,
-				metaByID,
-				nestBodyIDs,
-				&queue,
+				term, p.nameHint, rules, tokenHash, hasher,
+				ctxByKey, transitionsByID, metaByID, nestBodyIDs, &queue,
 			)
 			if tr.TargetContextIDs != nil || tr.Operation == OpPop || tr.Operation == OpMatch {
 				transitionsByID[p.ctxID] = append(transitionsByID[p.ctxID], tr)
@@ -168,16 +161,6 @@ func BuildStateGraph[
 		if _, ok := seen[c.ID]; !ok {
 			seen[c.ID] = struct{}{}
 			contexts = append(contexts, *c)
-		}
-	}
-	for id := range nestBodyIDs {
-		nestKeyBytes := []byte("NEST_BODY:" + string(id))
-		nestKey := hash.XXH3HasherHash64(hasher, nestKeyBytes)
-		if c := ctxByKey[nestKey]; c != nil {
-			if _, ok := seen[c.ID]; !ok {
-				seen[c.ID] = struct{}{}
-				contexts = append(contexts, *c)
-			}
 		}
 	}
 
@@ -294,6 +277,16 @@ func getOrCreateNestBody[TToken, TNodeKind comparable](
 	ctxByKey[nestKey] = c
 	nestBodyIDs[nestNode.GrammarLabel] = name
 
+	contentName := name + "_content"
+	contentKeyBytes := []byte("NEST_CONTENT:" + string(nestNode.GrammarLabel))
+	contentKey := hash.XXH3HasherHash64(hasher, contentKeyBytes)
+	contentCtx := &Context{ID: contentName, Label: contentName}
+	ctxByKey[contentKey] = contentCtx
+
+	metaByID[name] = ContextMeta{
+		ImmediatePushTargetID: contentName,
+	}
+
 	closeTokenNode := &syntaxa.Grammar[TToken, TNodeKind]{Kind: syntaxa.GToken, Token: *nestNode.CloseToken}
 	bodyAndClose := []*syntaxa.Grammar[TToken, TNodeKind]{nestNode.Children[0], closeTokenNode}
 	bodyTerminals, _ := lookaheadConcat(bodyAndClose, rules, make(visiting))
@@ -301,7 +294,12 @@ func getOrCreateNestBody[TToken, TNodeKind comparable](
 	propagatePopOffset(bodyTerminals, 1)
 
 	if len(bodyTerminals) > 0 {
-		*queue = append(*queue, pendingEntry[TToken, TNodeKind]{ctxID: name, ctxKey: nestKey, terms: bodyTerminals, nameHint: nestNode.GrammarLabel})
+		*queue = append(*queue, pendingEntry[TToken, TNodeKind]{
+			ctxID:    contentName,
+			ctxKey:   contentKey,
+			terms:    bodyTerminals,
+			nameHint: nestNode.GrammarLabel,
+		})
 	}
 	return c
 }
