@@ -5,6 +5,7 @@ import "syntaxa"
 func advanceTerminal[TToken, TNodeKind comparable](
 	term gTerminal[TToken, TNodeKind],
 	rules map[syntaxa.GrammarLabel]*syntaxa.Grammar[TToken, TNodeKind],
+	analysis *syntaxa.GrammarAnalysis[TToken],
 ) ([]gTerminal[TToken, TNodeKind], bool) {
 	levels := len(term.stack) + 1
 	var result []gTerminal[TToken, TNodeKind]
@@ -17,7 +18,7 @@ func advanceTerminal[TToken, TNodeKind comparable](
 			continue
 		}
 
-		la, nullable := computeLookaheadForFrame(remaining, isRep, repNode, rules)
+		la, nullable := computeLookaheadForFrame(remaining, isRep, repNode, rules, analysis)
 		result = appendLookaheadWithStack(la, term.stack[i:], result)
 
 		if !nullable {
@@ -48,15 +49,16 @@ func computeLookaheadForFrame[TToken, TNodeKind comparable](
 	isRep bool,
 	repNode *syntaxa.Grammar[TToken, TNodeKind],
 	rules map[syntaxa.GrammarLabel]*syntaxa.Grammar[TToken, TNodeKind],
+	analysis *syntaxa.GrammarAnalysis[TToken],
 ) ([]gTerminal[TToken, TNodeKind], bool) {
 	visiting := make(visiting)
 	if isRep {
 		loopNodes := make([]*syntaxa.Grammar[TToken, TNodeKind], 0, 1+len(remaining))
 		loopNodes = append(loopNodes, repNode)
 		loopNodes = append(loopNodes, remaining...)
-		return lookaheadConcat(loopNodes, rules, visiting)
+		return lookaheadConcat(nil, loopNodes, rules, visiting, analysis)
 	}
-	return lookaheadConcat(remaining, rules, visiting)
+	return lookaheadConcat(nil, remaining, rules, visiting, analysis)
 }
 
 func appendLookaheadWithStack[TToken, TNodeKind comparable](

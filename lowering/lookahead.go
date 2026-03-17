@@ -34,6 +34,7 @@ func lookahead[TToken, TNodeKind comparable](
 	node *syntaxa.Grammar[TToken, TNodeKind],
 	rules map[syntaxa.GrammarLabel]*syntaxa.Grammar[TToken, TNodeKind],
 	visiting visiting,
+	analysis *syntaxa.GrammarAnalysis[TToken],
 ) ([]gTerminal[TToken, TNodeKind], bool) {
 	if node == nil {
 		return nil, true
@@ -48,15 +49,19 @@ func lookahead[TToken, TNodeKind comparable](
 	case syntaxa.GEpsilon:
 		ts, n = nil, true
 	case syntaxa.GConcat:
-		ts, n = lookaheadConcat(node.Children, rules, visiting)
+		ts, n = lookaheadConcat(node, node.Children, rules, visiting, analysis)
 	case syntaxa.GChoice:
-		ts, n = lookaheadChoice(node, rules, visiting)
+		ts, n = lookaheadChoice(node, rules, visiting, analysis)
 	case syntaxa.GRepeat, syntaxa.GOptional:
-		ts, n = lookaheadRepetition(node, rules, visiting)
+		ts, n = lookaheadRepetition(node, rules, visiting, analysis)
 	case syntaxa.GReference:
-		ts, n = lookaheadReference(node, rules, visiting)
+		ts, n = lookaheadReference(node, rules, visiting, analysis)
 	case syntaxa.GNest:
 		ts, n = lookaheadNest(node)
+	}
+
+	if analysis != nil && node.NodePath != nil {
+		n = syntaxa.GrammarAnalysisNullable(analysis, node)
 	}
 
 	if node.Kind != syntaxa.GRepeat && node.Kind != syntaxa.GOptional && node.Kind != syntaxa.GReference {
@@ -79,13 +84,17 @@ func lookaheadChoice[TToken, TNodeKind comparable](
 	node *syntaxa.Grammar[TToken, TNodeKind],
 	rules map[syntaxa.GrammarLabel]*syntaxa.Grammar[TToken, TNodeKind],
 	visiting visiting,
+	analysis *syntaxa.GrammarAnalysis[TToken],
 ) ([]gTerminal[TToken, TNodeKind], bool) {
 	var all []gTerminal[TToken, TNodeKind]
 	anyNull := false
 	for _, child := range node.Children {
-		ts, n := lookahead(child, rules, visiting)
+		ts, n := lookahead(child, rules, visiting, analysis)
 		all = append(all, ts...)
 		anyNull = anyNull || n
+	}
+	if analysis != nil && node.NodePath != nil {
+		anyNull = syntaxa.GrammarAnalysisNullable(analysis, node)
 	}
 	return all, anyNull
 }
@@ -94,9 +103,10 @@ func lookaheadRepetition[TToken, TNodeKind comparable](
 	node *syntaxa.Grammar[TToken, TNodeKind],
 	rules map[syntaxa.GrammarLabel]*syntaxa.Grammar[TToken, TNodeKind],
 	visiting visiting,
+	analysis *syntaxa.GrammarAnalysis[TToken],
 ) ([]gTerminal[TToken, TNodeKind], bool) {
 	child := node.Children[0]
-	ts, _ := lookahead(child, rules, visiting)
+	ts, _ := lookahead(child, rules, visiting, analysis)
 
 	isRep := node.Kind == syntaxa.GRepeat
 
@@ -109,13 +119,18 @@ func lookaheadRepetition[TToken, TNodeKind comparable](
 			noConsume:    node.NoConsumeOnRecoveryTokens,
 		})
 	}
-	return ts, node.Min == 0 || node.Kind == syntaxa.GOptional
+	nullable := node.Min == 0 || node.Kind == syntaxa.GOptional
+	if analysis != nil && node.NodePath != nil {
+		nullable = syntaxa.GrammarAnalysisNullable(analysis, node)
+	}
+	return ts, nullable
 }
 
 func lookaheadReference[TToken, TNodeKind comparable](
 	node *syntaxa.Grammar[TToken, TNodeKind],
 	rules map[syntaxa.GrammarLabel]*syntaxa.Grammar[TToken, TNodeKind],
 	visiting visiting,
+	analysis *syntaxa.GrammarAnalysis[TToken],
 ) ([]gTerminal[TToken, TNodeKind], bool) {
 	target := node.ResolvedReference
 	if target == nil {
@@ -125,7 +140,7 @@ func lookaheadReference[TToken, TNodeKind comparable](
 		return nil, false
 	}
 	visiting[node.ReferenceTarget] = true
-	ts, n := lookahead(target, rules, visiting)
+	ts, n := lookahead(target, rules, visiting, analysis)
 	delete(visiting, node.ReferenceTarget)
 	for i := range ts {
 		ts[i].stack = append(ts[i].stack, gStackEntry[TToken, TNodeKind]{
@@ -134,6 +149,9 @@ func lookaheadReference[TToken, TNodeKind comparable](
 			recovery:     node.RecoveryTokens,
 			noConsume:    node.NoConsumeOnRecoveryTokens,
 		})
+	}
+	if analysis != nil && node.NodePath != nil {
+		n = syntaxa.GrammarAnalysisNullable(analysis, node)
 	}
 	return ts, n
 }
@@ -150,15 +168,17 @@ func lookaheadNest[TToken, TNodeKind comparable](
 }
 
 func lookaheadConcat[TToken, TNodeKind comparable](
+	concatNode *syntaxa.Grammar[TToken, TNodeKind],
 	nodes []*syntaxa.Grammar[TToken, TNodeKind],
 	rules map[syntaxa.GrammarLabel]*syntaxa.Grammar[TToken, TNodeKind],
 	visiting visiting,
+	analysis *syntaxa.GrammarAnalysis[TToken],
 ) ([]gTerminal[TToken, TNodeKind], bool) {
 	nullable := true
 	var terms []gTerminal[TToken, TNodeKind]
 
 	for i, node := range nodes {
-		ts, n := lookahead(node, rules, visiting)
+		ts, n := lookahead(node, rules, visiting, analysis)
 		suffix := nodes[i+1:]
 
 		for j := range ts {
@@ -175,6 +195,9 @@ func lookaheadConcat[TToken, TNodeKind comparable](
 			nullable = false
 			break
 		}
+	}
+	if analysis != nil && concatNode != nil && concatNode.NodePath != nil {
+		nullable = syntaxa.GrammarAnalysisNullable(analysis, concatNode)
 	}
 	return terms, nullable
 }

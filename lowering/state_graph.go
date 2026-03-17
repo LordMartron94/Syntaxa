@@ -166,12 +166,17 @@ func BuildStateGraph[
 		return nil, fmt.Errorf("BuildStateGraph: entry rule %q not found", entryLabel)
 	}
 
+	analysis := GetAnalysis(pkg)
+	if analysis == nil {
+		return nil, fmt.Errorf("BuildStateGraph: analysis unavailable (nil package or root)")
+	}
+
 	ctxByKey := make(map[uint64]*Context)
 	transitionsByID := make(map[string][]Transition[TToken, TNodeKind])
 	metaByID := make(map[string]ContextMeta)
 	nestBodyIDs := make(map[syntaxa.GrammarLabel]string)
 
-	entryTerminals, isNullable := lookahead(entryRule, rules, make(visiting))
+	entryTerminals, isNullable := lookahead(entryRule, rules, make(visiting), analysis)
 	rootKey := lookaheadKey(entryTerminals, tokenHash, hasher)
 	rootCtx := &Context{ID: rootLabel, Label: rootLabel}
 	ctxByKey[rootKey] = rootCtx
@@ -190,7 +195,7 @@ func BuildStateGraph[
 
 		for _, term := range p.terms {
 			tr := buildTransition(
-				term, p.nameHint, rules, tokenHash, hasher,
+				term, p.nameHint, rules, analysis, tokenHash, hasher,
 				ctxByKey, transitionsByID, metaByID, nestBodyIDs, &queue, p.inheritedSyncs,
 			)
 			if tr.TargetContextIDs != nil || tr.Operation == OpPop || tr.Operation == OpMatch {
@@ -223,6 +228,7 @@ func buildTransition[TToken, TNodeKind comparable](
 	term gTerminal[TToken, TNodeKind],
 	nameHint syntaxa.GrammarLabel,
 	rules map[syntaxa.GrammarLabel]*syntaxa.Grammar[TToken, TNodeKind],
+	analysis *syntaxa.GrammarAnalysis[TToken],
 	tokenHash func(TToken) uint64,
 	hasher *hash.XXH3Hasher,
 	ctxByKey map[uint64]*Context,
@@ -235,10 +241,10 @@ func buildTransition[TToken, TNodeKind comparable](
 	isZeroOrMore, _ := outerFrameKind(term)
 
 	if term.nestNode != nil {
-		return buildNestTransition(term, isZeroOrMore, rules, tokenHash, hasher, ctxByKey, transitionsByID, metaByID, nestBodyIDs, queue, inheritedSyncs)
+		return buildNestTransition(term, isZeroOrMore, rules, analysis, tokenHash, hasher, ctxByKey, transitionsByID, metaByID, nestBodyIDs, queue, inheritedSyncs)
 	}
 
-	return buildStandardTransition(term, nameHint, isZeroOrMore, rules, tokenHash, hasher, ctxByKey, metaByID, queue, inheritedSyncs)
+	return buildStandardTransition(term, nameHint, isZeroOrMore, rules, analysis, tokenHash, hasher, ctxByKey, metaByID, queue, inheritedSyncs)
 }
 
 func getOrCreateContext[TToken, TNodeKind comparable](
@@ -306,6 +312,7 @@ func sanitizeForLabel(s string) string {
 func getOrCreateNestBody[TToken, TNodeKind comparable](
 	nestNode *syntaxa.Grammar[TToken, TNodeKind],
 	rules map[syntaxa.GrammarLabel]*syntaxa.Grammar[TToken, TNodeKind],
+	analysis *syntaxa.GrammarAnalysis[TToken],
 	tokenHash func(TToken) uint64,
 	hasher *hash.XXH3Hasher,
 	ctxByKey map[uint64]*Context,
@@ -341,7 +348,7 @@ func getOrCreateNestBody[TToken, TNodeKind comparable](
 
 	closeTokenNode := &syntaxa.Grammar[TToken, TNodeKind]{Kind: syntaxa.GToken, Token: *nestNode.CloseToken}
 	bodyAndClose := []*syntaxa.Grammar[TToken, TNodeKind]{nestNode.Children[0], closeTokenNode}
-	bodyTerminals, _ := lookaheadConcat(bodyAndClose, rules, make(visiting))
+	bodyTerminals, _ := lookaheadConcat(nil, bodyAndClose, rules, make(visiting), analysis)
 
 	propagatePopOffset(bodyTerminals, 1)
 
@@ -366,6 +373,7 @@ func buildNestTransition[TToken, TNodeKind comparable](
 	term gTerminal[TToken, TNodeKind],
 	isZeroOrMore bool,
 	rules map[syntaxa.GrammarLabel]*syntaxa.Grammar[TToken, TNodeKind],
+	analysis *syntaxa.GrammarAnalysis[TToken],
 	tokenHash func(TToken) uint64,
 	hasher *hash.XXH3Hasher,
 	ctxByKey map[uint64]*Context,
@@ -375,11 +383,11 @@ func buildNestTransition[TToken, TNodeKind comparable](
 	queue *[]pendingEntry[TToken, TNodeKind],
 	inheritedSyncs []TToken,
 ) Transition[TToken, TNodeKind] {
-	bodyCtx := getOrCreateNestBody(term.nestNode, rules, tokenHash, hasher, ctxByKey, metaByID, queue, nestBodyIDs, inheritedSyncs)
+	bodyCtx := getOrCreateNestBody(term.nestNode, rules, analysis, tokenHash, hasher, ctxByKey, metaByID, queue, nestBodyIDs, inheritedSyncs)
 	ownerLabel := owningRule(term)
 	nestHint := term.nestNode.GrammarLabel
 	noNest := gTerminal[TToken, TNodeKind]{token: term.token, nodeKind: term.nodeKind, remaining: term.remaining, stack: term.stack, popOffset: term.popOffset}
-	advTerminals, isNullable := advanceTerminal(noNest, rules)
+	advTerminals, isNullable := advanceTerminal(noNest, rules, analysis)
 
 	op := OpSet
 	if isZeroOrMore {
@@ -422,6 +430,7 @@ func buildStandardTransition[TToken, TNodeKind comparable](
 	nameHint syntaxa.GrammarLabel,
 	isZeroOrMore bool,
 	rules map[syntaxa.GrammarLabel]*syntaxa.Grammar[TToken, TNodeKind],
+	analysis *syntaxa.GrammarAnalysis[TToken],
 	tokenHash func(TToken) uint64,
 	hasher *hash.XXH3Hasher,
 	ctxByKey map[uint64]*Context,
@@ -441,9 +450,9 @@ func buildStandardTransition[TToken, TNodeKind comparable](
 			stack:     term.stack[:len(term.stack)-1],
 			popOffset: term.popOffset,
 		}
-		advTerminals, isNullable = advanceTerminal(stripped, rules)
+		advTerminals, isNullable = advanceTerminal(stripped, rules, analysis)
 	} else {
-		advTerminals, isNullable = advanceTerminal(term, rules)
+		advTerminals, isNullable = advanceTerminal(term, rules, analysis)
 		propagatePopOffset(advTerminals, term.popOffset)
 	}
 
