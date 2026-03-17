@@ -314,8 +314,13 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 
 				if effectiveKind == syntaxa.FailureError && result.Kind == syntaxa.FailureNoMatch {
 					peeked := ctx.Token.Peek(0)
-					msg := fmt.Sprintf("expected %s", rule.GetExpectedLabel())
 
+					if inserted, fakeResult := r.tryFollowSetInsertion(ctx, rule, identity, peeked); inserted {
+						results[i] = fakeResult
+						continue
+					}
+
+					msg := fmt.Sprintf("expected %s", rule.GetExpectedLabel())
 					if lastLex, ok := ctx.GetLastConsumedLexeme(); ok {
 						ctx.Error.ReportAtEnd(string(identity.RuleName), lastLex, msg)
 					} else {
@@ -1077,14 +1082,15 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 				currentMarker := ctx.Token.PeekRaw(0).TokenNumber
 				effectiveKind := sequenceCommitmentFailureKind(startMarker, currentMarker, result.Kind)
 
-				// If we are committed but the child didn't report a hard error,
-				// we upgrade it and provide the child's label.
 				if effectiveKind == syntaxa.FailureError && result.Kind == syntaxa.FailureNoMatch {
 					peeked := ctx.Token.Peek(0)
-					msg := fmt.Sprintf("expected %s", rule.GetExpectedLabel())
 
-					// We use the engine's internal reporting logic via context
-					// to ensure it integrates with the current error frame.
+					if inserted, fakeResult := r.tryFollowSetInsertion(ctx, rule, identity, peeked); inserted {
+						results[i] = fakeResult
+						continue
+					}
+
+					msg := fmt.Sprintf("expected %s", rule.GetExpectedLabel())
 					if lastLex, ok := ctx.GetLastConsumedLexeme(); ok {
 						ctx.Error.ReportAtEnd(string(identity.RuleName), lastLex, msg)
 					} else {
@@ -1867,6 +1873,47 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 	}
 
 	return rule
+}
+
+/*
+tryFollowSetInsertion checks if the current lexer token is a mathematically valid
+continuation for the rule that just failed. If safe, it synthesizes a ghost result,
+reports the missing token, and returns true to keep the sequence alive.
+*/
+func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) tryFollowSetInsertion(
+	ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+	rule Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+	identity syntaxa.RuleIdentity,
+	peeked lexarch.Lexeme[TObservation, TToken, TTokenRole],
+) (bool, Result[TObservation, TToken, TTokenRole, TNodeKind]) {
+	analysis := ctx.GetAnalysis()
+	if analysis == nil || rule.GetGrammar() == nil || rule.GetGrammar().NodePath == nil {
+		return false, Result[TObservation, TToken, TTokenRole, TNodeKind]{}
+	}
+
+	ruleKey := syntaxa.NodeKeyFromPath(*rule.GetGrammar().NodePath)
+
+	// If the actual token is NOT in the follow set, insertion is unsafe (leads to loops).
+	if _, safe := analysis.Follow[ruleKey][peeked.Token]; !safe {
+		return false, Result[TObservation, TToken, TTokenRole, TNodeKind]{}
+	}
+
+	// 1. Report the error (Token is missing)
+	msg := fmt.Sprintf("missing %s", rule.GetExpectedLabel())
+	if lastLex, ok := ctx.GetLastConsumedLexeme(); ok {
+		ctx.Error.ReportAtEnd(string(identity.RuleName), lastLex, msg)
+	} else {
+		ctx.Error.ReportAt(string(identity.RuleName), peeked, msg)
+	}
+
+	// 2. Synthesize the ghost node if required
+	var fakeNode *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind]
+	if rule.GetContract().MustReturnNode {
+		var zeroKind TNodeKind
+		fakeNode = ctx.Editor.NewTransientNode(zeroKind)
+	}
+
+	return true, r.sharedCore.buildSuccessRuleResult(fakeNode)
 }
 
 // ------------------------------------------------------------- RULEBUILDER
