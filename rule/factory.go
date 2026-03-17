@@ -301,10 +301,7 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 	mustConsume := r.listCoreMustConsume(rules)
 	grammar := r.buildConcatGrammarFromRules(grammarID, rules)
 
-	exec := func(ctx *syntaxa.ExecRuleContext[
-		TObservation, TToken, TTokenRole, TLexerState, TNodeKind,
-	]) Result[TObservation, TToken, TTokenRole, TNodeKind] {
-
+	exec := func(ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) Result[TObservation, TToken, TTokenRole, TNodeKind] {
 		results := make([]Result[TObservation, TToken, TTokenRole, TNodeKind], len(rules))
 		startMarker := ctx.Token.PeekRaw(0).TokenNumber
 
@@ -314,12 +311,23 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 			if result.Failed() {
 				currentMarker := ctx.Token.PeekRaw(0).TokenNumber
 				effectiveKind := sequenceCommitmentFailureKind(startMarker, currentMarker, result.Kind)
+
+				if effectiveKind == syntaxa.FailureError && result.Kind == syntaxa.FailureNoMatch {
+					peeked := ctx.Token.Peek(0)
+					msg := fmt.Sprintf("expected %s", rule.GetExpectedLabel())
+
+					if lastLex, ok := ctx.GetLastConsumedLexeme(); ok {
+						ctx.Error.ReportAtEnd(string(identity.RuleName), lastLex, msg)
+					} else {
+						ctx.Error.ReportAt(string(identity.RuleName), peeked, msg)
+					}
+				}
+
 				return r.sharedCore.buildFailureRuleResult(nil, effectiveKind)
 			}
 			results[i] = result
 		}
 
-		// Create a transient node to hold the fragment children
 		var zeroKind TNodeKind
 		fragmentNode := ctx.Editor.NewTransientNode(zeroKind)
 		r.attachResultsToNode(ctx, fragmentNode, results)
@@ -327,14 +335,7 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 		return r.sharedCore.buildFragmentRuleResult(fragmentNode)
 	}
 
-	return r.sharedCore.constructRule(
-		identity,
-		r.sharedCore.createContract(mustConsume, false),
-		exec,
-		nil,
-		nil,
-		grammar,
-	)
+	return r.sharedCore.constructRule(identity, r.sharedCore.createContract(mustConsume, false), exec, nil, nil, grammar)
 }
 
 /*
@@ -422,60 +423,59 @@ func (t *tokenEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 	for {
 		peek := ctx.Token.Peek(0)
 
-		// ------------------------------
-		// NORMAL CLOSE (no trailing)
-		// ------------------------------
 		if peek.Token == listEndToken {
-
 			if mode == TrailingRequired {
-				ctx.Error.ReportAtEnd(string(name), elem, "missing required trailing separator")
-				return t.sharedCore.buildFailureRuleResult(nil, syntaxa.FailureError)
+				return t.reportSpecificError(ctx, name, "missing required trailing separator", syntaxa.FailureError)
 			}
-
 			ctx.Token.Consume()
 			return t.sharedCore.buildSuccessRuleResult(parentNode)
 		}
 
-		// ------------------------------
-		// EXPECT SEPARATOR
-		// ------------------------------
+		// Handle missing separator: if we see another element immediately
 		if peek.Token == elementToken {
-			ctx.Error.ReportAtEnd(
-				string(name),
-				elem,
-				fmt.Sprintf("missing %s between list elements", t.sharedCore.tokenFormatter(separatorToken)),
-			)
-			return t.sharedCore.buildFailureRuleResult(nil, syntaxa.FailureError)
+			msg := fmt.Sprintf("expected %s between elements", t.sharedCore.tokenFormatter(separatorToken))
+			return t.reportSpecificError(ctx, name, msg, syntaxa.FailureError)
 		}
 
-		sep := ctx.Token.Consume()
+		// Consume separator
+		if peek.Token != separatorToken {
+			msg := fmt.Sprintf("expected %s or %s",
+				t.sharedCore.tokenFormatter(separatorToken),
+				t.sharedCore.tokenFormatter(listEndToken))
+			return t.reportSpecificError(ctx, name, msg, syntaxa.FailureError)
+		}
+		ctx.Token.Consume()
 
+		// Handle trailing check
 		next := ctx.Token.Peek(0)
-
-		// ------------------------------
-		// TRAILING SEPARATOR CASE
-		// ------------------------------
 		if next.Token == listEndToken {
-
 			if mode == TrailingForbidden {
-				ctx.Error.ReportAt(string(name), sep, "trailing separator not allowed")
-				return t.sharedCore.buildFailureRuleResult(nil, syntaxa.FailureError)
+				return t.reportSpecificError(ctx, name, "trailing separator not allowed", syntaxa.FailureError)
 			}
-
 			ctx.Token.Consume()
 			return t.sharedCore.buildSuccessRuleResult(parentNode)
 		}
 
-		// ------------------------------
-		// NEXT ELEMENT
-		// ------------------------------
+		// Expect next element
 		if next.Token != elementToken {
-			return t.reportMismatch(ctx, name, next, elementToken)
+			msg := fmt.Sprintf("expected %s after separator", t.sharedCore.tokenFormatter(elementToken))
+			return t.reportSpecificError(ctx, name, msg, syntaxa.FailureError)
 		}
 
-		elem = ctx.Token.Consume()
+		elem := ctx.Token.Consume()
 		t.addChildElement(ctx, parentNode, elementNodeKind, elem)
 	}
+}
+
+func (t *tokenEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) reportSpecificError(
+	ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+	name syntaxa.RuleLabel,
+	msg string,
+	kind syntaxa.FailureKind,
+) Result[TObservation, TToken, TTokenRole, TNodeKind] {
+	peek := ctx.Token.Peek(0)
+	ctx.Error.ReportAt(string(name), peek, msg)
+	return t.sharedCore.buildFailureRuleResult(nil, kind)
 }
 
 /*
@@ -852,21 +852,10 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 	}
 	identity := r.sharedCore.createRuleIdentity(name, grammarID, expectedLabel)
 
-	// ---------------------------
-	// Build grammar IR
-	// ---------------------------
-
 	grammar := r.buildConcatGrammarFromRules(grammarID, rules)
-
-	// ---------------------------
-	// Runtime execution
-	// ---------------------------
-
 	grammar.OutputNodeKind = &nodeKind
-	exec := func(ctx *syntaxa.ExecRuleContext[
-		TObservation, TToken, TTokenRole, TLexerState, TNodeKind,
-	]) Result[TObservation, TToken, TTokenRole, TNodeKind] {
 
+	exec := func(ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) Result[TObservation, TToken, TTokenRole, TNodeKind] {
 		node := ctx.Editor.NewNode(nodeKind)
 		isCommitted := false
 
@@ -874,11 +863,21 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 			result := ctx.ExecuteRule(rule, syntaxa.ExecutionNormal)
 
 			if result.Failed() {
+				if isCommitted && result.Kind == syntaxa.FailureNoMatch {
+					peeked := ctx.Token.Peek(0)
+					msg := fmt.Sprintf("expected %s", rule.GetExpectedLabel())
+
+					if lastLex, ok := ctx.GetLastConsumedLexeme(); ok {
+						ctx.Error.ReportAtEnd(string(identity.RuleName), lastLex, msg)
+					} else {
+						ctx.Error.ReportAt(string(identity.RuleName), peeked, msg)
+					}
+				}
+
 				return r.handleRootFailure(node, result, isCommitted)
 			}
 
 			ctx.Editor.AttachResult(node, result)
-
 			isCommitted = true
 		}
 
@@ -941,13 +940,7 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 	rules ...Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 ) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
 	name := r.sharedCore.createRuleName("Sequence", grammarID)
-	var expectedLabel string
-	if len(rules) > 0 {
-		expectedLabel = r.expectedLabelFromRule(rules[0])
-	} else {
-		expectedLabel = string(grammarID)
-	}
-	identity := r.sharedCore.createRuleIdentity(name, grammarID, expectedLabel)
+	identity := r.sharedCore.createRuleIdentity(name, grammarID, r.expectedLabelFromRule(rules[0]))
 	return r.listCore(identity, nodeKind, nil, rules...)
 }
 
@@ -1069,26 +1062,12 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 	recovery []TToken,
 	rules ...Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 ) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
-
 	mustConsume := r.listCoreMustConsume(rules)
-
-	// ---------------------------
-	// Build grammar IR
-	// ---------------------------
-
 	grammar := r.buildConcatGrammarFromRules(identity.GrammarLabel, rules)
-
-	// ---------------------------
-	// Runtime execution
-	// ---------------------------
-
 	grammar.OutputNodeKind = &nodeKind
-	exec := func(ctx *syntaxa.ExecRuleContext[
-		TObservation, TToken, TTokenRole, TLexerState, TNodeKind,
-	]) Result[TObservation, TToken, TTokenRole, TNodeKind] {
 
+	exec := func(ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) Result[TObservation, TToken, TTokenRole, TNodeKind] {
 		results := make([]Result[TObservation, TToken, TTokenRole, TNodeKind], len(rules))
-
 		startMarker := ctx.Token.PeekRaw(0).TokenNumber
 
 		for i, rule := range rules {
@@ -1098,41 +1077,32 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 				currentMarker := ctx.Token.PeekRaw(0).TokenNumber
 				effectiveKind := sequenceCommitmentFailureKind(startMarker, currentMarker, result.Kind)
 
-				if effectiveKind == syntaxa.FailureError && result.Kind != syntaxa.FailureError {
+				// If we are committed but the child didn't report a hard error,
+				// we upgrade it and provide the child's label.
+				if effectiveKind == syntaxa.FailureError && result.Kind == syntaxa.FailureNoMatch {
 					peeked := ctx.Token.Peek(0)
-					msg := fmt.Sprintf(
-						"unexpected %s, expected '%s'",
-						r.sharedCore.tokenFormatter(peeked.Token),
-						rule.GetExpectedLabel(),
-					)
+					msg := fmt.Sprintf("expected %s", rule.GetExpectedLabel())
 
+					// We use the engine's internal reporting logic via context
+					// to ensure it integrates with the current error frame.
 					if lastLex, ok := ctx.GetLastConsumedLexeme(); ok {
-						ctx.Error.ReportAtEnd(string(rule.GetName()), lastLex, msg)
+						ctx.Error.ReportAtEnd(string(identity.RuleName), lastLex, msg)
 					} else {
-						ctx.Error.ReportAt(string(rule.GetName()), peeked, msg)
+						ctx.Error.ReportAt(string(identity.RuleName), peeked, msg)
 					}
 				}
 
 				return r.sharedCore.buildFailureRuleResult(nil, effectiveKind)
 			}
-
 			results[i] = result
 		}
 
 		node := ctx.Editor.NewNode(nodeKind)
 		r.attachResultsToNode(ctx, node, results)
-
 		return r.sharedCore.buildSuccessRuleResult(node)
 	}
 
-	return r.sharedCore.constructRule(
-		identity,
-		r.sharedCore.createContract(mustConsume, true),
-		exec,
-		recovery,
-		nil,
-		grammar,
-	)
+	return r.sharedCore.constructRule(identity, r.sharedCore.createContract(mustConsume, true), exec, recovery, nil, grammar)
 }
 
 /*
