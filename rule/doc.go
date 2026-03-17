@@ -1,7 +1,8 @@
 // Package rule provides a rule factory and combinators for building syntaxa parser rules.
 //
-// It extends the syntaxa core (which does not ship concrete rule implementations) with
-// predefined, composable rule builders. Use this package for common grammar patterns:
+// It extends the syntaxa core (top-down recursive engine; no LR or other bottom-up)
+// with predefined, composable rule builders for PEG-, LL(k)-, and Pratt-style parsing.
+// Use this package for common grammar patterns:
 // token expectations, sequences, lists, optional/alternation, repetition, nesting, and
 // Pratt-style expression parsing.
 //

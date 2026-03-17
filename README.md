@@ -1,10 +1,10 @@
 # Syntaxa
 
-Generic, grammar-agnostic parsing engine for building lossless syntax trees (LSTs) from token streams with transactional execution, error recovery, and grammar introspection.
+Generic parsing engine for building lossless syntax trees (LSTs) from token streams with transactional execution, error recovery, and grammar introspection. The core is **highly flexible but not paradigm-agnostic**: it uses **top-down recursive parsing**, so depending on rule factories it can handle PEG, LL(k), Pratt, and similar approaches, but it does **not** support LR or other bottom-up paradigms.
 
 ## Overview
 
-Syntaxa provides a parsing runtime that executes **parser rules** over a token stream and builds a **lossless syntax tree (LST)**. It does not impose a specific parsing paradigm (LL, LR, PEG, etc.); instead, you supply rules built from a small **grammar IR** (Token, Concat, Choice, Repeat, Optional, Nest) and the engine handles transactional execution, rollback on failure, centralized error reporting, and recovery at configurable sync points.
+Syntaxa provides a parsing runtime that executes **parser rules** over a token stream and builds a **lossless syntax tree (LST)**. You supply rules built from a small **grammar IR** (Token, Concat, Choice, Repeat, Optional, Nest); the engine is top-down recursive—with appropriate rule factories it can express PEG-, LL(k)-, or Pratt-style parsing, but not LR or other bottom-up paradigms. The engine handles transactional execution, rollback on failure, centralized error reporting, and recovery at configurable sync points.
 
 **LST (lossless syntax tree)**: The tree shape is driven by semantic node creation; tokens and spans are preserved for tooling and diffing. The tree is grammar-informed but must not be "grammar-shaped"—no nodes that exist only due to combinators (use transparent rules for structural grouping). See **Node Creation Policy** below.
 

@@ -109,9 +109,10 @@ Only named, context-boundary rules need to be registered here.
 type RuleRegistry[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable] map[GrammarLabel]ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 
 /*
-SyntaxaParser is a grammar-agnostic parsing engine.
+SyntaxaParser is a generic parsing engine using top-down recursive parsing.
 
-It imposes no parsing paradigm (LL, LR, Pratt, PEG, etc.).
+It is highly flexible but not paradigm-agnostic: rule factories can provide PEG-, LL(k)-,
+or Pratt-style behaviour; LR and other bottom-up paradigms are not supported.
 
 Responsibilities:
   - transactional rule execution
