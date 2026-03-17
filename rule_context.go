@@ -134,18 +134,22 @@ Used only by performRecovery so recovery stops at any token that any enclosing r
 func (rc *recoveryCore[_, TToken, _]) currentRecoveryAllFrames() tokenSet[TToken] {
 	merged := make(tokenSet[TToken])
 
+	// 1. Always include defaults (EOF)
+	for t := range rc.defaultRecovery {
+		merged[t] = struct{}{}
+	}
+
+	// 2. Aggregate from top to bottom
 	for i := len(rc.stack) - 1; i >= 0; i-- {
 		frame := rc.stack[i]
 		for t := range frame.tokens {
 			merged[t] = struct{}{}
 		}
+		// 3. A barrier stops us from looking further "up",
+		// but we keep what we've collected so far.
 		if frame.barrier {
-			return merged
+			break
 		}
-	}
-
-	for t := range rc.defaultRecovery {
-		merged[t] = struct{}{}
 	}
 
 	return merged

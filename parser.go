@@ -88,6 +88,11 @@ type ParseTraceEvent[TToken any] struct {
 	Consumed      bool
 	NodeReturned  bool
 	RuleName      RuleLabel
+
+	RecoveryAttempted bool
+	Recovered         bool
+	LandedOnOurs      bool
+	RecoveryTokenSet  []TToken
 }
 
 type ParseTrace[TToken any] struct {
@@ -314,103 +319,136 @@ func syntaxaParserExecuteRule[
 ) RuleResult[TObservation, TToken, TTokenRole, TNodeKind] {
 	startSnap := ctx.save()
 	startPos := startSnap.tokenIndex
-
 	startLSTNodeCreationIdx := len(ctx.Editor.created)
 
 	lexemePreRule := ctx.Token.Peek(0)
 	lexemePreRuleRaw := ctx.Token.PeekRaw(0)
 
-	// Recovery scope for this construct: INHERIT FROM PROXIES
 	if mode == ExecutionNormal {
 		inheritedTokens := getInheritedRecoveryTokens(parser, rule)
-
 		ctx.Recovery.pushRecovery(rule.IsRecoveryBarrier(), inheritedTokens...)
 		defer ctx.Recovery.popRecovery()
 	}
 
-	// === Error frame for THIS construct ===
 	ctx.Error.sink.pushFrame()
-
 	ruleResult := rule.executionFn(ctx)
 
-	endPos := ctx.save().tokenIndex
-	success := ruleResult.Succeeded
+	var recoveryAttempted, recovered, landedOnOurs bool
+	var recoveryTokenSet []TToken
+
+	if !ruleResult.Succeeded {
+		ctx.Editor.created = ctx.Editor.created[:startLSTNodeCreationIdx]
+		ruleResult, recoveryAttempted, recovered, landedOnOurs, recoveryTokenSet = handleFailureState(ctx, parser, rule, ruleResult, startSnap, mode, lexemePreRule)
+	} else {
+		ctx.Error.sink.popFrame(true)
+		if err := validateRuleSuccess(parser, rule, ruleResult, startPos, ctx.save().tokenIndex, lexemePreRule); err != nil {
+			panic(err)
+		}
+		processPostRuleHooks(parser, ctx, rule, startLSTNodeCreationIdx)
+	}
 
 	if ctx.trace != nil {
 		ctx.trace.Events = append(ctx.trace.Events, ParseTraceEvent[TToken]{
-			Cursor:        startPos,
-			RawToken:      lexemePreRuleRaw.Token,
-			LogicalToken:  lexemePreRule.Token,
-			RuleSucceeded: success,
-			Consumed:      endPos != startPos,
-			NodeReturned:  ruleResult.Node != nil,
-			RuleName:      rule.identity.RuleName,
+			Cursor:            startPos,
+			RawToken:          lexemePreRuleRaw.Token,
+			LogicalToken:      lexemePreRule.Token,
+			RuleSucceeded:     ruleResult.Succeeded,
+			Consumed:          ctx.save().tokenIndex != startPos,
+			NodeReturned:      ruleResult.Node != nil,
+			RuleName:          rule.identity.RuleName,
+			RecoveryAttempted: recoveryAttempted,
+			Recovered:         recovered,
+			LandedOnOurs:      landedOnOurs,
+			RecoveryTokenSet:  recoveryTokenSet,
 		})
 	}
 
-	if !success {
-		ctx.Editor.created = ctx.Editor.created[:startLSTNodeCreationIdx]
+	return ruleResult
+}
 
-		if mode == ExecutionNormal {
-			if ruleResult.Kind == FailureError {
-				isProgramRule := rule.GetGrammarLabel() == parser.programRule.GetGrammarLabel()
-				if !isProgramRule && !ctx.Recovery.IsRecoveryToken(lexemePreRule.Token) {
-					wouldBeEmpty := ctx.Error.sink.currentFrameWouldBeEmptyOnPop()
-					bestPos, ok := ctx.Error.sink.currentBestPosition()
-					if wouldBeEmpty || (ok && bestPos == startPos) {
-						ctx.Error.replaceBestErrorAt(
-							string(rule.GetName()),
-							lexemePreRule,
-							fmt.Sprintf(
-								"unexpected %v, expected '%s'",
-								lexemePreRule.Token,
-								rule.identity.ExpectedLabel,
-							),
-						)
-					}
-				}
+func handleFailureState[
+	TObservation cmp.Ordered,
+	TToken,
+	TTokenRole,
+	TNodeKind,
+	TLexerState comparable,
+](
+	ctx *ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+	parser *SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
+	rule ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+	result RuleResult[TObservation, TToken, TTokenRole, TNodeKind],
+	startSnap ParserSnapshot[TObservation, TLexerState],
+	mode RuleExecutionMode,
+	lexemePreRule lexarch.Lexeme[TObservation, TToken, TTokenRole],
+) (RuleResult[TObservation, TToken, TTokenRole, TNodeKind], bool, bool, bool, []TToken) {
 
-				ctx.Error.sink.popFrame(true)
+	if mode != ExecutionNormal || result.Kind != FailureError {
+		ctx.restore(startSnap)
+		ctx.Error.sink.popFrame(false)
+		return result, false, false, false, nil
+	}
 
-				ctx.Error.sink.pushFrame()
-				recovered, landedOnOurs := performRecovery(ctx, parser, parser.eofToken, rule)
-				ctx.Error.sink.popFrame(false)
+	recoveryAttempted := true
+	isProgramRule := rule.GetGrammarLabel() == parser.programRule.GetGrammarLabel()
 
-				if recovered {
-					ruleResult.ConsumeSyncToken = landedOnOurs && !ruleHasNoConsumeToken(parser, rule, ctx.Token.PeekRaw(0).Token)
-					if ruleResult.ConsumeSyncToken {
-						ctx.Token.ConsumeRaw()
-					}
-				}
-			} else {
-				ctx.restore(startSnap)
-				ctx.Error.sink.popFrame(false)
-			}
-		} else {
-			ctx.restore(startSnap)
-			ctx.Error.sink.popFrame(false)
+	if !isProgramRule && !ctx.Recovery.IsRecoveryToken(lexemePreRule.Token) {
+		wouldBeEmpty := ctx.Error.sink.currentFrameWouldBeEmptyOnPop()
+		bestPos, ok := ctx.Error.sink.currentBestPosition()
+		if wouldBeEmpty || (ok && bestPos == startSnap.tokenIndex) {
+			ctx.Error.replaceBestErrorAt(
+				string(rule.GetName()),
+				lexemePreRule,
+				fmt.Sprintf("unexpected %v, expected '%s'", lexemePreRule.Token, rule.identity.ExpectedLabel),
+			)
 		}
-
-		return ruleResult
 	}
 
 	ctx.Error.sink.popFrame(true)
+	ctx.Error.sink.pushFrame()
 
-	if err := validateRuleSuccess(parser, rule, ruleResult, startPos, endPos, lexemePreRule); err != nil {
-		panic(err)
-	}
+	recovered, landedOnOurs, recoveryTokenSet := performRecovery(ctx, parser, parser.eofToken, rule)
+	ctx.Error.sink.popFrame(false)
 
-	newNodes := ctx.Editor.created[startLSTNodeCreationIdx:]
-	if parser.postProcessor != nil {
-		for _, node := range newNodes {
-			if !node.postProcessed {
-				parser.postProcessor(node, ctx.Finalization, rule.identity)
-				node.postProcessed = true
-			}
+	if recovered {
+		result.ConsumeSyncToken = landedOnOurs && !ruleHasNoConsumeToken(parser, rule, ctx.Token.PeekRaw(0).Token)
+		if result.ConsumeSyncToken {
+			ctx.Token.ConsumeRaw()
+		}
+
+		if landedOnOurs && rule.IsRecoveryBarrier() {
+			errorNode := ctx.Editor.NewNode(parser.errorNodeKind)
+
+			result.Succeeded = true
+			result.Node = errorNode
 		}
 	}
 
-	return ruleResult
+	return result, recoveryAttempted, recovered, landedOnOurs, recoveryTokenSet
+}
+
+func processPostRuleHooks[
+	TObservation cmp.Ordered,
+	TToken,
+	TTokenRole,
+	TNodeKind,
+	TLexerState comparable,
+](
+	parser *SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
+	ctx *ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+	rule ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+	startLSTNodeCreationIdx int,
+) {
+	if parser.postProcessor == nil {
+		return
+	}
+
+	newNodes := ctx.Editor.created[startLSTNodeCreationIdx:]
+	for _, node := range newNodes {
+		if !node.postProcessed {
+			parser.postProcessor(node, ctx.Finalization, rule.identity)
+			node.postProcessed = true
+		}
+	}
 }
 
 func performRecovery[
@@ -424,19 +462,23 @@ func performRecovery[
 	parser *SyntaxaParser[TObs, TToken, TTokenRole, TKind, TLexerState],
 	eof TToken,
 	recoveryFromRule ParserRule[TObs, TToken, TTokenRole, TLexerState, TKind],
-) (recovered bool, landedOnCurrentRule bool) {
+) (recovered bool, landedOnCurrentRule bool, recoveryTokenSet []TToken) {
 	syncSet := ctx.Recovery.currentRecoveryAllFrames()
+
+	for token := range syncSet {
+		recoveryTokenSet = append(recoveryTokenSet, token)
+	}
 
 	for {
 		cur := ctx.Token.PeekRaw(0)
 
 		if cur.Token == eof {
-			return false, false
+			return false, false, recoveryTokenSet
 		}
 
 		if _, ok := syncSet[cur.Token]; ok {
 			landedOnCurrentRule = ruleOwnsSyncToken(parser, recoveryFromRule, cur.Token)
-			return true, landedOnCurrentRule
+			return true, landedOnCurrentRule, recoveryTokenSet
 		}
 
 		ctx.Token.ConsumeRaw()

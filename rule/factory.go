@@ -978,7 +978,7 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 		expectedLabel = string(grammarID)
 	}
 	identity := r.sharedCore.createRuleIdentity(name, grammarID, expectedLabel)
-	return r.listCore(identity, nodeKind, []TToken{blockEndToken}, rules...).WithRecoveryBarrier()
+	return r.listCore(identity, nodeKind, []TToken{blockEndToken}, rules...)
 }
 
 /*
@@ -1102,7 +1102,7 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 		return r.sharedCore.buildSuccessRuleResult(node)
 	}
 
-	return r.sharedCore.constructRule(identity, r.sharedCore.createContract(mustConsume, true), exec, recovery, nil, grammar)
+	return r.sharedCore.constructRule(identity, r.sharedCore.createContract(mustConsume, true), exec, recovery, nil, grammar).WithRecoveryBarrier()
 }
 
 /*
