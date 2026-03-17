@@ -159,7 +159,7 @@ func buildAlphabetAndIndexer[TToken comparable](
 }
 
 func compileFallbackNPDA[TToken comparable, TOutcome any](
-	cfg *pattern.Grammar[TToken],
+	cfg *pattern.Grammar[TToken, struct{}],
 	allocFn memarch.AllocationFn,
 	alphabet []autarch.SymbolDefinition[TToken],
 	indexer autarch.SymbolIndexer[TToken],

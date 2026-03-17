@@ -24,7 +24,7 @@ func ToPatternGrammar[TToken, TNodeKind comparable](
 	root *syntaxa.Grammar[TToken, TNodeKind],
 	additionalRules []*syntaxa.Grammar[TToken, TNodeKind],
 	rules map[syntaxa.GrammarLabel]*syntaxa.Grammar[TToken, TNodeKind],
-) (*pattern.Grammar[TToken], map[string]syntaxa.NodeKey, map[string]syntaxa.RecoverySpec[TToken]) {
+) (*pattern.Grammar[TToken, struct{}], map[string]syntaxa.NodeKey, map[string]syntaxa.RecoverySpec[TToken]) {
 	if root == nil {
 		return nil, nil, nil
 	}
@@ -55,9 +55,9 @@ func ToPatternGrammar[TToken, TNodeKind comparable](
 		}
 	}
 
-	cfg := &pattern.Grammar[TToken]{
+	cfg := &pattern.Grammar[TToken, struct{}]{
 		StartSymbol: pathToRuleName[*root.NodePath],
-		Rules:       make(map[string]*pattern.Rule[TToken]),
+		Rules:       make(map[string]*pattern.Rule[TToken, struct{}]),
 	}
 
 	for _, g := range order {
@@ -145,17 +145,17 @@ func syntaxaNodeToContextaRule[TToken, TNodeKind comparable](
 	g *syntaxa.Grammar[TToken, TNodeKind],
 	rules map[syntaxa.GrammarLabel]*syntaxa.Grammar[TToken, TNodeKind],
 	pathToRuleName map[syntaxa.NodePath]string,
-) *pattern.Rule[TToken] {
-	rule := &pattern.Rule[TToken]{NonTerminal: pathToRuleName[*g.NodePath], Productions: nil}
+) *pattern.Rule[TToken, struct{}] {
+	rule := &pattern.Rule[TToken, struct{}]{NonTerminal: pathToRuleName[*g.NodePath], Productions: nil}
 
 	switch g.Kind {
 	case syntaxa.GToken:
-		rule.Productions = []pattern.Production[TToken]{
-			{Symbols: []pattern.Symbol[TToken]{{Type: pattern.SYMBOL_TERMINAL, Token: g.Token}}},
+		rule.Productions = []pattern.Production[TToken, struct{}]{
+			{Symbols: []pattern.Symbol[TToken, struct{}]{{Type: pattern.SYMBOL_TERMINAL, Token: g.Token}}},
 		}
 	case syntaxa.GEpsilon:
-		rule.Productions = []pattern.Production[TToken]{
-			{Symbols: []pattern.Symbol[TToken]{{Type: pattern.SYMBOL_EPSILON}}},
+		rule.Productions = []pattern.Production[TToken, struct{}]{
+			{Symbols: []pattern.Symbol[TToken, struct{}]{{Type: pattern.SYMBOL_EPSILON}}},
 		}
 	case syntaxa.GReference:
 		target := g.ResolvedReference
@@ -163,83 +163,83 @@ func syntaxaNodeToContextaRule[TToken, TNodeKind comparable](
 			target = rules[g.ReferenceTarget]
 		}
 		if target != nil && target.NodePath != nil {
-			rule.Productions = []pattern.Production[TToken]{
-				{Symbols: []pattern.Symbol[TToken]{{Type: pattern.SYMBOL_NON_TERMINAL, Name: pathToRuleName[*target.NodePath]}}},
+			rule.Productions = []pattern.Production[TToken, struct{}]{
+				{Symbols: []pattern.Symbol[TToken, struct{}]{{Type: pattern.SYMBOL_NON_TERMINAL, Name: pathToRuleName[*target.NodePath]}}},
 			}
 		} else {
-			rule.Productions = []pattern.Production[TToken]{
-				{Symbols: []pattern.Symbol[TToken]{{Type: pattern.SYMBOL_EPSILON}}},
+			rule.Productions = []pattern.Production[TToken, struct{}]{
+				{Symbols: []pattern.Symbol[TToken, struct{}]{{Type: pattern.SYMBOL_EPSILON}}},
 			}
 		}
 	case syntaxa.GConcat:
-		syms := make([]pattern.Symbol[TToken], 0, len(g.Children))
+		syms := make([]pattern.Symbol[TToken, struct{}], 0, len(g.Children))
 		for _, c := range g.Children {
 			if c != nil && c.NodePath != nil {
-				syms = append(syms, pattern.Symbol[TToken]{Type: pattern.SYMBOL_NON_TERMINAL, Name: pathToRuleName[*c.NodePath]})
+				syms = append(syms, pattern.Symbol[TToken, struct{}]{Type: pattern.SYMBOL_NON_TERMINAL, Name: pathToRuleName[*c.NodePath]})
 			}
 		}
-		rule.Productions = []pattern.Production[TToken]{{Symbols: syms}}
+		rule.Productions = []pattern.Production[TToken, struct{}]{{Symbols: syms}}
 	case syntaxa.GChoice:
-		prods := make([]pattern.Production[TToken], 0, len(g.Children))
+		prods := make([]pattern.Production[TToken, struct{}], 0, len(g.Children))
 		for _, c := range g.Children {
 			if c != nil && c.NodePath != nil {
-				prods = append(prods, pattern.Production[TToken]{
-					Symbols: []pattern.Symbol[TToken]{{Type: pattern.SYMBOL_NON_TERMINAL, Name: pathToRuleName[*c.NodePath]}},
+				prods = append(prods, pattern.Production[TToken, struct{}]{
+					Symbols: []pattern.Symbol[TToken, struct{}]{{Type: pattern.SYMBOL_NON_TERMINAL, Name: pathToRuleName[*c.NodePath]}},
 				})
 			}
 		}
 		rule.Productions = prods
 	case syntaxa.GOptional:
 		if len(g.Children) == 0 || g.Children[0] == nil {
-			rule.Productions = []pattern.Production[TToken]{{Symbols: []pattern.Symbol[TToken]{{Type: pattern.SYMBOL_EPSILON}}}}
+			rule.Productions = []pattern.Production[TToken, struct{}]{{Symbols: []pattern.Symbol[TToken, struct{}]{{Type: pattern.SYMBOL_EPSILON}}}}
 		} else {
 			bodyPath := g.Children[0].NodePath
 			if bodyPath == nil {
-				rule.Productions = []pattern.Production[TToken]{{Symbols: []pattern.Symbol[TToken]{{Type: pattern.SYMBOL_EPSILON}}}}
+				rule.Productions = []pattern.Production[TToken, struct{}]{{Symbols: []pattern.Symbol[TToken, struct{}]{{Type: pattern.SYMBOL_EPSILON}}}}
 			} else {
-				rule.Productions = []pattern.Production[TToken]{
-					{Symbols: []pattern.Symbol[TToken]{{Type: pattern.SYMBOL_EPSILON}}},
-					{Symbols: []pattern.Symbol[TToken]{{Type: pattern.SYMBOL_NON_TERMINAL, Name: pathToRuleName[*bodyPath]}}},
+				rule.Productions = []pattern.Production[TToken, struct{}]{
+					{Symbols: []pattern.Symbol[TToken, struct{}]{{Type: pattern.SYMBOL_EPSILON}}},
+					{Symbols: []pattern.Symbol[TToken, struct{}]{{Type: pattern.SYMBOL_NON_TERMINAL, Name: pathToRuleName[*bodyPath]}}},
 				}
 			}
 		}
 	case syntaxa.GRepeat:
 		if len(g.Children) == 0 || g.Children[0] == nil {
-			rule.Productions = []pattern.Production[TToken]{{Symbols: []pattern.Symbol[TToken]{{Type: pattern.SYMBOL_EPSILON}}}}
+			rule.Productions = []pattern.Production[TToken, struct{}]{{Symbols: []pattern.Symbol[TToken, struct{}]{{Type: pattern.SYMBOL_EPSILON}}}}
 		} else {
 			bodyPath := g.Children[0].NodePath
 			selfPath := *g.NodePath
 			if bodyPath == nil {
-				rule.Productions = []pattern.Production[TToken]{{Symbols: []pattern.Symbol[TToken]{{Type: pattern.SYMBOL_EPSILON}}}}
+				rule.Productions = []pattern.Production[TToken, struct{}]{{Symbols: []pattern.Symbol[TToken, struct{}]{{Type: pattern.SYMBOL_EPSILON}}}}
 			} else if g.Min == 0 {
-				rule.Productions = []pattern.Production[TToken]{
-					{Symbols: []pattern.Symbol[TToken]{{Type: pattern.SYMBOL_EPSILON}}},
-					{Symbols: []pattern.Symbol[TToken]{
+				rule.Productions = []pattern.Production[TToken, struct{}]{
+					{Symbols: []pattern.Symbol[TToken, struct{}]{{Type: pattern.SYMBOL_EPSILON}}},
+					{Symbols: []pattern.Symbol[TToken, struct{}]{
 						{Type: pattern.SYMBOL_NON_TERMINAL, Name: pathToRuleName[*bodyPath]},
 						{Type: pattern.SYMBOL_NON_TERMINAL, Name: pathToRuleName[selfPath]},
 					}},
 				}
 			} else {
-				rule.Productions = []pattern.Production[TToken]{
-					{Symbols: []pattern.Symbol[TToken]{
+				rule.Productions = []pattern.Production[TToken, struct{}]{
+					{Symbols: []pattern.Symbol[TToken, struct{}]{
 						{Type: pattern.SYMBOL_NON_TERMINAL, Name: pathToRuleName[*bodyPath]},
 						{Type: pattern.SYMBOL_NON_TERMINAL, Name: pathToRuleName[selfPath]},
 					}},
-					{Symbols: []pattern.Symbol[TToken]{{Type: pattern.SYMBOL_NON_TERMINAL, Name: pathToRuleName[*bodyPath]}}},
+					{Symbols: []pattern.Symbol[TToken, struct{}]{{Type: pattern.SYMBOL_NON_TERMINAL, Name: pathToRuleName[*bodyPath]}}},
 				}
 			}
 		}
 	case syntaxa.GNest:
 		if g.OpenToken == nil || g.CloseToken == nil || len(g.Children) == 0 || g.Children[0] == nil {
-			rule.Productions = []pattern.Production[TToken]{{Symbols: []pattern.Symbol[TToken]{{Type: pattern.SYMBOL_EPSILON}}}}
+			rule.Productions = []pattern.Production[TToken, struct{}]{{Symbols: []pattern.Symbol[TToken, struct{}]{{Type: pattern.SYMBOL_EPSILON}}}}
 		} else {
 			bodyPath := g.Children[0].NodePath
 			if bodyPath == nil {
-				rule.Productions = []pattern.Production[TToken]{{Symbols: []pattern.Symbol[TToken]{{Type: pattern.SYMBOL_EPSILON}}}}
+				rule.Productions = []pattern.Production[TToken, struct{}]{{Symbols: []pattern.Symbol[TToken, struct{}]{{Type: pattern.SYMBOL_EPSILON}}}}
 			} else {
-				rule.Productions = []pattern.Production[TToken]{
+				rule.Productions = []pattern.Production[TToken, struct{}]{
 					{
-						Symbols: []pattern.Symbol[TToken]{
+						Symbols: []pattern.Symbol[TToken, struct{}]{
 							{Type: pattern.SYMBOL_TERMINAL, Token: *g.OpenToken},
 							{Type: pattern.SYMBOL_NON_TERMINAL, Name: pathToRuleName[*bodyPath]},
 							{Type: pattern.SYMBOL_TERMINAL, Token: *g.CloseToken},
@@ -249,7 +249,7 @@ func syntaxaNodeToContextaRule[TToken, TNodeKind comparable](
 			}
 		}
 	default:
-		rule.Productions = []pattern.Production[TToken]{{Symbols: []pattern.Symbol[TToken]{{Type: pattern.SYMBOL_EPSILON}}}}
+		rule.Productions = []pattern.Production[TToken, struct{}]{{Symbols: []pattern.Symbol[TToken, struct{}]{{Type: pattern.SYMBOL_EPSILON}}}}
 	}
 
 	return rule
