@@ -1265,6 +1265,98 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 }
 
 /*
+Repeat matches the inner rule between min and max times.
+If max is -1, it acts as NOrMore.
+*/
+func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) Repeat(
+	grammarID syntaxa.GrammarLabel,
+	nodeKind TNodeKind,
+	min, max int,
+	rule Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
+	return r.constructBoundedRepeatRule(
+		"Repeat", grammarID, min, max, rule, &nodeKind,
+		func(ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind] {
+			return ctx.Editor.NewNode(nodeKind)
+		},
+		func(container *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind]) Result[TObservation, TToken, TTokenRole, TNodeKind] {
+			return r.sharedCore.buildSuccessRuleResult(container)
+		},
+	)
+}
+
+/*
+TransparentRepeat matches the inner rule between min and max times, attaching fragments directly to the parent.
+*/
+func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) TransparentRepeat(
+	grammarID syntaxa.GrammarLabel,
+	min, max int,
+	rule Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
+	var zeroKind TNodeKind
+	return r.constructBoundedRepeatRule(
+		"TransparentRepeat", grammarID, min, max, rule, nil,
+		func(ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind] {
+			return ctx.Editor.NewTransientNode(zeroKind)
+		},
+		func(container *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind]) Result[TObservation, TToken, TTokenRole, TNodeKind] {
+			return r.sharedCore.buildFragmentRuleResult(container)
+		},
+	)
+}
+
+/*
+runBoundedRepetitionLoop executes a rule repeatedly until max is reached, FailureNoMatch occurs, or FailureError occurs with no progress.
+A max value of -1 indicates unbounded repetition.
+*/
+func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) runBoundedRepetitionLoop(
+	ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+	rule Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+	min, max int,
+	container *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind],
+) (count int, errResult Result[TObservation, TToken, TTokenRole, TNodeKind], hasError bool) {
+	for {
+		if max != -1 && count >= max {
+			return count, errResult, false
+		}
+
+		before := ctx.Token.PeekRaw(0)
+		result := ctx.ExecuteRule(rule, syntaxa.ExecutionNormal)
+
+		if result.Succeeded {
+			ctx.Editor.AttachResult(container, result)
+			count++
+			continue
+		}
+
+		return r.handleRepetitionFailure(ctx, result, before)
+	}
+}
+
+/*
+handleRepetitionFailure centralizes the switch statement for repetition loop failures to keep nesting shallow.
+*/
+func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) handleRepetitionFailure(
+	ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+	result Result[TObservation, TToken, TTokenRole, TNodeKind],
+	before lexarch.Lexeme[TObservation, TToken, TTokenRole],
+) (count int, errResult Result[TObservation, TToken, TTokenRole, TNodeKind], hasError bool) {
+	if result.Kind == syntaxa.FailureNoMatch {
+		return 0, errResult, false
+	}
+
+	after := ctx.Token.PeekRaw(0)
+	noProgress := before.TokenNumber == after.TokenNumber
+	leaveSyncForParent := !result.ConsumeSyncToken
+
+	if noProgress || leaveSyncForParent {
+		return 0, result, true
+	}
+
+	return 0, errResult, false
+}
+
+/*
 constructNOrMoreRule builds a repetition rule with the given container creation and success result builders.
 Shared by NOrMore and TransparentNOrMore to avoid duplicated grammar setup and loop handling.
 */
@@ -1297,6 +1389,59 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 		]) Result[TObservation, TToken, TTokenRole, TNodeKind] {
 			container := makeContainer(ctx)
 			count, errResult, hasError := r.runRepetitionLoop(ctx, rule, min, container)
+			if hasError {
+				return errResult
+			}
+			if count < min {
+				return r.sharedCore.buildFailureRuleResult(nil, syntaxa.FailureNoMatch)
+			}
+			return onSuccess(container)
+		},
+		rule.GetRecoveryTokens(),
+		nil,
+		grammar,
+	)
+}
+
+func validateBounds(min, max int, ruleName string) {
+	ensureMinNonNegative(min, ruleName)
+	if max != -1 && max < min {
+		panic(fmt.Sprintf("%s: max (%d) cannot be less than min (%d)", ruleName, max, min))
+	}
+}
+
+func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) constructBoundedRepeatRule(
+	ruleName string,
+	grammarID syntaxa.GrammarLabel,
+	min, max int,
+	rule Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+	outputNodeKind *TNodeKind,
+	makeContainer func(ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind],
+	onSuccess func(container *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind]) Result[TObservation, TToken, TTokenRole, TNodeKind],
+) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
+	validateBounds(min, max, ruleName)
+
+	var maxPtr *int
+	if max != -1 {
+		maxPtr = &max
+	}
+
+	grammar := syntaxa.Repeat(grammarID, rule.GetGrammar(), min, maxPtr)
+	syntaxa.MarkAsContextBoundary(grammar)
+	if outputNodeKind != nil {
+		grammar.OutputNodeKind = outputNodeKind
+	}
+
+	name := r.sharedCore.createRuleName(ruleName, grammarID)
+	identity := r.sharedCore.createRuleIdentity(name, grammarID, rule.GetExpectedLabel())
+	mustConsume := min > 0 && rule.GetContract().MustConsume
+
+	return r.sharedCore.constructRule(
+		identity,
+		r.sharedCore.createContract(mustConsume, true),
+		func(ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) Result[TObservation, TToken, TTokenRole, TNodeKind] {
+			container := makeContainer(ctx)
+			count, errResult, hasError := r.runBoundedRepetitionLoop(ctx, rule, min, max, container)
 			if hasError {
 				return errResult
 			}
