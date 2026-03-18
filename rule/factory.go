@@ -1329,7 +1329,7 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 			continue
 		}
 
-		return r.handleRepetitionFailure(ctx, result, before)
+		return r.handleRepetitionFailure(ctx, result, before, count)
 	}
 }
 
@@ -1340,9 +1340,10 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 	ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	result Result[TObservation, TToken, TTokenRole, TNodeKind],
 	before lexarch.Lexeme[TObservation, TToken, TTokenRole],
-) (count int, errResult Result[TObservation, TToken, TTokenRole, TNodeKind], hasError bool) {
+	count int,
+) (int, Result[TObservation, TToken, TTokenRole, TNodeKind], bool) {
 	if result.Kind == syntaxa.FailureNoMatch {
-		return 0, errResult, false
+		return count, result, false
 	}
 
 	after := ctx.Token.PeekRaw(0)
@@ -1350,10 +1351,10 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 	leaveSyncForParent := !result.ConsumeSyncToken
 
 	if noProgress || leaveSyncForParent {
-		return 0, result, true
+		return count, result, true
 	}
 
-	return 0, errResult, false
+	return count, result, false
 }
 
 /*
