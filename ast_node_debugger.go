@@ -306,7 +306,7 @@ func (d *LSTDebugger[TObs, TToken, TTokenRole, TKind]) writeNodeLine(
 		}
 	}
 
-	if f.ShowByteSpan {
+	if f.ShowByteSpan && node.spanValid {
 		s, e := node.Span()
 		txt := fmt.Sprintf("[%d:%d]", s, e)
 		txt = f.applyColor(txt, f.ColorSpan)
@@ -315,7 +315,7 @@ func (d *LSTDebugger[TObs, TToken, TTokenRole, TKind]) writeNodeLine(
 		}
 	}
 
-	if f.ShowLineSpan {
+	if f.ShowLineSpan && node.spanValid {
 		sl, sc, el, ec := node.LineSpan()
 		txt := fmt.Sprintf("(%d:%d → %d:%d)", sl, sc, el, ec)
 		txt = f.applyColor(txt, f.ColorSpan)

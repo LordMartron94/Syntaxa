@@ -354,28 +354,38 @@ func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) ensureSpanValid(
 
 	// 2. Positional Children
 	for _, ch := range n.children {
-		if ch != nil {
-			e.ensureSpanValid(ch) // Recursive depth-first validation
-			acc = merge(acc, spanFromNode(ch), empty)
-			empty = false
+		if ch == nil {
+			continue
 		}
+		e.ensureSpanValid(ch)
+		if !ch.spanValid {
+			continue
+		}
+		acc = merge(acc, spanFromNode(ch), empty)
+		empty = false
 	}
 
 	// 3. Named Slots
 	for _, ch := range n.slots {
-		if ch != nil {
-			e.ensureSpanValid(ch)
-			acc = merge(acc, spanFromNode(ch), empty)
-			empty = false
+		if ch == nil {
+			continue
 		}
+		e.ensureSpanValid(ch)
+		if !ch.spanValid {
+			continue
+		}
+		acc = merge(acc, spanFromNode(ch), empty)
+		empty = false
 	}
 
 	if !empty {
 		n.start, n.end = acc.start, acc.end
 		n.startLine, n.startColumn = acc.sl, acc.sc
 		n.endLine, n.endColumn = acc.el, acc.ec
+		n.spanValid = true
+		return
 	}
-	n.spanValid = true
+	n.spanValid = false
 }
 
 /* ComputeSpans should be called to ensure all spans inside the tree are valid. */
