@@ -100,8 +100,11 @@ StateGraph is the generic, editor-agnostic result of lowering a grammar to a sta
 
 Contexts are nodes; Transitions are keyed by context ID. RootContextID is the entry
 state. NestBodyContextIDs maps nest grammar labels to the context ID for that nest's
-body. Transition order per state is discovery order; the editor backend sorts by
-lexer priority.
+outer wrapper state (the one with ImmediatePushTarget to inner content).
+NestContentParentNodeKind maps the inner content context ID to the TNodeKind of the
+production that opened the nest (from the opening transition), for editor meta_scope
+on the content state. Transition order per state is discovery order; the editor
+backend sorts by lexer priority.
 
 Every state that has active recovery tokens (from the grammar rules in the terminal
 stack for that state) will also contain OpRecoverPop and/or OpRecoverNoConsume
@@ -110,11 +113,12 @@ all recovery sets from all enclosing grammar frames, exactly mirroring the
 currentRecoveryAllFrames() computation performed by the parser at runtime.
 */
 type StateGraph[TToken, TNodeKind comparable] struct {
-	Contexts           []Context
-	ContextMeta        map[string]ContextMeta
-	RootContextID      string
-	Transitions        map[string][]Transition[TToken, TNodeKind]
-	NestBodyContextIDs map[syntaxa.GrammarLabel]string
+	Contexts                  []Context
+	ContextMeta               map[string]ContextMeta
+	RootContextID             string
+	Transitions               map[string][]Transition[TToken, TNodeKind]
+	NestBodyContextIDs        map[syntaxa.GrammarLabel]string
+	NestContentParentNodeKind map[string]TNodeKind
 }
 
 const rootLabel = "root"
@@ -175,6 +179,7 @@ func BuildStateGraph[
 	transitionsByID := make(map[string][]Transition[TToken, TNodeKind])
 	metaByID := make(map[string]ContextMeta)
 	nestBodyIDs := make(map[syntaxa.GrammarLabel]string)
+	nestContentParentNodeKind := make(map[string]TNodeKind)
 
 	entryTerminals, isNullable := lookahead(entryRule, rules, make(visiting), analysis)
 	rootKey := lookaheadKey(entryTerminals, tokenHash, hasher)
@@ -196,7 +201,7 @@ func BuildStateGraph[
 		for _, term := range p.terms {
 			tr := buildTransition(
 				term, p.nameHint, rules, analysis, tokenHash, hasher,
-				ctxByKey, transitionsByID, metaByID, nestBodyIDs, &queue, p.inheritedSyncs,
+				ctxByKey, transitionsByID, metaByID, nestBodyIDs, nestContentParentNodeKind, &queue, p.inheritedSyncs,
 			)
 			if tr.TargetContextIDs != nil || tr.Operation == OpPop || tr.Operation == OpMatch {
 				transitionsByID[p.ctxID] = append(transitionsByID[p.ctxID], tr)
@@ -216,11 +221,12 @@ func BuildStateGraph[
 	}
 
 	return &StateGraph[TToken, TNodeKind]{
-		Contexts:           contexts,
-		ContextMeta:        metaByID,
-		RootContextID:      rootLabel,
-		Transitions:        transitionsByID,
-		NestBodyContextIDs: nestBodyIDs,
+		Contexts:                  contexts,
+		ContextMeta:               metaByID,
+		RootContextID:             rootLabel,
+		Transitions:               transitionsByID,
+		NestBodyContextIDs:        nestBodyIDs,
+		NestContentParentNodeKind: nestContentParentNodeKind,
 	}, nil
 }
 
@@ -235,12 +241,13 @@ func buildTransition[TToken, TNodeKind comparable](
 	transitionsByID map[string][]Transition[TToken, TNodeKind],
 	metaByID map[string]ContextMeta,
 	nestBodyIDs map[syntaxa.GrammarLabel]string,
+	nestContentParentNodeKind map[string]TNodeKind,
 	queue *[]pendingEntry[TToken, TNodeKind],
 	inheritedSyncs []TToken,
 ) Transition[TToken, TNodeKind] {
 
 	if term.nestNode != nil {
-		return buildNestTransition(term, rules, analysis, tokenHash, hasher, ctxByKey, transitionsByID, metaByID, nestBodyIDs, queue, inheritedSyncs)
+		return buildNestTransition(term, rules, analysis, tokenHash, hasher, ctxByKey, transitionsByID, metaByID, nestBodyIDs, nestContentParentNodeKind, queue, inheritedSyncs)
 	}
 
 	return buildStandardTransition(term, nameHint, rules, analysis, tokenHash, hasher, ctxByKey, metaByID, queue, inheritedSyncs)
@@ -318,6 +325,8 @@ func getOrCreateNestBody[TToken, TNodeKind comparable](
 	metaByID map[string]ContextMeta,
 	queue *[]pendingEntry[TToken, TNodeKind],
 	nestBodyIDs map[syntaxa.GrammarLabel]string,
+	nestContentParentNodeKind map[string]TNodeKind,
+	openingProductionNodeKind *TNodeKind,
 	inheritedSyncs []TToken,
 ) *Context {
 	nestKeyBytes := []byte("NEST_BODY:" + string(nestNode.GrammarLabel))
@@ -340,6 +349,10 @@ func getOrCreateNestBody[TToken, TNodeKind comparable](
 	contentKey := hash.XXH3HasherHash64(hasher, contentKeyBytes)
 	contentCtx := &Context{ID: contentName, Label: contentName}
 	ctxByKey[contentKey] = contentCtx
+
+	if openingProductionNodeKind != nil {
+		nestContentParentNodeKind[contentName] = *openingProductionNodeKind
+	}
 
 	metaByID[name] = ContextMeta{
 		ImmediatePushTargetID: contentName,
@@ -378,10 +391,11 @@ func buildNestTransition[TToken, TNodeKind comparable](
 	transitionsByID map[string][]Transition[TToken, TNodeKind],
 	metaByID map[string]ContextMeta,
 	nestBodyIDs map[syntaxa.GrammarLabel]string,
+	nestContentParentNodeKind map[string]TNodeKind,
 	queue *[]pendingEntry[TToken, TNodeKind],
 	inheritedSyncs []TToken,
 ) Transition[TToken, TNodeKind] {
-	bodyCtx := getOrCreateNestBody(term.nestNode, rules, analysis, tokenHash, hasher, ctxByKey, metaByID, queue, nestBodyIDs, inheritedSyncs)
+	bodyCtx := getOrCreateNestBody(term.nestNode, rules, analysis, tokenHash, hasher, ctxByKey, metaByID, queue, nestBodyIDs, nestContentParentNodeKind, term.nodeKind, inheritedSyncs)
 	ownerLabel := owningRule(term)
 	nestHint := term.nestNode.GrammarLabel
 	noNest := gTerminal[TToken, TNodeKind]{
