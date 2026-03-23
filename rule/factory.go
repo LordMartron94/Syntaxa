@@ -1127,6 +1127,98 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 }
 
 /*
+Wrap matches a single rule and attaches its result to a new container node.
+
+Semantics:
+- Functionally identical to Sequence with a single rule.
+- Bypasses variadic slice allocations and iteration loops for performance in hot paths.
+*/
+func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) Wrap(
+	grammarID syntaxa.GrammarLabel,
+	nodeKind TNodeKind,
+	rule Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
+	name := r.sharedCore.createRuleName("Wrap", grammarID)
+	identity := r.sharedCore.createRuleIdentity(name, grammarID, r.expectedLabelFromRule(rule))
+	return r.wrapCore(identity, nodeKind, rule)
+}
+
+func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) wrapCore(
+	identity syntaxa.RuleIdentity,
+	nodeKind TNodeKind,
+	rule Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
+	mustConsume := rule.GetContract().MustConsume
+	grammar := r.buildConcatGrammarFromRules(identity.GrammarLabel, []Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]{rule})
+	grammar.OutputNodeKind = &nodeKind
+
+	exec := func(ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) Result[TObservation, TToken, TTokenRole, TNodeKind] {
+		startMarker := ctx.Token.PeekRaw(0).TokenNumber
+		result := ctx.ExecuteRule(rule, syntaxa.ExecutionNormal)
+
+		if !result.Failed() {
+			return r.finalizeWrapSuccess(ctx, nodeKind, result)
+		}
+
+		return r.handleWrapFailure(ctx, identity, nodeKind, rule, startMarker, result)
+	}
+
+	return r.sharedCore.constructRule(identity, r.sharedCore.createContract(mustConsume, true), exec, nil, nil, grammar).WithRecoveryBarrier()
+}
+
+// finalizeWrapSuccess encapsulates the node creation and attachment to keep the exec block flat.
+func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) finalizeWrapSuccess(
+	ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+	nodeKind TNodeKind,
+	result Result[TObservation, TToken, TTokenRole, TNodeKind],
+) Result[TObservation, TToken, TTokenRole, TNodeKind] {
+	node := ctx.Editor.NewNode(nodeKind)
+	r.attachResultsToNode(ctx, node, []Result[TObservation, TToken, TTokenRole, TNodeKind]{result})
+	return r.sharedCore.buildSuccessRuleResult(node)
+}
+
+// handleWrapFailure manages error promotion, follow-set insertion, and error reporting.
+func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) handleWrapFailure(
+	ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+	identity syntaxa.RuleIdentity,
+	nodeKind TNodeKind,
+	rule Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+	startMarker int,
+	result Result[TObservation, TToken, TTokenRole, TNodeKind],
+) Result[TObservation, TToken, TTokenRole, TNodeKind] {
+	currentMarker := ctx.Token.PeekRaw(0).TokenNumber
+	effectiveKind := sequenceCommitmentFailureKind(startMarker, currentMarker, result.Kind)
+
+	isPromotedError := effectiveKind == syntaxa.FailureError && result.Kind == syntaxa.FailureNoMatch
+	if !isPromotedError {
+		return r.sharedCore.buildFailureRuleResult(nil, effectiveKind)
+	}
+
+	peeked := ctx.Token.Peek(0)
+	if inserted, fakeResult := r.tryFollowSetInsertion(ctx, rule, identity, peeked); inserted {
+		return r.finalizeWrapSuccess(ctx, nodeKind, fakeResult)
+	}
+
+	r.reportExpectedError(ctx, identity.RuleName, rule.GetExpectedLabel(), peeked)
+	return r.sharedCore.buildFailureRuleResult(nil, effectiveKind)
+}
+
+// reportExpectedError isolates the reporter logic to avoid cluttering the failure handler.
+func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) reportExpectedError(
+	ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+	ruleName syntaxa.RuleLabel,
+	expectedLabel string,
+	peeked lexarch.Lexeme[TObservation, TToken, TTokenRole],
+) {
+	msg := fmt.Sprintf("expected %s", expectedLabel)
+	if lastLex, ok := ctx.GetLastConsumedLexeme(); ok {
+		ctx.Error.ReportAtEnd(string(ruleName), lastLex, msg)
+	} else {
+		ctx.Error.ReportAt(string(ruleName), peeked, msg)
+	}
+}
+
+/*
 ensureMinNonNegative panics with a message including ruleName if min < 0.
 Used by NOrMore and TransparentNOrMore.
 */
