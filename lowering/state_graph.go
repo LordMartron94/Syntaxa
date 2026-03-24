@@ -158,10 +158,11 @@ func BuildStateGraph[
 ](
 	pkg *syntaxa.GrammarPackage[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
 	tokenHash func(TToken) uint64,
+	nodeKindHash func(TNodeKind) uint64,
 	hasher *hash.XXH3Hasher,
 ) (*StateGraph[TToken, TNodeKind], error) {
-	if pkg == nil || tokenHash == nil || hasher == nil {
-		return nil, fmt.Errorf("BuildStateGraph: nil package, tokenHash, or hasher")
+	if pkg == nil || tokenHash == nil || nodeKindHash == nil || hasher == nil {
+		return nil, fmt.Errorf("BuildStateGraph: nil package, tokenHash, nodeKindHash, or hasher")
 	}
 	entryLabel := pkg.EntryRule
 	rules := pkg.Grammars
@@ -182,7 +183,7 @@ func BuildStateGraph[
 	nestContentParentNodeKind := make(map[string]TNodeKind)
 
 	entryTerminals, isNullable := lookahead(entryRule, rules, make(visiting), analysis)
-	rootKey := lookaheadKey(entryTerminals, tokenHash, hasher)
+	rootKey := lookaheadKey(entryTerminals, tokenHash, nodeKindHash, hasher)
 	rootCtx := &Context{ID: rootLabel, Label: rootLabel}
 	ctxByKey[rootKey] = rootCtx
 
@@ -200,7 +201,7 @@ func BuildStateGraph[
 
 		for _, term := range p.terms {
 			tr := buildTransition(
-				term, p.nameHint, rules, analysis, tokenHash, hasher,
+				term, p.nameHint, rules, analysis, tokenHash, nodeKindHash, hasher,
 				ctxByKey, transitionsByID, metaByID, nestBodyIDs, nestContentParentNodeKind, &queue, p.inheritedSyncs,
 			)
 			if tr.TargetContextIDs != nil || tr.Operation == OpPop || tr.Operation == OpMatch {
@@ -236,6 +237,7 @@ func buildTransition[TToken, TNodeKind comparable](
 	rules map[syntaxa.GrammarLabel]*syntaxa.Grammar[TToken, TNodeKind],
 	analysis *syntaxa.GrammarAnalysis[TToken],
 	tokenHash func(TToken) uint64,
+	nodeKindHash func(TNodeKind) uint64,
 	hasher *hash.XXH3Hasher,
 	ctxByKey map[uint64]*Context,
 	transitionsByID map[string][]Transition[TToken, TNodeKind],
@@ -247,10 +249,10 @@ func buildTransition[TToken, TNodeKind comparable](
 ) Transition[TToken, TNodeKind] {
 
 	if term.nestNode != nil {
-		return buildNestTransition(term, rules, analysis, tokenHash, hasher, ctxByKey, transitionsByID, metaByID, nestBodyIDs, nestContentParentNodeKind, queue, inheritedSyncs)
+		return buildNestTransition(term, rules, analysis, tokenHash, nodeKindHash, hasher, ctxByKey, transitionsByID, metaByID, nestBodyIDs, nestContentParentNodeKind, queue, inheritedSyncs)
 	}
 
-	return buildStandardTransition(term, nameHint, rules, analysis, tokenHash, hasher, ctxByKey, metaByID, queue, inheritedSyncs)
+	return buildStandardTransition(term, nameHint, rules, analysis, tokenHash, nodeKindHash, hasher, ctxByKey, metaByID, queue, inheritedSyncs)
 }
 
 func getOrCreateContext[TToken, TNodeKind comparable](
@@ -259,13 +261,14 @@ func getOrCreateContext[TToken, TNodeKind comparable](
 	nameHint syntaxa.GrammarLabel,
 	isNullable bool,
 	tokenHash func(TToken) uint64,
+	nodeKindHash func(TNodeKind) uint64,
 	hasher *hash.XXH3Hasher,
 	ctxByKey map[uint64]*Context,
 	metaByID map[string]ContextMeta,
 	queue *[]pendingEntry[TToken, TNodeKind],
 	inheritedSyncs []TToken,
 ) *Context {
-	key := lookaheadKey(terms, tokenHash, hasher)
+	key := lookaheadKey(terms, tokenHash, nodeKindHash, hasher)
 	if c, ok := ctxByKey[key]; ok {
 		return c
 	}
@@ -386,6 +389,7 @@ func buildNestTransition[TToken, TNodeKind comparable](
 	rules map[syntaxa.GrammarLabel]*syntaxa.Grammar[TToken, TNodeKind],
 	analysis *syntaxa.GrammarAnalysis[TToken],
 	tokenHash func(TToken) uint64,
+	nodeKindHash func(TNodeKind) uint64,
 	hasher *hash.XXH3Hasher,
 	ctxByKey map[uint64]*Context,
 	transitionsByID map[string][]Transition[TToken, TNodeKind],
@@ -418,7 +422,7 @@ func buildNestTransition[TToken, TNodeKind comparable](
 		}
 	}
 
-	afterCtx := getOrCreateContext(advTerminals, ownerLabel, nestHint, isNullable, tokenHash, hasher, ctxByKey, metaByID, queue, inheritedSyncs)
+	afterCtx := getOrCreateContext(advTerminals, ownerLabel, nestHint, isNullable, tokenHash, nodeKindHash, hasher, ctxByKey, metaByID, queue, inheritedSyncs)
 
 	return Transition[TToken, TNodeKind]{
 		Token:            term.token,
@@ -434,6 +438,7 @@ func buildStandardTransition[TToken, TNodeKind comparable](
 	rules map[syntaxa.GrammarLabel]*syntaxa.Grammar[TToken, TNodeKind],
 	analysis *syntaxa.GrammarAnalysis[TToken],
 	tokenHash func(TToken) uint64,
+	nodeKindHash func(TNodeKind) uint64,
 	hasher *hash.XXH3Hasher,
 	ctxByKey map[uint64]*Context,
 	metaByID map[string]ContextMeta,
@@ -454,7 +459,7 @@ func buildStandardTransition[TToken, TNodeKind comparable](
 		}
 	}
 
-	next := getOrCreateContext(advTerminals, ownerLabel, nameHint, isNullable, tokenHash, hasher, ctxByKey, metaByID, queue, inheritedSyncs)
+	next := getOrCreateContext(advTerminals, ownerLabel, nameHint, isNullable, tokenHash, nodeKindHash, hasher, ctxByKey, metaByID, queue, inheritedSyncs)
 
 	return Transition[TToken, TNodeKind]{
 		Token:            term.token,

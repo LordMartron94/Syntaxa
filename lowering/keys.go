@@ -10,6 +10,7 @@ import (
 func lookaheadKey[TToken, TNodeKind comparable](
 	terms []gTerminal[TToken, TNodeKind],
 	tokenHash func(TToken) uint64,
+	nodeKindHash func(TNodeKind) uint64,
 	hasher *hash.XXH3Hasher,
 ) uint64 {
 	if len(terms) == 0 {
@@ -18,7 +19,7 @@ func lookaheadKey[TToken, TNodeKind comparable](
 
 	keys := make([]uint64, len(terms))
 	for i, t := range terms {
-		keys[i] = terminalKey(t, tokenHash, hasher)
+		keys[i] = terminalKey(t, tokenHash, nodeKindHash, hasher)
 	}
 
 	sort.Slice(keys, func(i, j int) bool {
@@ -34,12 +35,14 @@ func lookaheadKey[TToken, TNodeKind comparable](
 func terminalKey[TToken, TNodeKind comparable](
 	t gTerminal[TToken, TNodeKind],
 	tokenHash func(TToken) uint64,
+	nodeKindHash func(TNodeKind) uint64,
 	hasher *hash.XXH3Hasher,
 ) uint64 {
 	var buf [128]uint64
 	b := buf[:0]
 
 	b = append(b, tokenHash(t.token))
+	b = appendNodeKind(b, t.nodeKind, nodeKindHash)
 	b = appendNestMarker(b, t.nestNode, hasher)
 	b = appendRemaining(b, t.remaining, tokenHash, hasher)
 	b = appendStackData(b, t.stack, tokenHash, hasher)
@@ -49,6 +52,17 @@ func terminalKey[TToken, TNodeKind comparable](
 	byteData := unsafe.Slice((*byte)(unsafe.Pointer(&b[0])), byteLen)
 
 	return hash.XXH3HasherHash64(hasher, byteData)
+}
+
+func appendNodeKind[TNodeKind comparable](
+	b []uint64,
+	nk *TNodeKind,
+	hashFunc func(TNodeKind) uint64,
+) []uint64 {
+	if nk == nil {
+		return append(b, 0)
+	}
+	return append(b, hashFunc(*nk))
 }
 
 func appendNestMarker[TToken, TNodeKind comparable](
