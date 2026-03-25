@@ -108,11 +108,11 @@ func CompileEngine[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind, TLex
 		return nil, fmt.Errorf("CompileEngine: ToPatternGrammar returned nil")
 	}
 
-	alphabet, indexer, reverseMap := buildAlphabetAndIndexer(pkg.TokensUsed)
+	alphabet, deterministic, nondeterministic, reverseMap := buildAlphabetAndIndexer(pkg.TokensUsed)
 	var acceptOutcome TOutcome
 
 	dpda, transitions, debugMap, dpdaErr := pattern.CompileDPDA(
-		cfg, allocFn, alphabet, indexer, acceptOutcome, config.MaxEpsilonSteps,
+		cfg, allocFn, alphabet, deterministic, acceptOutcome, config.MaxEpsilonSteps,
 	)
 
 	if dpdaErr == nil {
@@ -121,7 +121,19 @@ func CompileEngine[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind, TLex
 
 	translatedErr := translateGrammarError(dpdaErr, ruleNameToNodeKey, pkg.PathToGrammarLabel, debugMap, reverseMap)
 
-	engine, npdaErr := compileFallbackNPDA(cfg, allocFn, alphabet, indexer, acceptOutcome, config, ruleNameToNodeKey, pkg.PathToGrammarLabel, debugMap, reverseMap)
+	engine, npdaErr := compileFallbackNPDA(
+		cfg,
+		allocFn,
+		alphabet,
+		deterministic,
+		nondeterministic,
+		acceptOutcome,
+		config,
+		ruleNameToNodeKey,
+		pkg.PathToGrammarLabel,
+		debugMap,
+		reverseMap,
+	)
 	if engine != nil {
 		engine.DPDAError = translatedErr
 	}
@@ -130,7 +142,12 @@ func CompileEngine[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind, TLex
 
 func buildAlphabetAndIndexer[TToken comparable](
 	tokens []TToken,
-) ([]autarch.SymbolDefinition[TToken], autarch.SymbolIndexer[TToken], map[uint64]TToken) {
+) (
+	[]autarch.SymbolDefinition[TToken],
+	autarch.DeterministicSymbolResolver[TToken],
+	autarch.NondeterministicSymbolResolver[TToken],
+	map[uint64]TToken,
+) {
 	alphabet := make([]autarch.SymbolDefinition[TToken], 0, len(tokens))
 	tokenToID := make(map[TToken]uint64, len(tokens))
 	idToToken := make(map[uint64]TToken, len(tokens))
@@ -147,22 +164,28 @@ func buildAlphabetAndIndexer[TToken comparable](
 		})
 		nextID++
 	}
-	indexer := func(obs TToken) []autarch.Symbol[TToken] {
+	deterministic := func(obs TToken) (uint64, bool) {
 		if id, exists := tokenToID[obs]; exists {
-			return []autarch.Symbol[TToken]{
-				{SymbolID: id, SymbolDescription: fmt.Sprintf("%v", obs)},
-			}
+			return id, true
 		}
-		return nil
+		return 0, false
 	}
-	return alphabet, indexer, idToToken
+	nondeterministic := func(obs TToken) []uint64 {
+		id, ok := deterministic(obs)
+		if !ok {
+			return nil
+		}
+		return []uint64{id}
+	}
+	return alphabet, deterministic, nondeterministic, idToToken
 }
 
 func compileFallbackNPDA[TToken comparable, TOutcome any](
 	cfg *pattern.Grammar[TToken, struct{}],
 	allocFn memarch.AllocationFn,
 	alphabet []autarch.SymbolDefinition[TToken],
-	indexer autarch.SymbolIndexer[TToken],
+	deterministic autarch.DeterministicSymbolResolver[TToken],
+	nondeterministic autarch.NondeterministicSymbolResolver[TToken],
 	acceptOutcome TOutcome,
 	config NPDAConfig,
 	ruleNameToNodeKey map[string]syntaxa.NodeKey,
@@ -171,7 +194,7 @@ func compileFallbackNPDA[TToken comparable, TOutcome any](
 	reverseMap map[uint64]TToken,
 ) (*PDAEngine[TToken, TOutcome], error) {
 	npda, transitions, debugMapOut, err := pattern.CompileNPDA(
-		cfg, allocFn, alphabet, indexer, acceptOutcome,
+		cfg, allocFn, alphabet, deterministic, nondeterministic, acceptOutcome,
 		config.MaxStackNodes, config.MaxStackDepth, config.MaxBranches, config.MaxEpsilonSteps,
 	)
 	if err != nil {
