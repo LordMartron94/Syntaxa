@@ -156,6 +156,26 @@ func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) LineSpan() (int, int, 
 	return n.startLine, n.startColumn, n.endLine, n.endColumn
 }
 
+func (n *SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind]) FullSpan() Span {
+	return Span{
+		Start:       n.start,
+		End:         n.end,
+		StartLine:   n.startLine,
+		EndLine:     n.endLine,
+		StartColumn: n.startColumn,
+		EndColumn:   n.endColumn,
+	}
+}
+
+type Span struct {
+	Start       int
+	End         int
+	StartLine   int
+	StartColumn int
+	EndLine     int
+	EndColumn   int
+}
+
 func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) Revision() uint64 {
 	return n.revision
 }
