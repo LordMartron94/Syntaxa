@@ -16,19 +16,46 @@ type tokenStream[TObs cmp.Ordered, TToken comparable, TTokenRole comparable] str
 
 	eofToken TToken
 	skipCore *skipCore[TTokenRole]
+
+	nextVisibleRawIndex int
+	nextVisibleCached   bool
 }
 
 func (ts *tokenStream[TObs, TToken, TTokenRole]) isEOF(l lexarch.Lexeme[TObs, TToken, TTokenRole]) bool {
 	return l.Token == ts.eofToken
 }
 
+func (ts *tokenStream[TObs, TToken, TTokenRole]) invalidatePeekCache() {
+	ts.nextVisibleCached = false
+	ts.nextVisibleRawIndex = 0
+}
+
+func (ts *tokenStream[TObs, TToken, TTokenRole]) consumeRawAndInvalidate() lexarch.Lexeme[TObs, TToken, TTokenRole] {
+	consumed := ts.consumeRaw()
+	ts.invalidatePeekCache()
+	return consumed
+}
+
+func (ts *tokenStream[TObs, TToken, TTokenRole]) resolveNextVisibleRaw() (lexarch.Lexeme[TObs, TToken, TTokenRole], int) {
+	rawIndex := 0
+	for {
+		cur := ts.peekRaw(rawIndex)
+		if ts.isEOF(cur) || !ts.skipCore.isSkipped(cur.Role) {
+			return cur, rawIndex
+		}
+		rawIndex++
+	}
+}
+
 func (ts *tokenStream[TObs, TToken, TTokenRole]) skipForward() {
 	for {
 		cur := ts.peekRaw(0)
 		if ts.isEOF(cur) || !ts.skipCore.isSkipped(cur.Role) {
+			ts.nextVisibleRawIndex = 0
+			ts.nextVisibleCached = true
 			return
 		}
-		ts.consumeRaw()
+		ts.consumeRawAndInvalidate()
 	}
 }
 
@@ -36,9 +63,24 @@ func (ts *tokenStream[TObs, TToken, TTokenRole]) Peek(n int) lexarch.Lexeme[TObs
 	if n < 0 {
 		panic("Peek: n must be >= 0")
 	}
+	if n == 0 {
+		if ts.nextVisibleCached {
+			return ts.peekRaw(ts.nextVisibleRawIndex)
+		}
+		cur, rawIndex := ts.resolveNextVisibleRaw()
+		ts.nextVisibleRawIndex = rawIndex
+		ts.nextVisibleCached = true
+		return cur
+	}
+
+	if !ts.nextVisibleCached {
+		_, rawIndex := ts.resolveNextVisibleRaw()
+		ts.nextVisibleRawIndex = rawIndex
+		ts.nextVisibleCached = true
+	}
 
 	seen := 0
-	i := 0
+	i := ts.nextVisibleRawIndex
 
 	for {
 		cur := ts.peekRaw(i)
@@ -62,11 +104,11 @@ func (ts *tokenStream[TObs, TToken, TTokenRole]) PeekRaw(n int) lexarch.Lexeme[T
 
 func (ts *tokenStream[TObs, TToken, TTokenRole]) Consume() lexarch.Lexeme[TObs, TToken, TTokenRole] {
 	ts.skipForward()
-	return ts.consumeRaw()
+	return ts.consumeRawAndInvalidate()
 }
 
 func (ts *tokenStream[TObs, TToken, TTokenRole]) ConsumeRaw() lexarch.Lexeme[TObs, TToken, TTokenRole] {
-	return ts.consumeRaw()
+	return ts.consumeRawAndInvalidate()
 }
 
 // -------------------------------------------------------------
@@ -197,7 +239,8 @@ func deduplicateTokens[TToken comparable](tokens []TToken) []TToken {
 // -------------------------------------------------------------
 
 type skipCore[TTokenRole comparable] struct {
-	stack []tokenSet[TTokenRole]
+	stack    []tokenSet[TTokenRole]
+	onChange func()
 }
 
 func (sc *skipCore[TTokenRole]) PushSkipRoles(roles ...TTokenRole) {
@@ -206,11 +249,17 @@ func (sc *skipCore[TTokenRole]) PushSkipRoles(roles ...TTokenRole) {
 		set[r] = struct{}{}
 	}
 	sc.stack = append(sc.stack, set)
+	if sc.onChange != nil {
+		sc.onChange()
+	}
 }
 
 func (sc *skipCore[TTokenRole]) PopSkipRoles() {
 	if len(sc.stack) > 0 {
 		sc.stack = sc.stack[:len(sc.stack)-1]
+		if sc.onChange != nil {
+			sc.onChange()
+		}
 	}
 }
 
@@ -632,6 +681,7 @@ func buildBaseContext[
 		skipCore:   sCore,
 		eofToken:   parser.eofToken,
 	}
+	sCore.onChange = tStream.invalidatePeekCache
 
 	rCore := &recoveryCore[TObservation, TToken, TTokenRole]{
 		ts: tStream,
@@ -663,8 +713,17 @@ func buildBaseContext[
 			editor.SetAttribute(n, "error", message)
 			return n
 		},
-		save:         saveFn,
-		restore:      restoreFn,
+		save: func() ParserSnapshot[TObservation, TLexerState] {
+			snapshot := saveFn()
+			snapshot.nextVisibleRawIndex = tStream.nextVisibleRawIndex
+			snapshot.nextVisibleCached = tStream.nextVisibleCached
+			return snapshot
+		},
+		restore: func(snapshot ParserSnapshot[TObservation, TLexerState]) {
+			restoreFn(snapshot)
+			tStream.nextVisibleRawIndex = snapshot.nextVisibleRawIndex
+			tStream.nextVisibleCached = snapshot.nextVisibleCached
+		},
 		Select:       selectCtx,
 		Finalization: finalCtx,
 		GetAnalysis: func() *GrammarAnalysis[TToken] {

@@ -70,6 +70,9 @@ type ParserSnapshot[TObs cmp.Ordered, TState comparable] struct {
 
 	lexerSnap     lexarch.LexerSessionSnapshot[TState]
 	streamingSnap lexarch.StreamingLexerSessionSnapshot[TObs, TState]
+
+	nextVisibleRawIndex int
+	nextVisibleCached   bool
 }
 
 func (p *ParserSnapshot[_, _]) Index() int {
