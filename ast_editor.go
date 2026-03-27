@@ -22,10 +22,14 @@ type LSTEditor[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind comparabl
 	// treeDirty marks that at least one mutation happened since last full span reconciliation.
 	treeDirty bool
 
-	created []*SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind]
+	created  []*SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind]
+	nodeFree []*SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind]
+	nodeGrow func(int) int
 
 	inUse atomic.Bool
 }
+
+const lstEditorDefaultNodeGrowBatch = 32
 
 func (e *LSTEditor[TObservation, TToken, TTokenRole, TNodeKind]) begin() {
 	if e.inUse.Load() {
@@ -54,17 +58,83 @@ NewNode creates a detached LST node of the specified kind.
 */
 func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) NewNode(kind TKind) *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind] {
 	e.ensureMutable()
+	node := e.nodeAcquire()
+	lstNodeResetForPool(node)
 
 	e.nextID++
-
-	node := &SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]{
-		id:   e.nextID,
-		kind: kind,
-	}
+	node.id = e.nextID
+	node.kind = kind
 
 	e.created = append(e.created, node)
 
 	return node
+}
+
+func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) nodeAcquire() *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind] {
+	freeCount := len(e.nodeFree)
+	if freeCount > 0 {
+		node := e.nodeFree[freeCount-1]
+		e.nodeFree = e.nodeFree[:freeCount-1]
+		return node
+	}
+
+	batch := lstEditorDefaultNodeGrowBatch
+	if e.nodeGrow != nil {
+		batch = e.nodeGrow(1)
+	}
+	if batch < 1 {
+		batch = 1
+	}
+
+	for i := 0; i < batch; i++ {
+		e.nodeFree = append(e.nodeFree, &SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]{})
+	}
+
+	last := len(e.nodeFree) - 1
+	node := e.nodeFree[last]
+	e.nodeFree = e.nodeFree[:last]
+	return node
+}
+
+func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) TruncateCreated(after int) {
+	e.ensureMutable()
+	if after < 0 || after > len(e.created) {
+		panic("LSTEditor.TruncateCreated: index out of range")
+	}
+
+	suffix := e.created[after:]
+	for i := range suffix {
+		node := suffix[i]
+		if node == nil {
+			continue
+		}
+		lstNodeResetForPool(node)
+		e.nodeFree = append(e.nodeFree, node)
+	}
+	e.created = e.created[:after]
+}
+
+func lstNodeResetForPool[TObs cmp.Ordered, TToken, TTokenRole, TKind comparable](n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) {
+	if n == nil {
+		return
+	}
+
+	n.parent = nil
+	n.children = nil
+	n.slots = nil
+	n.tokens = nil
+	n.attributes = nil
+
+	n.start = 0
+	n.end = 0
+	n.startLine = 0
+	n.startColumn = 0
+	n.endLine = 0
+	n.endColumn = 0
+	n.spanValid = false
+
+	n.revision = 0
+	n.postProcessed = false
 }
 
 /*

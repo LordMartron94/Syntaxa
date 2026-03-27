@@ -136,6 +136,8 @@ type SyntaxaParser[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind, TLex
 	postProcessor NodePostProcessor[TObservation, TToken, TTokenRole, TNodeKind]
 
 	defaultSkipRoles []TTokenRole
+	nodePoolPrefill  int
+	nodePoolGrow     func(int) int
 
 	tokenFormatter       func(token TToken) string
 	observationFormatter lexarch.ObservationFormatter[TObservation]
@@ -199,6 +201,21 @@ func (p *SyntaxaParser[_, _, TTokenRole, _, _]) SetDefaultSkips(roles ...TTokenR
 
 func (p *SyntaxaParser[_, _, TTokenRole, _, _]) GetDefaultSkips() []TTokenRole {
 	return p.defaultSkipRoles
+}
+
+func (p *SyntaxaParser[_, _, _, _, _]) SetNodePoolPrefill(hint int) {
+	if hint < 0 {
+		panic("SetNodePoolPrefill: hint must be >= 0")
+	}
+	p.nodePoolPrefill = hint
+}
+
+func (p *SyntaxaParser[_, _, _, _, _]) GetNodePoolPrefill() int {
+	return p.nodePoolPrefill
+}
+
+func (p *SyntaxaParser[_, _, _, _, _]) SetNodePoolGrowFn(growFn func(int) int) {
+	p.nodePoolGrow = growFn
 }
 
 func (p *SyntaxaParser[_, _, _, _, _]) EnableTrace(enable bool) {
@@ -341,7 +358,7 @@ func syntaxaParserExecuteRule[
 	var recoveryTokenSet []TToken
 
 	if !ruleResult.Succeeded {
-		ctx.Editor.created = ctx.Editor.created[:startLSTNodeCreationIdx]
+		ctx.Editor.TruncateCreated(startLSTNodeCreationIdx)
 		ruleResult, recoveryAttempted, recovered, landedOnOurs, recoveryTokenSet = handleFailureState(ctx, parser, rule, ruleResult, startSnap, mode, lexemePreRule)
 	} else {
 		ctx.Error.sink.popFrame(true)

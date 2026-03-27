@@ -690,7 +690,12 @@ func buildBaseContext[
 	eCore := &errorCore[TObservation, TToken, TTokenRole]{sink: errors, ts: tStream}
 
 	editor := &LSTEditor[TObservation, TToken, TTokenRole, TNodeKind]{
-		created: make([]*SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind], 0),
+		created:  make([]*SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind], 0),
+		nodeFree: make([]*SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind], 0, parser.nodePoolPrefill),
+		nodeGrow: parser.nodePoolGrow,
+	}
+	for i := 0; i < parser.nodePoolPrefill; i++ {
+		editor.nodeFree = append(editor.nodeFree, &SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind]{})
 	}
 
 	selectCtx := &SelectRuleContext[TObservation, TToken, TTokenRole]{
