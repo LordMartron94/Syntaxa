@@ -19,6 +19,8 @@ type LSTEditor[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind comparabl
 	nextID uint64
 	root   *SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind]
 	frozen bool
+	// treeDirty marks that at least one mutation happened since last full span reconciliation.
+	treeDirty bool
 
 	created []*SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind]
 
@@ -37,12 +39,14 @@ func (e *LSTEditor[TObservation, TToken, TTokenRole, TNodeKind]) end() {
 	e.root = nil
 	e.nextID = 0
 	e.frozen = false
+	e.treeDirty = false
 
 	e.inUse.Store(false)
 }
 
 func (e *LSTEditor[TObservation, TToken, TTokenRole, TNodeKind]) setRoot(root *SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind]) {
 	e.root = root
+	e.treeDirty = true
 }
 
 /*
@@ -98,7 +102,7 @@ func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) AttachChild(parent, child *
 	child.parent = parent
 	parent.children = append(parent.children, child)
 
-	e.markDirtyCascade(parent)
+	e.markDirtyPair(child, parent)
 }
 
 func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) AttachResult(
@@ -138,7 +142,7 @@ func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) SetSlot(parent *SyntaxaLSTN
 	parent.slots[name] = child
 	child.parent = parent
 
-	e.markDirtyCascade(parent)
+	e.markDirtyPair(child, parent)
 }
 
 func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) Replace(oldNode, newNode *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) {
@@ -158,7 +162,7 @@ func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) Replace(oldNode, newNode *S
 			parent.children[i] = newNode
 			newNode.parent = parent
 			oldNode.parent = nil
-			e.markDirtyCascade(parent)
+			e.markDirtyPair(newNode, parent)
 			return
 		}
 	}
@@ -168,7 +172,7 @@ func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) Replace(oldNode, newNode *S
 			parent.slots[k] = newNode
 			newNode.parent = parent
 			oldNode.parent = nil
-			e.markDirtyCascade(parent)
+			e.markDirtyPair(newNode, parent)
 			return
 		}
 	}
@@ -188,7 +192,8 @@ func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) Detach(node *SyntaxaLSTNode
 		if ch == node {
 			parent.children = append(parent.children[:i], parent.children[i+1:]...)
 			node.parent = nil
-			e.markDirtyCascade(parent)
+			e.markDirtyNode(node)
+			e.markDirtyNode(parent)
 			return
 		}
 	}
@@ -197,7 +202,8 @@ func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) Detach(node *SyntaxaLSTNode
 		if v == node {
 			delete(parent.slots, k)
 			node.parent = nil
-			e.markDirtyCascade(parent)
+			e.markDirtyNode(node)
+			e.markDirtyNode(parent)
 			return
 		}
 	}
@@ -210,7 +216,7 @@ func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) SetAttribute(node *SyntaxaL
 		node.attributes = make(map[string]any)
 	}
 	node.attributes[key] = value
-	e.markDirtyCascade(node)
+	e.markDirtyNode(node)
 }
 
 func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) DeleteAttribute(node *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind], key string) {
@@ -220,7 +226,7 @@ func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) DeleteAttribute(node *Synta
 		return
 	}
 	delete(node.attributes, key)
-	e.markDirtyCascade(node)
+	e.markDirtyNode(node)
 }
 
 func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) AddToken(
@@ -229,7 +235,7 @@ func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) AddToken(
 ) {
 	e.ensureMutable()
 	node.tokens = append(node.tokens, tok)
-	e.markDirtyCascade(node)
+	e.markDirtyNode(node)
 }
 
 func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) SetTokens(node *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind], toks []lexarch.Lexeme[TObs, TToken, TTokenRole]) {
@@ -238,7 +244,7 @@ func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) SetTokens(node *SyntaxaLSTN
 	node.tokens = make([]lexarch.Lexeme[TObs, TToken, TTokenRole], len(toks))
 	copy(node.tokens, toks)
 
-	e.markDirtyCascade(node)
+	e.markDirtyNode(node)
 }
 
 func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) SetSpan(
@@ -250,7 +256,7 @@ func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) SetSpan(
 	node.start = start
 	node.end = end
 
-	e.markDirtyCascade(node)
+	e.markDirtyNode(node)
 }
 
 func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) SetLineSpan(
@@ -264,14 +270,27 @@ func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) SetLineSpan(
 	node.endLine = el
 	node.endColumn = ec
 
-	e.markDirtyCascade(node)
+	e.markDirtyNode(node)
 }
 
-func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) markDirtyCascade(n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) {
-	for cur := n; cur != nil; cur = cur.parent {
-		cur.revision++
-		cur.spanValid = false
+func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) markDirtyNode(n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) {
+	if n == nil {
+		return
 	}
+	n.revision++
+	n.spanValid = false
+	e.treeDirty = true
+}
+
+func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) markDirtyPair(
+	nodeA *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind],
+	nodeB *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind],
+) {
+	e.markDirtyNode(nodeA)
+	if nodeA == nodeB {
+		return
+	}
+	e.markDirtyNode(nodeB)
 }
 
 type span struct {
@@ -338,8 +357,12 @@ func spanFromToken[TObs cmp.Ordered, TToken, TTokenRole comparable](
 
 func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) ensureSpanValid(
 	n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind],
+	forceRecompute bool,
 ) {
-	if n.spanValid {
+	if n == nil {
+		return
+	}
+	if n.spanValid && !forceRecompute {
 		return
 	}
 
@@ -357,7 +380,7 @@ func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) ensureSpanValid(
 		if ch == nil {
 			continue
 		}
-		e.ensureSpanValid(ch)
+		e.ensureSpanValid(ch, forceRecompute)
 		if !ch.spanValid {
 			continue
 		}
@@ -370,7 +393,7 @@ func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) ensureSpanValid(
 		if ch == nil {
 			continue
 		}
-		e.ensureSpanValid(ch)
+		e.ensureSpanValid(ch, forceRecompute)
 		if !ch.spanValid {
 			continue
 		}
@@ -393,14 +416,19 @@ func (e *LSTEditor[TObservation, TToken, TTokenRole, TNodeKind]) ComputeSpans() 
 	if e.root == nil {
 		panic("editor does not have root set yet")
 	}
-
-	e.ensureSpanValid(e.root)
+	if e.treeDirty {
+		e.ensureSpanValid(e.root, true)
+		e.treeDirty = false
+		return
+	}
+	e.ensureSpanValid(e.root, false)
 }
 
 /* Freeze calls editor.end because this is the only place the editor session actually ends. */
 func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) Freeze() {
 	if e.root != nil {
-		e.ensureSpanValid(e.root)
+		e.ensureSpanValid(e.root, true)
+		e.treeDirty = false
 	}
 
 	e.frozen = true
