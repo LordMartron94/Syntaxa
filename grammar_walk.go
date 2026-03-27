@@ -47,8 +47,11 @@ func (g *Grammar[TToken, TNodeKind]) Walk(
 				return n
 			},
 
-			Children: func(n *Grammar[TToken, TNodeKind]) []*Grammar[TToken, TNodeKind] {
-				return grammarWalkChildren(n)
+			ChildrenInto: func(
+				n *Grammar[TToken, TNodeKind],
+				out []*Grammar[TToken, TNodeKind],
+			) []*Grammar[TToken, TNodeKind] {
+				return grammarWalkChildrenInto(n, out)
 			},
 
 			Callback: callback,
@@ -103,8 +106,11 @@ func GrammarWalkPreWithContext[TToken, TNodeKind comparable, TContext any](
 			ID: func(n *Grammar[TToken, TNodeKind]) *Grammar[TToken, TNodeKind] {
 				return n
 			},
-			Children: func(n *Grammar[TToken, TNodeKind]) []*Grammar[TToken, TNodeKind] {
-				return grammarWalkChildren(n)
+			ChildrenInto: func(
+				n *Grammar[TToken, TNodeKind],
+				out []*Grammar[TToken, TNodeKind],
+			) []*Grammar[TToken, TNodeKind] {
+				return grammarWalkChildrenInto(n, out)
 			},
 			Callback: callback,
 		},
@@ -135,21 +141,33 @@ func (g *Grammar[TToken, TNodeKind]) FindFirst(
 	return found
 }
 
-func grammarWalkChildren[TToken, TNodeKind comparable](g *Grammar[TToken, TNodeKind]) []*Grammar[TToken, TNodeKind] {
+func grammarWalkChildrenInto[TToken, TNodeKind comparable](
+	g *Grammar[TToken, TNodeKind],
+	out []*Grammar[TToken, TNodeKind],
+) []*Grammar[TToken, TNodeKind] {
 	if g == nil {
-		return nil
+		return out
 	}
 	if g.Kind == GReference && g.ResolvedReference != nil {
-		return []*Grammar[TToken, TNodeKind]{g.ResolvedReference}
+		return append(out, g.ResolvedReference)
 	}
 	if len(g.Children) == 0 {
-		return nil
+		return out
 	}
-	out := make([]*Grammar[TToken, TNodeKind], 0, len(g.Children))
-	for _, c := range g.Children {
-		if c != nil {
-			out = append(out, c)
+
+	startLen := len(out)
+	out = append(out, g.Children...)
+
+	write := startLen
+	for i := startLen; i < len(out); i++ {
+		if out[i] != nil {
+			out[write] = out[i]
+			write++
 		}
 	}
-	return out
+	return out[:write]
+}
+
+func grammarWalkChildren[TToken, TNodeKind comparable](g *Grammar[TToken, TNodeKind]) []*Grammar[TToken, TNodeKind] {
+	return grammarWalkChildrenInto(g, nil)
 }

@@ -261,8 +261,11 @@ func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) Walk(
 				return n.id
 			},
 
-			Children: func(n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) []*SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind] {
-				return n.walkChildren()
+			ChildrenInto: func(
+				n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind],
+				out []*SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind],
+			) []*SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind] {
+				return n.walkChildrenInto(out)
 			},
 
 			Parent: func(n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind] {
@@ -411,6 +414,29 @@ func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) walkChildren() []*Synt
 	for _, ch := range n.slots {
 		if ch != nil {
 			out = append(out, ch)
+		}
+	}
+
+	return out
+}
+
+func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) walkChildrenInto(
+	out []*SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind],
+) []*SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind] {
+	if n == nil {
+		return out
+	}
+	if len(n.children) == 0 && len(n.slots) == 0 {
+		return out
+	}
+
+	out = append(out, n.children...)
+
+	if len(n.slots) > 0 {
+		for _, ch := range n.slots {
+			if ch != nil {
+				out = append(out, ch)
+			}
 		}
 	}
 
