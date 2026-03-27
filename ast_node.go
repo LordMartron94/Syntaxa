@@ -586,40 +586,52 @@ func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) Unwrap(
 }
 
 /*
-FlattenByKind returns a slice of nodes by recursively flattening the subtree when the
-current node has the given kind. If the node's kind is not the given kind, returns
-a single-element slice containing the node. Otherwise returns the concatenation of
+FlattenByKind returns a slice of nodes by flattening the subtree when the current
+node has the given kind. If the node's kind is not the given kind, returns a
+single-element slice containing the node. Otherwise returns the concatenation of
 FlattenByKind applied to each child (including slots). Use for associative chains
 (e.g. expression lists, alternations).
 */
 func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) FlattenByKind(
 	kind TKind,
 ) []*SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind] {
-	if n.kind != kind {
-		return []*SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]{n}
-	}
-	hasAnyChild := len(n.children) > 0
-	if !hasAnyChild {
-		for _, ch := range n.slots {
-			if ch != nil {
-				hasAnyChild = true
-				break
-			}
-		}
-	}
-	if !hasAnyChild {
-		return []*SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]{n}
-	}
-	var out []*SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]
-	for _, ch := range n.children {
-		out = append(out, ch.FlattenByKind(kind)...)
-	}
-	for _, ch := range n.slots {
-		if ch == nil {
+	stack := make([]*SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind], 0, 8)
+	out := make([]*SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind], 0, 8)
+	stack = append(stack, n)
+
+	for len(stack) > 0 {
+		cur := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+
+		if cur.kind != kind {
+			out = append(out, cur)
 			continue
 		}
-		out = append(out, ch.FlattenByKind(kind)...)
+
+		directChildren := make(
+			[]*SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind],
+			0,
+			len(cur.children)+len(cur.slots),
+		)
+		for _, ch := range cur.children {
+			directChildren = append(directChildren, ch)
+		}
+		for _, ch := range cur.slots {
+			if ch == nil {
+				continue
+			}
+			directChildren = append(directChildren, ch)
+		}
+		if len(directChildren) == 0 {
+			out = append(out, cur)
+			continue
+		}
+
+		for i := len(directChildren) - 1; i >= 0; i-- {
+			stack = append(stack, directChildren[i])
+		}
 	}
+
 	return out
 }
 
