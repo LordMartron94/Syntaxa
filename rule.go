@@ -200,6 +200,21 @@ type ParserRule[
 	isRecoveryBarrier bool
 }
 
+func ParserRuleApplyRecoverySpec[
+	TObservation cmp.Ordered,
+	TToken,
+	TTokenRole,
+	TLexerState,
+	TNodeKind comparable,
+](
+	rule ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+	spec RecoverySpec[TToken],
+) ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
+	rule.recoveryTokens = append([]TToken(nil), spec.Tokens...)
+	rule.noConsumeOnRecoveryTokens = append([]TToken(nil), spec.NoConsume...)
+	return rule
+}
+
 func (p *ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) GetIdentity() RuleIdentity {
 	return p.identity
 }

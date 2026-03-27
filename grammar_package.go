@@ -59,6 +59,9 @@ type GrammarPackage[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind, TLe
 	PathToGrammarLabel  map[NodeKey]GrammarLabel
 	NodeByGrammarKey    map[GrammarKey]*Grammar[TToken, TNodeKind]
 	NodesByGrammarLabel map[GrammarLabel][]*Grammar[TToken, TNodeKind]
+	// MergedRecoveryByGrammarLabel stores compile-time merged recovery metadata per rule label.
+	// It includes inherited reference-chain recovery/no-consume tokens in stable order.
+	MergedRecoveryByGrammarLabel map[GrammarLabel]RecoverySpec[TToken]
 	EntryRuleParserRule *ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 }
 
@@ -186,6 +189,7 @@ func ProducePackage[
 	for _, add := range additionalRules {
 		setResolvedReferences(add, rules)
 	}
+	mergedRecoveryByGrammarLabel := RecoverySpecMergedByGrammarLabel(rules)
 
 	tokensUsed := make([]TToken, 0, len(tokenSet))
 	for t := range tokenSet {
@@ -218,6 +222,7 @@ func ProducePackage[
 		PathToGrammarLabel:  pathToGrammarLabel,
 		NodeByGrammarKey:    nodeByGrammarKey,
 		NodesByGrammarLabel: nodesByGrammarLabel,
+		MergedRecoveryByGrammarLabel: mergedRecoveryByGrammarLabel,
 		EntryRuleParserRule: entryRule,
 	}
 }
@@ -503,6 +508,84 @@ func setResolvedReferences[TToken, TNodeKind comparable](
 	for _, child := range g.Children {
 		setResolvedReferences(child, rules)
 	}
+}
+
+/*
+RecoverySpecMergedByGrammarLabel computes merged recovery specs for each rule label.
+
+Each merged spec includes the rule's own recovery/no-consume tokens plus inherited tokens
+from its reference-target chain (when the rule root is GReference), preserving stable append order.
+*/
+func RecoverySpecMergedByGrammarLabel[TToken, TNodeKind comparable](
+	rules map[GrammarLabel]*Grammar[TToken, TNodeKind],
+) map[GrammarLabel]RecoverySpec[TToken] {
+	out := make(map[GrammarLabel]RecoverySpec[TToken], len(rules))
+	for label := range rules {
+		spec := recoverySpecMergedForLabel(label, rules)
+		out[label] = spec
+	}
+	return out
+}
+
+func recoverySpecMergedForLabel[TToken, TNodeKind comparable](
+	label GrammarLabel,
+	rules map[GrammarLabel]*Grammar[TToken, TNodeKind],
+) RecoverySpec[TToken] {
+	var merged RecoverySpec[TToken]
+
+	currentLabel := label
+	visited := make(map[GrammarLabel]struct{})
+
+	for {
+		if currentLabel == "" {
+			break
+		}
+		if _, seen := visited[currentLabel]; seen {
+			break
+		}
+		visited[currentLabel] = struct{}{}
+
+		currentRule, exists := rules[currentLabel]
+		if !exists || currentRule == nil {
+			break
+		}
+
+		recoveryAppendUniqueStable(&merged.Tokens, currentRule.RecoveryTokens)
+		recoveryAppendUniqueStable(&merged.NoConsume, currentRule.NoConsumeOnRecoveryTokens)
+
+		if currentRule.Kind != GReference {
+			break
+		}
+
+		nextLabel := currentRule.ReferenceTarget
+		if currentRule.ResolvedReference != nil {
+			nextLabel = currentRule.ResolvedReference.GrammarLabel
+		}
+		if nextLabel == "" {
+			break
+		}
+		currentLabel = nextLabel
+	}
+
+	return merged
+}
+
+func recoveryAppendUniqueStable[TToken comparable](dst *[]TToken, src []TToken) {
+	for _, token := range src {
+		if recoveryContainsToken(*dst, token) {
+			continue
+		}
+		*dst = append(*dst, token)
+	}
+}
+
+func recoveryContainsToken[TToken comparable](tokens []TToken, token TToken) bool {
+	for _, current := range tokens {
+		if current == token {
+			return true
+		}
+	}
+	return false
 }
 
 // ============================================================

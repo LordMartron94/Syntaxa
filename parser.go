@@ -172,10 +172,12 @@ func SyntaxaParserCreate[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind
 	if grammarPackage == nil || grammarPackage.EntryRuleParserRule == nil {
 		panic("SyntaxaParserCreate: grammar package must have EntryRuleParserRule set (produce package with entry rule)")
 	}
+	boundRegistry := bindMergedRecoveryIntoRegistry(registry, grammarPackage.MergedRecoveryByGrammarLabel)
+	programRule := bindMergedRecoveryToRule(*grammarPackage.EntryRuleParserRule, grammarPackage.MergedRecoveryByGrammarLabel)
 	return &SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TLexerState]{
 		grammarPackage:       grammarPackage,
-		registry:             registry,
-		programRule:          *grammarPackage.EntryRuleParserRule,
+		registry:             boundRegistry,
+		programRule:          programRule,
 		tokenFormatter:       tokenFormatter,
 		observationFormatter: observationFormatter,
 		postProcessor:        nodePostProcessor,
@@ -325,8 +327,7 @@ func syntaxaParserExecuteRule[
 	lexemePreRuleRaw := ctx.Token.PeekRaw(0)
 
 	if mode == ExecutionNormal {
-		inheritedTokens := getInheritedRecoveryTokens(parser, rule)
-		ctx.Recovery.pushRecovery(rule.IsRecoveryBarrier(), inheritedTokens...)
+		ctx.Recovery.pushRecovery(rule.IsRecoveryBarrier(), rule.recoveryTokens...)
 		defer ctx.Recovery.popRecovery()
 	}
 
@@ -410,7 +411,7 @@ func handleFailureState[
 	ctx.Error.sink.popFrame(false)
 
 	if recovered {
-		result.ConsumeSyncToken = landedOnOurs && !ruleHasNoConsumeToken(parser, rule, ctx.Token.PeekRaw(0).Token)
+		result.ConsumeSyncToken = landedOnOurs && !rule.IsNoConsumeRecoveryToken(ctx.Token.PeekRaw(0).Token)
 		if result.ConsumeSyncToken {
 			ctx.Token.ConsumeRaw()
 		}
@@ -474,7 +475,7 @@ func performRecovery[
 
 		// Query the engine directly. No local map allocations.
 		if ctx.Recovery.IsInAllFrames(cur.Token) {
-			landedOnCurrentRule = ruleOwnsSyncToken(parser, recoveryFromRule, cur.Token)
+			landedOnCurrentRule = recoveryFromRule.IsSyncToken(cur.Token)
 			return true, landedOnCurrentRule, recoveryTokenSet
 		}
 
@@ -531,71 +532,31 @@ func validateRuleSuccess[
 	return nil
 }
 
-func getInheritedRecoveryTokens[
+func bindMergedRecoveryIntoRegistry[
 	TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind, TLexerState comparable,
 ](
-	parser *SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
-	rule ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
-) []TToken {
-	tokens := append([]TToken(nil), rule.recoveryTokens...)
-	curr := rule
-	for curr.grammar != nil && curr.grammar.Kind == GReference {
-		target, ok := parser.registry[curr.grammar.ReferenceTarget]
-		if !ok {
-			break
-		}
-		tokens = append(tokens, target.recoveryTokens...)
-		curr = target
+	registry RuleRegistry[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+	mergedByLabel map[GrammarLabel]RecoverySpec[TToken],
+) RuleRegistry[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
+	if len(registry) == 0 {
+		return registry
 	}
-	return tokens
+	out := make(RuleRegistry[TObservation, TToken, TTokenRole, TLexerState, TNodeKind], len(registry))
+	for label, rule := range registry {
+		out[label] = bindMergedRecoveryToRule(rule, mergedByLabel)
+	}
+	return out
 }
 
-func ruleOwnsSyncToken[
+func bindMergedRecoveryToRule[
 	TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind, TLexerState comparable,
 ](
-	parser *SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
 	rule ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
-	token TToken,
-) bool {
-	curr := rule
-	for {
-		if curr.IsSyncToken(token) {
-			return true
-		}
-		if curr.grammar != nil && curr.grammar.Kind == GReference {
-			target, ok := parser.registry[curr.grammar.ReferenceTarget]
-			if !ok {
-				break
-			}
-			curr = target
-		} else {
-			break
-		}
+	mergedByLabel map[GrammarLabel]RecoverySpec[TToken],
+) ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
+	spec, exists := mergedByLabel[rule.GetGrammarLabel()]
+	if !exists {
+		return rule
 	}
-	return false
-}
-
-func ruleHasNoConsumeToken[
-	TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind, TLexerState comparable,
-](
-	parser *SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
-	rule ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
-	token TToken,
-) bool {
-	curr := rule
-	for {
-		if curr.IsNoConsumeRecoveryToken(token) {
-			return true
-		}
-		if curr.grammar != nil && curr.grammar.Kind == GReference {
-			target, ok := parser.registry[curr.grammar.ReferenceTarget]
-			if !ok {
-				break
-			}
-			curr = target
-		} else {
-			break
-		}
-	}
-	return false
+	return ParserRuleApplyRecoverySpec(rule, spec)
 }

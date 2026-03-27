@@ -40,6 +40,7 @@ func ToPatternGrammar[TToken, TNodeKind comparable](
 	pathToRuleName := make(map[syntaxa.NodePath]string)
 	ruleNameToNodeKey := make(map[string]syntaxa.NodeKey)
 	ruleNameToRecovery := make(map[string]syntaxa.RecoverySpec[TToken])
+	mergedRecoveryByLabel := syntaxa.RecoverySpecMergedByGrammarLabel(rules)
 	for _, g := range order {
 		if g.NodePath == nil {
 			continue
@@ -47,6 +48,15 @@ func ToPatternGrammar[TToken, TNodeKind comparable](
 		name := contextaRuleName(hasher, g)
 		pathToRuleName[*g.NodePath] = name
 		ruleNameToNodeKey[name] = syntaxa.NodeKey(*g.NodePath)
+		if g.IsContextBoundary {
+			if mergedSpec, ok := mergedRecoveryByLabel[g.GrammarLabel]; ok {
+				ruleNameToRecovery[name] = syntaxa.RecoverySpec[TToken]{
+					Tokens:    append([]TToken(nil), mergedSpec.Tokens...),
+					NoConsume: append([]TToken(nil), mergedSpec.NoConsume...),
+				}
+				continue
+			}
+		}
 		if len(g.RecoveryTokens) > 0 || len(g.NoConsumeOnRecoveryTokens) > 0 {
 			ruleNameToRecovery[name] = syntaxa.RecoverySpec[TToken]{
 				Tokens:    append([]TToken(nil), g.RecoveryTokens...),
