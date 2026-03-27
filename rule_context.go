@@ -71,99 +71,127 @@ func (ts *tokenStream[TObs, TToken, TTokenRole]) ConsumeRaw() lexarch.Lexeme[TOb
 
 // -------------------------------------------------------------
 
-type recoveryFrame[TToken comparable] struct {
-	tokens  tokenSet[TToken]
-	barrier bool
+type recoveryFrame struct {
+	startIndex int
+	endIndex   int
+	barrier    bool
 }
 
-type recoveryCore[TObservation cmp.Ordered, TToken, TTokenRole comparable] struct {
+type recoveryCore[TObservation cmp.Ordered, TToken comparable, TTokenRole comparable] struct {
 	ts *tokenStream[TObservation, TToken, TTokenRole]
 
-	defaultRecovery tokenSet[TToken]
-	stack           []recoveryFrame[TToken]
+	defaultRecovery []TToken
+	stack           []recoveryFrame
+	tokensFlight    []TToken
 }
 
 func (rc *recoveryCore[_, TToken, _]) setDefaultRecovery(tokens ...TToken) {
-	set := make(tokenSet[TToken])
-	for _, r := range tokens {
-		set[r] = struct{}{}
-	}
-	rc.defaultRecovery = set
+	// Allocate once.
+	rc.defaultRecovery = append([]TToken(nil), tokens...)
 }
 
 func (rc *recoveryCore[_, TToken, _]) pushRecovery(barrier bool, tokens ...TToken) {
-	set := make(tokenSet[TToken])
-	for _, r := range tokens {
-		set[r] = struct{}{}
-	}
-	rc.stack = append(rc.stack, recoveryFrame[TToken]{tokens: set, barrier: barrier})
+	start := len(rc.tokensFlight)
+	rc.tokensFlight = append(rc.tokensFlight, tokens...)
+
+	rc.stack = append(rc.stack, recoveryFrame{
+		startIndex: start,
+		endIndex:   len(rc.tokensFlight),
+		barrier:    barrier,
+	})
 }
 
 func (rc *recoveryCore[_, TToken, _]) popRecovery() {
-	if len(rc.stack) > 0 {
-		rc.stack = rc.stack[:len(rc.stack)-1]
-	}
-}
-
-func (rc *recoveryCore[_, TToken, _]) currentRecovery() tokenSet[TToken] {
-	merged := make(tokenSet[TToken])
-
-	if len(rc.stack) > 0 {
-		frame := rc.stack[len(rc.stack)-1]
-		for t := range frame.tokens {
-			merged[t] = struct{}{}
-		}
-		if frame.barrier {
-			return merged
-		}
+	if len(rc.stack) == 0 {
+		return
 	}
 
-	for t := range rc.defaultRecovery {
-		merged[t] = struct{}{}
-	}
-
-	return merged
+	top := rc.stack[len(rc.stack)-1]
+	// Truncate the flight buffer to instantly discard this frame's tokens
+	rc.tokensFlight = rc.tokensFlight[:top.startIndex]
+	rc.stack = rc.stack[:len(rc.stack)-1]
 }
 
 /*
-currentRecoveryAllFrames returns the union of default recovery and all frames on the stack.
-
-Used only by performRecovery so recovery stops at any token that any enclosing rule
-(e.g. Block's blockEndToken) has in its set, while consume is decided by the failing rule.
+IsRecoveryToken queries the active scopes directly.
+Zero allocations. Zero map hashing. Returns immediately on match.
 */
-func (rc *recoveryCore[_, TToken, _]) currentRecoveryAllFrames() tokenSet[TToken] {
-	merged := make(tokenSet[TToken])
-
-	// 1. Always include defaults (EOF)
-	for t := range rc.defaultRecovery {
-		merged[t] = struct{}{}
+func (rc *recoveryCore[_, TToken, _]) IsRecoveryToken(token TToken) bool {
+	if len(rc.stack) > 0 {
+		top := rc.stack[len(rc.stack)-1]
+		if containsToken(rc.tokensFlight[top.startIndex:top.endIndex], token) {
+			return true
+		}
+		if top.barrier {
+			return false
+		}
 	}
 
-	// 2. Aggregate from top to bottom
+	return containsToken(rc.defaultRecovery, token)
+}
+
+/*
+IsInAllFrames answers the question without building a merged set.
+Used by performRecovery to determine if a token is safe to consume.
+Zero allocations.
+*/
+func (rc *recoveryCore[_, TToken, _]) IsInAllFrames(token TToken) bool {
+	if containsToken(rc.defaultRecovery, token) {
+		return true
+	}
+
 	for i := len(rc.stack) - 1; i >= 0; i-- {
 		frame := rc.stack[i]
-		for t := range frame.tokens {
-			merged[t] = struct{}{}
+		if containsToken(rc.tokensFlight[frame.startIndex:frame.endIndex], token) {
+			return true
 		}
-		// 3. A barrier stops us from looking further "up",
-		// but we keep what we've collected so far.
 		if frame.barrier {
 			break
 		}
 	}
 
-	return merged
+	return false
+}
+
+// Helper method keeping functions small and single-responsibility.
+func containsToken[TToken comparable](slice []TToken, token TToken) bool {
+	for _, t := range slice {
+		if t == token {
+			return true
+		}
+	}
+	return false
 }
 
 /*
-IsRecoveryToken returns true if token is in the current merged recovery set.
-
-Used by the engine to avoid reporting spurious errors when the current token is a sync
-token (e.g. semicolon or closing brace) from an inner rule's recovery set.
+CollectAllRecoveryTokens extracts all active recovery tokens into a flat slice.
+This allocates memory and should ONLY be called on the cold path (when an error has occurred and recovery is actually executing).
 */
-func (rc *recoveryCore[_, TToken, _]) IsRecoveryToken(token TToken) bool {
-	_, ok := rc.currentRecovery()[token]
-	return ok
+func (rc *recoveryCore[_, TToken, _]) CollectAllRecoveryTokens() []TToken {
+	var result []TToken
+	result = append(result, rc.defaultRecovery...)
+
+	for i := len(rc.stack) - 1; i >= 0; i-- {
+		frame := rc.stack[i]
+		result = append(result, rc.tokensFlight[frame.startIndex:frame.endIndex]...)
+		if frame.barrier {
+			break
+		}
+	}
+
+	return deduplicateTokens(result)
+}
+
+// deduplicateTokens uses a simple linear scan. Since recovery sets are typically
+// very small (< 10 items), this avoids map hashing overhead and allocations.
+func deduplicateTokens[TToken comparable](tokens []TToken) []TToken {
+	var out []TToken
+	for _, t := range tokens {
+		if !containsToken(out, t) {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 // -------------------------------------------------------------

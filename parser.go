@@ -463,11 +463,7 @@ func performRecovery[
 	eof TToken,
 	recoveryFromRule ParserRule[TObs, TToken, TTokenRole, TLexerState, TKind],
 ) (recovered bool, landedOnCurrentRule bool, recoveryTokenSet []TToken) {
-	syncSet := ctx.Recovery.currentRecoveryAllFrames()
-
-	for token := range syncSet {
-		recoveryTokenSet = append(recoveryTokenSet, token)
-	}
+	recoveryTokenSet = ctx.Recovery.CollectAllRecoveryTokens()
 
 	for {
 		cur := ctx.Token.PeekRaw(0)
@@ -476,7 +472,8 @@ func performRecovery[
 			return false, false, recoveryTokenSet
 		}
 
-		if _, ok := syncSet[cur.Token]; ok {
+		// Query the engine directly. No local map allocations.
+		if ctx.Recovery.IsInAllFrames(cur.Token) {
 			landedOnCurrentRule = ruleOwnsSyncToken(parser, recoveryFromRule, cur.Token)
 			return true, landedOnCurrentRule, recoveryTokenSet
 		}
