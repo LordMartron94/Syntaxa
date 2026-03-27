@@ -113,6 +113,32 @@ func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) Children() []*SyntaxaL
 	return out
 }
 
+/*
+ChildrenUnsafe returns the underlying children slice without copying.
+
+The returned slice MUST be treated as read-only by callers. Its contents and backing storage
+may change after editor mutations (attach/detach/replace), so callers must not hold long-lived
+references or mutate the slice.
+*/
+func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) ChildrenUnsafe() []*SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind] {
+	return n.children
+}
+
+/*
+ForEachChild iterates direct positional children without allocating.
+
+The callback receives each child in stored order. If callback returns false, iteration stops early.
+*/
+func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) ForEachChild(
+	callback func(*SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) bool,
+) {
+	for _, child := range n.children {
+		if !callback(child) {
+			return
+		}
+	}
+}
+
 /* Slot retrieves a node assigned to a named slot or nil. */
 func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) Slot(name string) *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind] {
 	if n.slots == nil {
