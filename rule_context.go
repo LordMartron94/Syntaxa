@@ -437,7 +437,7 @@ func BuildExecRuleContextFromLexerSession[
 ](
 	parser *SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TState],
 	lexer *lexarch.Lexer[TObservation, TState, TToken, TTokenRole],
-	session *lexarch.LexerSession[TObservation, TState, TToken],
+	session *lexarch.LexerSession[TObservation, TState, TToken, TTokenRole],
 	errors *SyntaxErrors[TObservation],
 ) *ExecRuleContext[TObservation, TToken, TTokenRole, TState, TNodeKind] {
 	var lastConsumed lexarch.Lexeme[TObservation, TToken, TTokenRole]
@@ -481,7 +481,7 @@ func BuildExecRuleContextFromStreamingSession[
 ](
 	parser *SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TState],
 	lexer *lexarch.Lexer[TObservation, TState, TToken, TTokenRole],
-	session *lexarch.StreamingLexerSession[TObservation, TState, TToken],
+	session *lexarch.StreamingLexerSession[TObservation, TState, TToken, TTokenRole],
 	errors *SyntaxErrors[TObservation],
 ) *ExecRuleContext[TObservation, TToken, TTokenRole, TState, TNodeKind] {
 	var lastConsumed lexarch.Lexeme[TObservation, TToken, TTokenRole]
