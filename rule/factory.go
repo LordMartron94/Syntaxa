@@ -302,7 +302,8 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 	grammar := r.buildConcatGrammarFromRules(grammarID, rules)
 
 	exec := func(ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) Result[TObservation, TToken, TTokenRole, TNodeKind] {
-		results := make([]Result[TObservation, TToken, TTokenRole, TNodeKind], len(rules))
+		results := syntaxa.ExecRuleContextAcquireResultsScratch(ctx, len(rules))
+		defer syntaxa.ExecRuleContextReleaseResultsScratch(ctx)
 		startMarker := ctx.Token.PeekRaw(0).TokenNumber
 
 		for i, rule := range rules {
@@ -1059,7 +1060,7 @@ listCore builds a rule that matches a strict sequence of rules and attaches all 
 It is shared by Sequence and Block. Recovery tokens (e.g. blockEndToken) are optional; when provided, the rule is marked for resync at those boundaries.
 
 Time complexity: O(r) where r is the number of rules; each rule runs once.
-Space complexity: O(r) for the results slice and grammar children.
+Space complexity: O(r) for grammar children; result buffering is reused via parse-context scratch storage.
 */
 func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) listCore(
 	identity syntaxa.RuleIdentity,
@@ -1072,7 +1073,8 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 	grammar.OutputNodeKind = &nodeKind
 
 	exec := func(ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) Result[TObservation, TToken, TTokenRole, TNodeKind] {
-		results := make([]Result[TObservation, TToken, TTokenRole, TNodeKind], len(rules))
+		results := syntaxa.ExecRuleContextAcquireResultsScratch(ctx, len(rules))
+		defer syntaxa.ExecRuleContextReleaseResultsScratch(ctx)
 		startMarker := ctx.Token.PeekRaw(0).TokenNumber
 
 		for i, rule := range rules {

@@ -363,6 +363,68 @@ type ExecRuleContext[
 
 	save    func() ParserSnapshot[TObservation, TLexerState]
 	restore func(snapshot ParserSnapshot[TObservation, TLexerState])
+
+	resultsScratch      []RuleResult[TObservation, TToken, TTokenRole, TNodeKind]
+	resultsScratchMarks []int
+}
+
+func ExecRuleContextAcquireResultsScratch[
+	TObservation cmp.Ordered,
+	TToken,
+	TTokenRole,
+	TLexerState,
+	TNodeKind comparable,
+](
+	ctx *ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+	size int,
+) []RuleResult[TObservation, TToken, TTokenRole, TNodeKind] {
+	if size < 0 {
+		panic("ExecRuleContextAcquireResultsScratch: size must be >= 0")
+	}
+
+	start := len(ctx.resultsScratch)
+	end := start + size
+
+	ctx.resultsScratchMarks = append(ctx.resultsScratchMarks, start)
+
+	if cap(ctx.resultsScratch) < end {
+		nextCapacity := end
+		if nextCapacity < 2*cap(ctx.resultsScratch) {
+			nextCapacity = 2 * cap(ctx.resultsScratch)
+		}
+
+		next := make([]RuleResult[TObservation, TToken, TTokenRole, TNodeKind], len(ctx.resultsScratch), nextCapacity)
+		copy(next, ctx.resultsScratch)
+		ctx.resultsScratch = next
+	}
+
+	ctx.resultsScratch = ctx.resultsScratch[:end]
+	return ctx.resultsScratch[start:end]
+}
+
+func ExecRuleContextReleaseResultsScratch[
+	TObservation cmp.Ordered,
+	TToken,
+	TTokenRole,
+	TLexerState,
+	TNodeKind comparable,
+](
+	ctx *ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+) {
+	if len(ctx.resultsScratchMarks) == 0 {
+		panic("ExecRuleContextReleaseResultsScratch: release without acquire")
+	}
+
+	last := len(ctx.resultsScratchMarks) - 1
+	start := ctx.resultsScratchMarks[last]
+	ctx.resultsScratchMarks = ctx.resultsScratchMarks[:last]
+
+	var zero RuleResult[TObservation, TToken, TTokenRole, TNodeKind]
+	for i := start; i < len(ctx.resultsScratch); i++ {
+		ctx.resultsScratch[i] = zero
+	}
+
+	ctx.resultsScratch = ctx.resultsScratch[:start]
 }
 
 type SelectRuleContext[TObservation cmp.Ordered, TToken, TTokenRole comparable] struct {
