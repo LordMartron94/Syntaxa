@@ -450,8 +450,15 @@ Returns the first node satisfying the predicate, or nil.
 func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) FindDirectChild(
 	predicate func(*SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) bool,
 ) *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind] {
-
-	for _, child := range n.walkChildren() {
+	for _, child := range n.children {
+		if predicate(child) {
+			return child
+		}
+	}
+	for _, child := range n.slots {
+		if child == nil {
+			continue
+		}
 		if predicate(child) {
 			return child
 		}
@@ -469,7 +476,15 @@ func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) FindAllDirectChildren(
 
 	var out []*SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]
 
-	for _, child := range n.walkChildren() {
+	for _, child := range n.children {
+		if predicate(child) {
+			out = append(out, child)
+		}
+	}
+	for _, child := range n.slots {
+		if child == nil {
+			continue
+		}
 		if predicate(child) {
 			out = append(out, child)
 		}
@@ -517,14 +532,30 @@ func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) Unwrap(
 
 	for {
 		_, isWrapper := wrapperSet[current.kind]
-		children := current.walkChildren()
+		var onlyChild *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]
+		childCount := 0
+		for _, child := range current.children {
+			childCount++
+			if childCount == 1 {
+				onlyChild = child
+			}
+		}
+		for _, child := range current.slots {
+			if child == nil {
+				continue
+			}
+			childCount++
+			if childCount == 1 {
+				onlyChild = child
+			}
+		}
 
 		// If it's not a wrapper, or it branches, stop unwrapping.
-		if !isWrapper || len(children) != 1 {
+		if !isWrapper || childCount != 1 {
 			return current
 		}
 
-		current = children[0]
+		current = onlyChild
 	}
 }
 
@@ -541,12 +572,26 @@ func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) FlattenByKind(
 	if n.kind != kind {
 		return []*SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]{n}
 	}
-	children := n.walkChildren()
-	if len(children) == 0 {
+	hasAnyChild := len(n.children) > 0
+	if !hasAnyChild {
+		for _, ch := range n.slots {
+			if ch != nil {
+				hasAnyChild = true
+				break
+			}
+		}
+	}
+	if !hasAnyChild {
 		return []*SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]{n}
 	}
 	var out []*SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]
-	for _, ch := range children {
+	for _, ch := range n.children {
+		out = append(out, ch.FlattenByKind(kind)...)
+	}
+	for _, ch := range n.slots {
+		if ch == nil {
+			continue
+		}
 		out = append(out, ch.FlattenByKind(kind)...)
 	}
 	return out
@@ -557,11 +602,27 @@ SingleChild returns the single logical child and true if the node has exactly on
 (including slots). Otherwise returns (nil, false).
 */
 func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) SingleChild() (*SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind], bool) {
-	children := n.walkChildren()
-	if len(children) != 1 {
+	var onlyChild *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]
+	childCount := 0
+	for _, child := range n.children {
+		childCount++
+		if childCount == 1 {
+			onlyChild = child
+		}
+	}
+	for _, child := range n.slots {
+		if child == nil {
+			continue
+		}
+		childCount++
+		if childCount == 1 {
+			onlyChild = child
+		}
+	}
+	if childCount != 1 {
 		return nil, false
 	}
-	return children[0], true
+	return onlyChild, true
 }
 
 /*
@@ -571,8 +632,13 @@ does not have exactly one child.
 func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) RequireSingleChild() *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind] {
 	child, ok := n.SingleChild()
 	if !ok {
-		children := n.walkChildren()
-		panic(fmt.Sprintf("expected exactly one child, got %d", len(children)))
+		childCount := len(n.children)
+		for _, current := range n.slots {
+			if current != nil {
+				childCount++
+			}
+		}
+		panic(fmt.Sprintf("expected exactly one child, got %d", childCount))
 	}
 	return child
 }
