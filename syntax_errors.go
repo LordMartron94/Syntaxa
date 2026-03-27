@@ -4,9 +4,6 @@ import (
 	"cmp"
 )
 
-/*
-SyntaxError represents a single syntax error produced during parsing or lexing.
-*/
 type SyntaxError[TObservation cmp.Ordered] struct {
 	ProducedByLexer bool
 
@@ -25,35 +22,29 @@ type SyntaxError[TObservation cmp.Ordered] struct {
 	Found    *TObservation
 }
 
-/*
-SyntaxErrors aggregates syntax errors using transactional frames.
+type errorFrame[TObservation cmp.Ordered] struct {
+	best                 SyntaxError[TObservation]
+	hasBest              bool
+	bestAbsolutePosition int
 
-Errors are collected speculatively during rule execution and are only
-committed when the grammar commits a branch. Failed speculative paths
-discard their diagnostics automatically.
+	// Tracks where this frame's committed errors begin in the flight buffer
+	commitStartIndex int
+}
 
-This mirrors transactional parsing state and prevents ghost errors
-from optional rules, backtracking, and ordered choice.
-*/
 type SyntaxErrors[TObservation cmp.Ordered] struct {
 	Errors []SyntaxError[TObservation]
 	stack  []errorFrame[TObservation]
+
+	// A single flat buffer for all speculative errors across all active frames
+	flight []SyntaxError[TObservation]
 }
 
-type errorFrame[TObservation cmp.Ordered] struct {
-	best                 *SyntaxError[TObservation]
-	bestAbsolutePosition int
-
-	committed []SyntaxError[TObservation]
-}
-
-/*
-SyntaxErrorsCreate constructs a new error collector.
-*/
 func SyntaxErrorsCreate[TObservation cmp.Ordered]() *SyntaxErrors[TObservation] {
 	return &SyntaxErrors[TObservation]{
-		Errors: make([]SyntaxError[TObservation], 0),
-		stack:  make([]errorFrame[TObservation], 0),
+		Errors: make([]SyntaxError[TObservation], 0, 16),
+		// Pre-allocate generous capacities to prevent resize allocations during parsing
+		stack:  make([]errorFrame[TObservation], 0, 64),
+		flight: make([]SyntaxError[TObservation], 0, 64),
 	}
 }
 
@@ -61,66 +52,41 @@ func (s *SyntaxErrors[_]) HasErrors() bool {
 	return len(s.Errors) > 0
 }
 
-/*
-pushFrame begins a speculative error scope.
-
-All reported errors are buffered until the frame is either committed
-or discarded.
-*/
 func (s *SyntaxErrors[TObservation]) pushFrame() {
 	s.stack = append(s.stack, errorFrame[TObservation]{
-		committed: make([]SyntaxError[TObservation], 0, 4),
+		commitStartIndex: len(s.flight),
 	})
 }
 
-/*
-popFrame closes the current error scope.
-
-If commit is true, the best error from the frame is committed upward.
-If commit is false, all buffered errors are discarded.
-*/
 func (s *SyntaxErrors[TObservation]) popFrame(commit bool) {
 	if len(s.stack) == 0 {
 		panic("SyntaxErrors: PopFrame without PushFrame")
 	}
 
-	top := s.stack[len(s.stack)-1]
-	s.stack = s.stack[:len(s.stack)-1]
+	topIndex := len(s.stack) - 1
+	top := s.stack[topIndex]
+	s.stack = s.stack[:topIndex]
 
 	if !commit {
+		// Rollback: Discard all errors added to the flight buffer during this frame
+		s.flight = s.flight[:top.commitStartIndex]
 		return
 	}
 
-	// Build the list of errors this frame contributes upward:
-	// 1) all committed child errors
-	// 2) plus this frame's own best error (if any)
-	out := make([]SyntaxError[TObservation], 0, len(top.committed)+1)
-	out = append(out, top.committed...)
-	if top.best != nil {
-		out = append(out, *top.best)
+	// Commit: Append this frame's best error (if any) to the flight buffer
+	if top.hasBest {
+		s.flight = append(s.flight, top.best)
 	}
 
-	if len(out) == 0 {
-		return
+	// If this was the last frame on the stack, flush the entire flight buffer to actual Errors
+	if len(s.stack) == 0 {
+		s.Errors = append(s.Errors, s.flight...)
+		s.flight = s.flight[:0] // Reset for future use
 	}
-
-	if len(s.stack) > 0 {
-		parent := &s.stack[len(s.stack)-1]
-		parent.committed = append(parent.committed, out...)
-		return
-	}
-
-	s.Errors = append(s.Errors, out...)
+	// If there are still frames on the stack, we do nothing. The flight buffer
+	// naturally retains these errors for the parent frame to claim.
 }
 
-/*
-FlushFramesCommitAll pops all frames with commit true so that every error buffered in the
-stack is merged into s.Errors.
-
-Use when the top-level (program) rule fails: only one failure path runs (the program rule's),
-so only one popFrame happens and descendant errors remain stuck in the stack. Flushing
-ensures they are committed and visible to the caller.
-*/
 func (s *SyntaxErrors[TObservation]) FlushFramesCommitAll() {
 	for len(s.stack) > 0 {
 		s.popFrame(true)
@@ -132,7 +98,8 @@ func (s *SyntaxErrors[TObservation]) replaceBest(err SyntaxError[TObservation]) 
 		return false
 	}
 	f := &s.stack[len(s.stack)-1]
-	f.best = &err
+	f.best = err
+	f.hasBest = true
 	f.bestAbsolutePosition = err.AbsolutePosition
 	return true
 }
@@ -142,30 +109,21 @@ func (s *SyntaxErrors[TObservation]) currentBestPosition() (int, bool) {
 		return 0, false
 	}
 	top := s.stack[len(s.stack)-1]
-	if top.best == nil {
+	if !top.hasBest {
 		return 0, false
 	}
-	return top.best.AbsolutePosition, true
+	return top.bestAbsolutePosition, true
 }
 
-/*
-currentFrameWouldBeEmptyOnPop returns true when the top frame has no committed
-errors and no best error, so it would contribute nothing when popped with commit.
-Used to set a fallback error only on the innermost failing rule.
-*/
 func (s *SyntaxErrors[TObservation]) currentFrameWouldBeEmptyOnPop() bool {
 	if len(s.stack) == 0 {
 		return true
 	}
 	top := s.stack[len(s.stack)-1]
-	return top.best == nil && len(top.committed) == 0
+	// Empty if no best error, AND nothing was added to the flight buffer since push
+	return !top.hasBest && len(s.flight) == top.commitStartIndex
 }
 
-/*
-report records a candidate syntax error in the current frame.
-
-The most relevant error (furthest progress, lexer priority) is retained.
-*/
 func (s *SyntaxErrors[TObservation]) report(err SyntaxError[TObservation]) {
 	if len(s.stack) == 0 {
 		s.Errors = append(s.Errors, err)
@@ -174,7 +132,8 @@ func (s *SyntaxErrors[TObservation]) report(err SyntaxError[TObservation]) {
 
 	f := &s.stack[len(s.stack)-1]
 	if betterError(f, err) {
-		f.best = &err
+		f.best = err
+		f.hasBest = true
 		f.bestAbsolutePosition = err.AbsolutePosition
 	}
 }
@@ -183,7 +142,7 @@ func betterError[TObservation cmp.Ordered](
 	cur *errorFrame[TObservation],
 	err SyntaxError[TObservation],
 ) bool {
-	if cur.best == nil {
+	if !cur.hasBest {
 		return true
 	}
 
