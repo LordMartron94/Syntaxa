@@ -701,6 +701,11 @@ func buildBaseContext[
 		editor: editor,
 	}
 
+	var cachedAnalysis *GrammarAnalysis[TToken]
+	if parser.getAnalysis != nil {
+		cachedAnalysis = parser.getAnalysis()
+	}
+
 	// Assemble Context
 	ctx := ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]{
 		Token:    tStream,
@@ -727,10 +732,7 @@ func buildBaseContext[
 		Select:       selectCtx,
 		Finalization: finalCtx,
 		GetAnalysis: func() *GrammarAnalysis[TToken] {
-			if parser.getAnalysis != nil {
-				return parser.getAnalysis()
-			}
-			return nil
+			return cachedAnalysis
 		},
 	}
 

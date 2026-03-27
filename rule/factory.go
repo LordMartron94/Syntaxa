@@ -2061,6 +2061,20 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 	ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	rules []Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 ) Result[TObservation, TToken, TTokenRole, TNodeKind] {
+	candidateIndices, dispatchMode := choiceCandidateIndicesFromAnalysis(ctx, rules)
+	if dispatchMode == choiceDispatchNoMatch {
+		return r.sharedCore.buildFailureRuleResult(nil, syntaxa.FailureNoMatch)
+	}
+	if dispatchMode == choiceDispatchCandidates {
+		return r.executeChoiceCandidateLoop(ctx, rules, candidateIndices)
+	}
+	return r.executeChoiceFallbackLoop(ctx, rules)
+}
+
+func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) executeChoiceFallbackLoop(
+	ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+	rules []Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+) Result[TObservation, TToken, TTokenRole, TNodeKind] {
 	for _, rule := range rules {
 		result := ctx.ExecuteRule(rule, syntaxa.ExecutionNormal)
 
@@ -2074,6 +2088,78 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 	}
 
 	return r.sharedCore.buildFailureRuleResult(nil, syntaxa.FailureNoMatch)
+}
+
+func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) executeChoiceCandidateLoop(
+	ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+	rules []Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+	candidateIndices []int,
+) Result[TObservation, TToken, TTokenRole, TNodeKind] {
+	for _, idx := range candidateIndices {
+		result := ctx.ExecuteRule(rules[idx], syntaxa.ExecutionNormal)
+
+		if result.Succeeded {
+			return result
+		}
+
+		if result.Kind == syntaxa.FailureError {
+			return result
+		}
+	}
+
+	return r.sharedCore.buildFailureRuleResult(nil, syntaxa.FailureNoMatch)
+}
+
+type choiceDispatchMode uint8
+
+const (
+	choiceDispatchFallback choiceDispatchMode = iota
+	choiceDispatchCandidates
+	choiceDispatchNoMatch
+)
+
+func choiceCandidateIndicesFromAnalysis[
+	TObservation cmp.Ordered, TToken comparable, TTokenRole, TLexerState, TNodeKind comparable,
+](
+	ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+	rules []Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+) ([]int, choiceDispatchMode) {
+	analysis := ctx.GetAnalysis()
+	if analysis == nil {
+		return nil, choiceDispatchFallback
+	}
+
+	peekToken := ctx.Token.Peek(0).Token
+	candidateIndices := make([]int, 0, len(rules))
+
+	for idx, rule := range rules {
+		grammar := rule.GetGrammar()
+		if grammar == nil || grammar.NodePath == nil {
+			candidateIndices = append(candidateIndices, idx)
+			continue
+		}
+
+		nodeKey := syntaxa.NodeKeyFromPath(*grammar.NodePath)
+		firstSet, hasFirst := analysis.First[nodeKey]
+		nullable, hasNullable := analysis.Nullable[nodeKey]
+		if !hasFirst || !hasNullable {
+			candidateIndices = append(candidateIndices, idx)
+			continue
+		}
+
+		if nullable {
+			candidateIndices = append(candidateIndices, idx)
+			continue
+		}
+		if _, exists := firstSet[peekToken]; exists {
+			candidateIndices = append(candidateIndices, idx)
+		}
+	}
+
+	if len(candidateIndices) == 0 {
+		return nil, choiceDispatchNoMatch
+	}
+	return candidateIndices, choiceDispatchCandidates
 }
 
 /*
