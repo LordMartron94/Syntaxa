@@ -137,7 +137,7 @@ type SyntaxaParser[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind, TLex
 
 	defaultSkipRoles []TTokenRole
 	nodePoolPrefill  int
-	nodePoolGrow     func(int) int
+	nodePoolGrow     func(currentCap, needed int) int
 
 	tokenFormatter       func(token TToken) string
 	observationFormatter lexarch.ObservationFormatter[TObservation]
@@ -214,7 +214,15 @@ func (p *SyntaxaParser[_, _, _, _, _]) GetNodePoolPrefill() int {
 	return p.nodePoolPrefill
 }
 
-func (p *SyntaxaParser[_, _, _, _, _]) SetNodePoolGrowFn(growFn func(int) int) {
+/*
+SetNodePoolGrowFn sets the LSTEditor free-list growth policy (nil = default).
+
+growFn receives currentCap = cap(nodeFree) before growth and needed = len(nodeFree)+1
+(minimum length after growth). It returns the target capacity for the free list after
+this grow (same idea as memforge.GrowthStrategy); the editor clamps to at least needed
+and allocates that many new nodes when the pool was empty.
+*/
+func (p *SyntaxaParser[_, _, _, _, _]) SetNodePoolGrowFn(growFn func(currentCap, needed int) int) {
 	p.nodePoolGrow = growFn
 }
 

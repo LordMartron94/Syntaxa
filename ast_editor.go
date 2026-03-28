@@ -24,7 +24,10 @@ type LSTEditor[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind comparabl
 
 	created  []*SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind]
 	nodeFree []*SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind]
-	nodeGrow func(int) int
+	// nodeGrow is optional. currentCap is cap(nodeFree) before growth; needed is the minimum
+	// free slots required after growth (>= 1). Return value is the target capacity for the
+	// free-list slice after this grow (must be >= needed).
+	nodeGrow func(currentCap, needed int) int
 
 	inUse atomic.Bool
 }
@@ -78,10 +81,23 @@ func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) nodeAcquire() *SyntaxaLSTNo
 		return node
 	}
 
-	batch := lstEditorDefaultNodeGrowBatch
+	curCap := cap(e.nodeFree)
+	needed := freeCount + 1
+
+	var targetCap int
 	if e.nodeGrow != nil {
-		batch = e.nodeGrow(1)
+		targetCap = e.nodeGrow(curCap, needed)
+		if targetCap < needed {
+			targetCap = needed
+		}
+	} else {
+		targetCap = freeCount + lstEditorDefaultNodeGrowBatch
+		if targetCap < needed {
+			targetCap = needed
+		}
 	}
+
+	batch := targetCap - freeCount
 	if batch < 1 {
 		batch = 1
 	}
