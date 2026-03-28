@@ -2063,10 +2063,19 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 ) Result[TObservation, TToken, TTokenRole, TNodeKind] {
 	candidateIndices, dispatchMode := choiceCandidateIndicesFromAnalysis(ctx, rules)
 	if dispatchMode == choiceDispatchNoMatch {
+		if st := ctx.EngineStats; st != nil {
+			st.ChoiceDispatchNoMatch++
+		}
 		return r.sharedCore.buildFailureRuleResult(nil, syntaxa.FailureNoMatch)
 	}
 	if dispatchMode == choiceDispatchCandidates {
+		if st := ctx.EngineStats; st != nil {
+			st.ChoiceDispatchCandidates++
+		}
 		return r.executeChoiceCandidateLoop(ctx, rules, candidateIndices)
+	}
+	if st := ctx.EngineStats; st != nil {
+		st.ChoiceDispatchFallback++
 	}
 	return r.executeChoiceFallbackLoop(ctx, rules)
 }
@@ -2076,6 +2085,9 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 	rules []Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 ) Result[TObservation, TToken, TTokenRole, TNodeKind] {
 	for _, rule := range rules {
+		if st := ctx.EngineStats; st != nil {
+			st.ChoiceBranchTries++
+		}
 		result := ctx.ExecuteRule(rule, syntaxa.ExecutionNormal)
 
 		if result.Succeeded {
@@ -2096,6 +2108,9 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 	candidateIndices []int,
 ) Result[TObservation, TToken, TTokenRole, TNodeKind] {
 	for _, idx := range candidateIndices {
+		if st := ctx.EngineStats; st != nil {
+			st.ChoiceBranchTries++
+		}
 		result := ctx.ExecuteRule(rules[idx], syntaxa.ExecutionNormal)
 
 		if result.Succeeded {

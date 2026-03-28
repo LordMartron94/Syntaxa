@@ -347,6 +347,13 @@ func syntaxaParserExecuteRule[
 	rule ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	mode RuleExecutionMode,
 ) RuleResult[TObservation, TToken, TTokenRole, TNodeKind] {
+	if st := ctx.EngineStats; st != nil {
+		st.RuleExecuteCalls++
+		if mode == ExecutionProbe {
+			st.ProbeInvocations++
+		}
+	}
+
 	startSnap := ctx.save()
 	startPos := startSnap.tokenIndex
 	startLSTNodeCreationIdx := len(ctx.Editor.created)
@@ -390,6 +397,23 @@ func syntaxaParserExecuteRule[
 			LandedOnOurs:      landedOnOurs,
 			RecoveryTokenSet:  recoveryTokenSet,
 		})
+	}
+
+	if st := ctx.EngineStats; st != nil {
+		if ruleResult.Succeeded {
+			st.RuleExecuteSucceeded++
+		} else {
+			st.RuleExecuteFailed++
+		}
+		if mode == ExecutionProbe && !ruleResult.Succeeded {
+			st.ProbeFailures++
+		}
+		if recoveryAttempted {
+			st.RecoveryAttempts++
+		}
+		if recovered {
+			st.RecoveriesSucceeded++
+		}
 	}
 
 	return ruleResult
@@ -442,6 +466,9 @@ func handleFailureState[
 		result.ConsumeSyncToken = landedOnOurs && !rule.IsNoConsumeRecoveryToken(ctx.Token.PeekRaw(0).Token)
 		if result.ConsumeSyncToken {
 			ctx.Token.ConsumeRaw()
+			if st := ctx.EngineStats; st != nil {
+				st.RecoverySyncRawConsumes++
+			}
 		}
 
 		if landedOnOurs && rule.IsRecoveryBarrier() {
@@ -508,6 +535,9 @@ func performRecovery[
 		}
 
 		ctx.Token.ConsumeRaw()
+		if st := ctx.EngineStats; st != nil {
+			st.RecoveryDiscardRawConsumes++
+		}
 	}
 }
 

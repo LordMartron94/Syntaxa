@@ -125,7 +125,7 @@ func main() {
 	lexemes := []lexarch.Lexeme[rune, TokenKind, int]{ /* ... */ }
 	var cursor int
 	errors := &syntaxa.SyntaxErrors[rune]{}
-	ctx := syntaxa.BuildExecRuleContextFromSlice(parser, lexemes, errors, &cursor)
+	ctx := syntaxa.BuildExecRuleContextFromSlice(parser, lexemes, errors, &cursor, nil, nil)
 
 	rootNode, trace, err := syntaxa.SyntaxaParserParseWithContext(parser, ctx)
 	if err != nil {

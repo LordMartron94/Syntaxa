@@ -408,6 +408,12 @@ type ExecRuleContext[
 
 	GetAnalysis func() *GrammarAnalysis[TToken]
 
+	/*
+		EngineStats receives optional parse-engine counters when the caller passes a non-nil
+		pointer into BuildExecRuleContext* (same lifecycle as parse).
+	*/
+	EngineStats *ParseEngineStats
+
 	trace *ParseTrace[TToken]
 
 	save    func() ParserSnapshot[TObservation, TLexerState]
@@ -523,6 +529,7 @@ func BuildExecRuleContextFromSlice[
 	errors *SyntaxErrors[TObservation],
 	cursor *int,
 	streamStats *ParseStreamStats,
+	engineStats *ParseEngineStats,
 ) *ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
 	eofLex := lexarch.Lexeme[TObservation, TToken, TTokenRole]{Token: parser.eofToken}
 
@@ -552,7 +559,7 @@ func BuildExecRuleContextFromSlice[
 		*cursor = c.tokenIndex
 	}
 
-	ctx := buildBaseContext(parser, errors, src, save, restore, streamStats)
+	ctx := buildBaseContext(parser, errors, src, save, restore, streamStats, engineStats)
 
 	// Context specific overrides
 	ctx.lastLexingError = func() *lexarch.LexingError[TObservation, TToken] { return nil }
@@ -580,6 +587,7 @@ func BuildExecRuleContextFromLexerSession[
 	session *lexarch.LexerSession[TObservation, TState, TToken, TTokenRole],
 	errors *SyntaxErrors[TObservation],
 	streamStats *ParseStreamStats,
+	engineStats *ParseEngineStats,
 ) *ExecRuleContext[TObservation, TToken, TTokenRole, TState, TNodeKind] {
 	var lastConsumed lexarch.Lexeme[TObservation, TToken, TTokenRole]
 	var hasConsumed bool
@@ -602,7 +610,7 @@ func BuildExecRuleContextFromLexerSession[
 
 	restore := func(c ParserSnapshot[TObservation, TState]) { session.RestoreSnapshot(c.lexerSnap) }
 
-	ctx := buildBaseContext(parser, errors, src, save, restore, streamStats)
+	ctx := buildBaseContext(parser, errors, src, save, restore, streamStats, engineStats)
 
 	ctx.lastLexingError = func() *lexarch.LexingError[TObservation, TToken] { return session.GetLastError() }
 	ctx.SetLexerState = func(state TState) { lexarch.LexerSessionSetState(session, state) }
@@ -625,6 +633,7 @@ func BuildExecRuleContextFromStreamingSession[
 	session *lexarch.StreamingLexerSession[TObservation, TState, TToken, TTokenRole],
 	errors *SyntaxErrors[TObservation],
 	streamStats *ParseStreamStats,
+	engineStats *ParseEngineStats,
 ) *ExecRuleContext[TObservation, TToken, TTokenRole, TState, TNodeKind] {
 	var lastConsumed lexarch.Lexeme[TObservation, TToken, TTokenRole]
 	var hasConsumed bool
@@ -647,7 +656,7 @@ func BuildExecRuleContextFromStreamingSession[
 
 	restore := func(c ParserSnapshot[TObservation, TState]) { session.RestoreSnapshot(c.streamingSnap) }
 
-	ctx := buildBaseContext(parser, errors, src, save, restore, streamStats)
+	ctx := buildBaseContext(parser, errors, src, save, restore, streamStats, engineStats)
 
 	ctx.lastLexingError = func() *lexarch.LexingError[TObservation, TToken] { return session.GetLastError() }
 	ctx.SetLexerState = func(state TState) { lexarch.StreamingLexerSessionSetState(session, state) }
@@ -671,6 +680,7 @@ func buildBaseContext[
 	saveFn func() ParserSnapshot[TObservation, TLexerState],
 	restoreFn func(ParserSnapshot[TObservation, TLexerState]),
 	streamStats *ParseStreamStats,
+	engineStats *ParseEngineStats,
 ) *ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
 
 	peekRaw := src.peek
@@ -709,9 +719,10 @@ func buildBaseContext[
 	eCore := &errorCore[TObservation, TToken, TTokenRole]{sink: errors, ts: tStream}
 
 	editor := &LSTEditor[TObservation, TToken, TTokenRole, TNodeKind]{
-		created:  make([]*SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind], 0),
-		nodeFree: make([]*SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind], 0, parser.nodePoolPrefill),
-		nodeGrow: parser.nodePoolGrow,
+		created:          make([]*SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind], 0),
+		nodeFree:         make([]*SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind], 0, parser.nodePoolPrefill),
+		nodeGrow:         parser.nodePoolGrow,
+		parseEngineStats: engineStats,
 	}
 	for i := 0; i < parser.nodePoolPrefill; i++ {
 		editor.nodeFree = append(editor.nodeFree, &SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind]{})
@@ -758,6 +769,7 @@ func buildBaseContext[
 		GetAnalysis: func() *GrammarAnalysis[TToken] {
 			return cachedAnalysis
 		},
+		EngineStats: engineStats,
 	}
 
 	var trace *ParseTrace[TToken]
@@ -778,6 +790,10 @@ func buildBaseContext[
 	}
 
 	ctxPtr.ExecuteReference = func(targetRule GrammarLabel, mode RuleExecutionMode) RuleResult[TObservation, TToken, TTokenRole, TNodeKind] {
+		if st := ctxPtr.EngineStats; st != nil {
+			st.ReferenceDirectCalls++
+		}
+
 		resolvedRule, ok := parser.registry[targetRule]
 		if !ok {
 			panic(fmt.Errorf("runtime engine error: unresolved target rule '%s'", targetRule))

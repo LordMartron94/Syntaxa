@@ -29,6 +29,9 @@ type LSTEditor[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind comparabl
 	// free-list slice after this grow (must be >= needed).
 	nodeGrow func(currentCap, needed int) int
 
+	// parseEngineStats is optional; shared with ExecRuleContext.EngineStats for bench counters.
+	parseEngineStats *ParseEngineStats
+
 	inUse atomic.Bool
 }
 
@@ -57,6 +60,13 @@ func (e *LSTEditor[TObservation, TToken, TTokenRole, TNodeKind]) setRoot(root *S
 }
 
 /*
+CreatedCount returns how many nodes have been created in this editor session (including detached nodes).
+*/
+func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) CreatedCount() int {
+	return len(e.created)
+}
+
+/*
 NewNode creates a detached LST node of the specified kind.
 */
 func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) NewNode(kind TKind) *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind] {
@@ -76,9 +86,16 @@ func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) NewNode(kind TKind) *Syntax
 func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) nodeAcquire() *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind] {
 	freeCount := len(e.nodeFree)
 	if freeCount > 0 {
+		if st := e.parseEngineStats; st != nil {
+			st.LSTNodePoolHits++
+		}
 		node := e.nodeFree[freeCount-1]
 		e.nodeFree = e.nodeFree[:freeCount-1]
 		return node
+	}
+
+	if st := e.parseEngineStats; st != nil {
+		st.LSTNodePoolMisses++
 	}
 
 	curCap := cap(e.nodeFree)
