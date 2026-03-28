@@ -522,6 +522,7 @@ func BuildExecRuleContextFromSlice[
 	lexemes []lexarch.Lexeme[TObservation, TToken, TTokenRole],
 	errors *SyntaxErrors[TObservation],
 	cursor *int,
+	streamStats *ParseStreamStats,
 ) *ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
 	eofLex := lexarch.Lexeme[TObservation, TToken, TTokenRole]{Token: parser.eofToken}
 
@@ -551,7 +552,7 @@ func BuildExecRuleContextFromSlice[
 		*cursor = c.tokenIndex
 	}
 
-	ctx := buildBaseContext(parser, errors, src, save, restore)
+	ctx := buildBaseContext(parser, errors, src, save, restore, streamStats)
 
 	// Context specific overrides
 	ctx.lastLexingError = func() *lexarch.LexingError[TObservation, TToken] { return nil }
@@ -578,6 +579,7 @@ func BuildExecRuleContextFromLexerSession[
 	lexer *lexarch.Lexer[TObservation, TState, TToken, TTokenRole],
 	session *lexarch.LexerSession[TObservation, TState, TToken, TTokenRole],
 	errors *SyntaxErrors[TObservation],
+	streamStats *ParseStreamStats,
 ) *ExecRuleContext[TObservation, TToken, TTokenRole, TState, TNodeKind] {
 	var lastConsumed lexarch.Lexeme[TObservation, TToken, TTokenRole]
 	var hasConsumed bool
@@ -600,7 +602,7 @@ func BuildExecRuleContextFromLexerSession[
 
 	restore := func(c ParserSnapshot[TObservation, TState]) { session.RestoreSnapshot(c.lexerSnap) }
 
-	ctx := buildBaseContext(parser, errors, src, save, restore)
+	ctx := buildBaseContext(parser, errors, src, save, restore, streamStats)
 
 	ctx.lastLexingError = func() *lexarch.LexingError[TObservation, TToken] { return session.GetLastError() }
 	ctx.SetLexerState = func(state TState) { lexarch.LexerSessionSetState(session, state) }
@@ -622,6 +624,7 @@ func BuildExecRuleContextFromStreamingSession[
 	lexer *lexarch.Lexer[TObservation, TState, TToken, TTokenRole],
 	session *lexarch.StreamingLexerSession[TObservation, TState, TToken, TTokenRole],
 	errors *SyntaxErrors[TObservation],
+	streamStats *ParseStreamStats,
 ) *ExecRuleContext[TObservation, TToken, TTokenRole, TState, TNodeKind] {
 	var lastConsumed lexarch.Lexeme[TObservation, TToken, TTokenRole]
 	var hasConsumed bool
@@ -644,7 +647,7 @@ func BuildExecRuleContextFromStreamingSession[
 
 	restore := func(c ParserSnapshot[TObservation, TState]) { session.RestoreSnapshot(c.streamingSnap) }
 
-	ctx := buildBaseContext(parser, errors, src, save, restore)
+	ctx := buildBaseContext(parser, errors, src, save, restore, streamStats)
 
 	ctx.lastLexingError = func() *lexarch.LexingError[TObservation, TToken] { return session.GetLastError() }
 	ctx.SetLexerState = func(state TState) { lexarch.StreamingLexerSessionSetState(session, state) }
@@ -667,7 +670,23 @@ func buildBaseContext[
 	src rawSource[TObservation, TToken, TTokenRole],
 	saveFn func() ParserSnapshot[TObservation, TLexerState],
 	restoreFn func(ParserSnapshot[TObservation, TLexerState]),
+	streamStats *ParseStreamStats,
 ) *ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
+
+	peekRaw := src.peek
+	consumeRaw := src.consume
+	if streamStats != nil {
+		origPeek := peekRaw
+		origConsume := consumeRaw
+		peekRaw = func(n int) lexarch.Lexeme[TObservation, TToken, TTokenRole] {
+			streamStats.RawPeekCalls++
+			return origPeek(n)
+		}
+		consumeRaw = func() lexarch.Lexeme[TObservation, TToken, TTokenRole] {
+			streamStats.RawConsumeCalls++
+			return origConsume()
+		}
+	}
 
 	// Initialize Cores
 	sCore := &skipCore[TTokenRole]{stack: make([]tokenSet[TTokenRole], 0)}
@@ -676,8 +695,8 @@ func buildBaseContext[
 	}
 
 	tStream := &tokenStream[TObservation, TToken, TTokenRole]{
-		peekRaw:    src.peek,
-		consumeRaw: src.consume,
+		peekRaw:    peekRaw,
+		consumeRaw: consumeRaw,
 		skipCore:   sCore,
 		eofToken:   parser.eofToken,
 	}
