@@ -56,20 +56,10 @@ ParserSnapshot represents a snapshot of parser progress.
 It is opaque by design and only meaningful to the RuleContext
 implementation that created it.
 */
-type snapshotKind uint8
-
-const (
-	snapSlice snapshotKind = iota
-	snapLexer
-	snapStreaming
-)
-
 type ParserSnapshot[TObs cmp.Ordered, TState comparable] struct {
-	kind       snapshotKind
 	tokenIndex int
 
-	lexerSnap     lexarch.LexerSessionSnapshot[TState]
-	streamingSnap lexarch.StreamingLexerSessionSnapshot[TObs, TState]
+	lexerSnap lexarch.LexerSessionSnapshot[TState]
 
 	nextVisibleRawIndex int
 	nextVisibleCached   bool
@@ -239,14 +229,13 @@ SyntaxaParserParseWithContext drives parsing using a fully
 configured RuleContext.
 
 This is the advanced entry point for custom lexer integrations,
-streaming scenarios, incremental systems, and complex pipelines.
+incremental systems, and complex pipelines.
 
 The caller is responsible for constructing a valid RuleContext
 and providing an initialized root node.
 
 Typical use cases:
   - parsing directly from lexer sessions
-  - online/streaming parsing
   - multi-stage lexing pipelines
   - editor-driven incremental parsing
   - custom recovery strategies

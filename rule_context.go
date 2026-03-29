@@ -402,7 +402,7 @@ type ExecRuleContext[
 	/*
 		GetLastConsumedLexeme returns the last consumed lexeme and true if any token has been consumed.
 		Used to report "expected X" at the end of the previous token (e.g. missing semicolon after "lspec").
-		May be nil when the token source does not support it (e.g. streaming).
+		May be nil when the token source does not support it.
 	*/
 	GetLastConsumedLexeme func() (lexarch.Lexeme[TObservation, TToken, TTokenRole], bool)
 
@@ -614,52 +614,6 @@ func BuildExecRuleContextFromLexerSession[
 
 	ctx.lastLexingError = func() *lexarch.LexingError[TObservation, TToken] { return session.GetLastError() }
 	ctx.SetLexerState = func(state TState) { lexarch.LexerSessionSetState(session, state) }
-	ctx.GetLastConsumedLexeme = func() (lexarch.Lexeme[TObservation, TToken, TTokenRole], bool) {
-		return lastConsumed, hasConsumed
-	}
-
-	return ctx
-}
-
-func BuildExecRuleContextFromStreamingSession[
-	TObservation cmp.Ordered,
-	TState comparable,
-	TToken comparable,
-	TTokenRole comparable,
-	TNodeKind comparable,
-](
-	parser *SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TState],
-	lexer *lexarch.Lexer[TObservation, TState, TToken, TTokenRole],
-	session *lexarch.StreamingLexerSession[TObservation, TState, TToken, TTokenRole],
-	errors *SyntaxErrors[TObservation],
-	streamStats *ParseStreamStats,
-	engineStats *ParseEngineStats,
-) *ExecRuleContext[TObservation, TToken, TTokenRole, TState, TNodeKind] {
-	var lastConsumed lexarch.Lexeme[TObservation, TToken, TTokenRole]
-	var hasConsumed bool
-	src := rawSource[TObservation, TToken, TTokenRole]{
-		peek: func(n int) lexarch.Lexeme[TObservation, TToken, TTokenRole] {
-			return lexarch.LexerPeekStreaming(lexer, session, n)
-		},
-		consume: func() lexarch.Lexeme[TObservation, TToken, TTokenRole] {
-			l := lexarch.LexerConsumeStreaming(lexer, session)
-			lastConsumed = l
-			hasConsumed = true
-			return l
-		},
-	}
-
-	save := func() ParserSnapshot[TObservation, TState] {
-		snap := session.Snapshot()
-		return ParserSnapshot[TObservation, TState]{tokenIndex: snap.AbsPos, streamingSnap: snap}
-	}
-
-	restore := func(c ParserSnapshot[TObservation, TState]) { session.RestoreSnapshot(c.streamingSnap) }
-
-	ctx := buildBaseContext(parser, errors, src, save, restore, streamStats, engineStats)
-
-	ctx.lastLexingError = func() *lexarch.LexingError[TObservation, TToken] { return session.GetLastError() }
-	ctx.SetLexerState = func(state TState) { lexarch.StreamingLexerSessionSetState(session, state) }
 	ctx.GetLastConsumedLexeme = func() (lexarch.Lexeme[TObservation, TToken, TTokenRole], bool) {
 		return lastConsumed, hasConsumed
 	}
