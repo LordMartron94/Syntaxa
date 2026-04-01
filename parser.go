@@ -546,6 +546,7 @@ func validateRuleSuccess[
 ) error {
 
 	contract := rule.contract
+	lexemeLine, lexemeColumn := LexemeStartLineColumn(lexemePreRule)
 
 	if rule.grammar != nil && rule.grammar.Kind == GReference {
 		if targetRule, exists := parser.registry[rule.grammar.ReferenceTarget]; exists {
@@ -559,8 +560,8 @@ func validateRuleSuccess[
 			"parser invariant violated: non-optional rule succeeded without consuming input at cursor %d (token=%v) [%d:%d] | rule = '%s'",
 			startPos,
 			lexemePreRule.Token,
-			lexemePreRule.StartLine,
-			lexemePreRule.StartColumn,
+			lexemeLine,
+			lexemeColumn,
 			rule.identity.RuleName,
 		)
 	}
@@ -570,8 +571,8 @@ func validateRuleSuccess[
 			"parser invariant violated: rule returned nil node without explicit skip at cursor %d (token=%v) [%d:%d] | rule = '%s'",
 			startPos,
 			lexemePreRule.Token,
-			lexemePreRule.StartLine,
-			lexemePreRule.StartColumn,
+			lexemeLine,
+			lexemeColumn,
 			rule.identity.RuleName,
 		)
 	}

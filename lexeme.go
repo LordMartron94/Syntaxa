@@ -15,11 +15,11 @@ type Lexeme[TObservation cmp.Ordered, TToken, TTokenRole comparable] struct {
 	Raw         []byte
 	Start       int
 	End         int
-	StartLine   int
-	StartColumn int
-	EndLine     int
-	EndColumn   int
 	TokenNumber int
+
+	source       string
+	tabWidth     int
+	originalSpan lexarch.ByteSpan
 }
 
 func (l Lexeme[_, _, _]) FormatRawDiagnostic() string {
@@ -53,18 +53,41 @@ func LexemeFromToken[TObservation cmp.Ordered, TToken, TTokenRole comparable](
 		end = len(source)
 	}
 
-	pos := lexarch.LexerByteSpanToPosition(token.Span, source, tabWidth)
 	out.Start = start
 	out.End = end
-	out.StartLine = pos.StartLine
-	out.StartColumn = pos.StartColumn
-	out.EndLine = pos.EndLine
-	out.EndColumn = pos.EndColumn
 	out.TokenNumber = tokenNumber
 	out.Raw = []byte(source[start:end])
 	out.Token = lexemeConvertTokenKind[TToken](token.Kind)
 	out.Role = lexemeConvertTokenRole[TTokenRole](token.Role)
+	out.source = source
+	out.tabWidth = tabWidth
+	out.originalSpan = token.Span
 	return out
+}
+
+func LexemeLineSpan[TObservation cmp.Ordered, TToken, TTokenRole comparable](
+	lexeme Lexeme[TObservation, TToken, TTokenRole],
+) (startLine, startColumn, endLine, endColumn int) {
+	if lexeme.source == "" {
+		return 0, 0, 0, 0
+	}
+
+	pos := lexarch.LexerByteSpanToPosition(lexeme.originalSpan, lexeme.source, lexeme.tabWidth)
+	return pos.StartLine, pos.StartColumn, pos.EndLine, pos.EndColumn
+}
+
+func LexemeStartLineColumn[TObservation cmp.Ordered, TToken, TTokenRole comparable](
+	lexeme Lexeme[TObservation, TToken, TTokenRole],
+) (line, column int) {
+	sl, sc, _, _ := LexemeLineSpan(lexeme)
+	return sl, sc
+}
+
+func LexemeEndLineColumn[TObservation cmp.Ordered, TToken, TTokenRole comparable](
+	lexeme Lexeme[TObservation, TToken, TTokenRole],
+) (line, column int) {
+	_, _, el, ec := LexemeLineSpan(lexeme)
+	return el, ec
 }
 
 func lexemeConvertTokenKind[TToken comparable](kind lexarch.TokenKind) TToken {

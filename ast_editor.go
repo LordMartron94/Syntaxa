@@ -447,13 +447,14 @@ func spanFromNode[TObs cmp.Ordered, TToken, TTokenRole, TKind comparable](
 func spanFromToken[TObs cmp.Ordered, TToken, TTokenRole comparable](
 	t Lexeme[TObs, TToken, TTokenRole],
 ) span {
+	sl, sc, el, ec := LexemeLineSpan(t)
 	return span{
 		start: t.Start,
 		end:   t.End,
-		sl:    t.StartLine,
-		sc:    t.StartColumn,
-		el:    t.EndLine,
-		ec:    t.EndColumn,
+		sl:    sl,
+		sc:    sc,
+		el:    el,
+		ec:    ec,
 	}
 }
 

@@ -284,11 +284,8 @@ func (ec *errorCore[TObs, _, _]) ReportHere(ruleName, message string) {
 	ec.sink.report(SyntaxError[TObs]{
 		Rule:             ruleName,
 		Message:          message,
-		StartLine:        current.StartLine,
-		StartColumn:      current.StartColumn,
-		EndLine:          current.EndLine,
-		EndColumn:        current.EndColumn,
 		AbsolutePosition: current.Start,
+		AbsoluteEnd:      current.End,
 		TokenNumber:      current.TokenNumber,
 	})
 }
@@ -297,11 +294,8 @@ func (ec *errorCore[TObs, TToken, TTokenRole]) ReportAt(ruleName string, lexeme 
 	ec.sink.report(SyntaxError[TObs]{
 		Rule:             ruleName,
 		Message:          message,
-		StartLine:        lexeme.StartLine,
-		StartColumn:      lexeme.StartColumn,
-		EndLine:          lexeme.EndLine,
-		EndColumn:        lexeme.EndColumn,
 		AbsolutePosition: lexeme.Start,
+		AbsoluteEnd:      lexeme.End,
 		TokenNumber:      lexeme.TokenNumber,
 	})
 }
@@ -310,24 +304,22 @@ func (ec *errorCore[TObs, TToken, TTokenRole]) ReportAtEnd(ruleName string, lexe
 	ec.sink.report(SyntaxError[TObs]{
 		Rule:             ruleName,
 		Message:          message,
-		StartLine:        lexeme.EndLine,
-		StartColumn:      lexeme.EndColumn,
-		EndLine:          lexeme.EndLine,
-		EndColumn:        lexeme.EndColumn,
-		AbsolutePosition: lexeme.Start,
+		AbsolutePosition: lexeme.End,
+		AbsoluteEnd:      lexeme.End,
 		TokenNumber:      lexeme.TokenNumber,
 	})
 }
 
 func (ec *errorCore[TObs, TToken, TTokenRole]) ReportAdvanced(ruleName string, startLine, startColumn, endLine, endColumn, absolutePosition, tokenNumber int, message string) {
+	_ = startLine
+	_ = startColumn
+	_ = endLine
+	_ = endColumn
 	ec.sink.report(SyntaxError[TObs]{
 		Rule:             ruleName,
 		Message:          message,
-		StartLine:        startLine,
-		StartColumn:      startColumn,
-		EndLine:          endLine,
-		EndColumn:        endColumn,
 		AbsolutePosition: absolutePosition,
+		AbsoluteEnd:      absolutePosition,
 		TokenNumber:      tokenNumber,
 	})
 }
@@ -336,11 +328,8 @@ func (ec *errorCore[TObs, TToken, TTokenRole]) replaceBestErrorAt(ruleName strin
 	err := SyntaxError[TObs]{
 		Rule:             ruleName,
 		Message:          message,
-		StartLine:        lexeme.StartLine,
-		StartColumn:      lexeme.StartColumn,
-		EndLine:          lexeme.EndLine,
-		EndColumn:        lexeme.EndColumn,
 		AbsolutePosition: lexeme.Start,
+		AbsoluteEnd:      lexeme.End,
 		TokenNumber:      lexeme.TokenNumber,
 	}
 
@@ -354,6 +343,8 @@ func (ec *errorCore[TObs, _, _]) reportLexerError(line, column int, description 
 		StartColumn:     column,
 		EndLine:         line,
 		EndColumn:       column,
+		AbsolutePosition: 0,
+		AbsoluteEnd:      0,
 		ProducedByLexer: true,
 	})
 }

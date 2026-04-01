@@ -16,6 +16,7 @@ type SyntaxError[TObservation cmp.Ordered] struct {
 	EndColumn   int
 
 	AbsolutePosition int
+	AbsoluteEnd      int
 	TokenNumber      int
 
 	Expected [][]TObservation
