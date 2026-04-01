@@ -397,8 +397,6 @@ func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) markDirtyPair(
 
 type span struct {
 	start, end int
-	sl, sc     int
-	el, ec     int
 }
 
 func merge(base span, next span, isEmpty bool) span {
@@ -414,20 +412,6 @@ func merge(base span, next span, isEmpty bool) span {
 		base.end = next.end
 	}
 
-	// 2. Widen Start (Lexicographical Min)
-	// If next line is earlier, OR same line but earlier column
-	if next.sl < base.sl || (next.sl == base.sl && next.sc < base.sc) {
-		base.sl = next.sl
-		base.sc = next.sc
-	}
-
-	// 3. Widen End (Lexicographical Max)
-	// If next line is later, OR same line but later column
-	if next.el > base.el || (next.el == base.el && next.ec > base.ec) {
-		base.el = next.el
-		base.ec = next.ec
-	}
-
 	return base
 }
 
@@ -437,24 +421,15 @@ func spanFromNode[TObs cmp.Ordered, TToken, TTokenRole, TKind comparable](
 	return span{
 		start: n.start,
 		end:   n.end,
-		sl:    n.startLine,
-		sc:    n.startColumn,
-		el:    n.endLine,
-		ec:    n.endColumn,
 	}
 }
 
 func spanFromToken[TObs cmp.Ordered, TToken, TTokenRole comparable](
 	t Lexeme[TObs, TToken, TTokenRole],
 ) span {
-	sl, sc, el, ec := LexemeLineSpan(t)
 	return span{
 		start: t.Start,
 		end:   t.End,
-		sl:    sl,
-		sc:    sc,
-		el:    el,
-		ec:    ec,
 	}
 }
 
@@ -506,8 +481,8 @@ func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) ensureSpanValid(
 
 	if !empty {
 		n.start, n.end = acc.start, acc.end
-		n.startLine, n.startColumn = acc.sl, acc.sc
-		n.endLine, n.endColumn = acc.el, acc.ec
+		n.startLine, n.startColumn = 0, 0
+		n.endLine, n.endColumn = 0, 0
 		n.spanValid = true
 		return
 	}

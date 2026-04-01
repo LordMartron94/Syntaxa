@@ -68,12 +68,13 @@ func LexemeFromToken[TObservation cmp.Ordered, TToken, TTokenRole comparable](
 func LexemeLineSpan[TObservation cmp.Ordered, TToken, TTokenRole comparable](
 	lexeme Lexeme[TObservation, TToken, TTokenRole],
 ) (startLine, startColumn, endLine, endColumn int) {
-	if lexeme.source == "" {
+	start := int(lexeme.originalSpan.Offset)
+	end := start + int(lexeme.originalSpan.Length)
+	sl, sc, el, ec, ok := LineSpanFromByteOffsets(start, end, lexeme.source, lexeme.tabWidth)
+	if !ok {
 		return 0, 0, 0, 0
 	}
-
-	pos := lexarch.LexerByteSpanToPosition(lexeme.originalSpan, lexeme.source, lexeme.tabWidth)
-	return pos.StartLine, pos.StartColumn, pos.EndLine, pos.EndColumn
+	return sl, sc, el, ec
 }
 
 func LexemeStartLineColumn[TObservation cmp.Ordered, TToken, TTokenRole comparable](

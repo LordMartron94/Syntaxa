@@ -28,8 +28,10 @@ type LSTDebugFormatter[TObs cmp.Ordered, TToken, TTokenRole, TKind comparable] s
 	ColorSpan      func(string) string
 
 	/* Position rendering */
-	ShowByteSpan bool
-	ShowLineSpan bool
+	ShowByteSpan     bool
+	ShowLineSpan     bool
+	LineSpanSource   string
+	LineSpanTabWidth int
 
 	/* Structural extras */
 	ShowTokens     bool
@@ -315,7 +317,10 @@ func (d *LSTDebugger[TObs, TToken, TTokenRole, TKind]) writeNodeLine(
 	}
 
 	if f.ShowLineSpan && node.spanValid {
-		sl, sc, el, ec := node.LineSpan()
+		sl, sc, el, ec, ok := LSTNodeLineSpanFromSource(node, f.LineSpanSource, f.LineSpanTabWidth)
+		if !ok {
+			sl, sc, el, ec = node.LineSpan()
+		}
 		txt := fmt.Sprintf("(%d:%d → %d:%d)", sl, sc, el, ec)
 		txt = f.applyColor(txt, f.ColorSpan)
 		if _, err := io.WriteString(w, " "+txt); err != nil {
