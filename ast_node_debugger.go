@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"foundation/extensions"
 	"io"
-	"lexarch"
 	"sort"
 	"strings"
 )
@@ -19,7 +18,7 @@ type LSTDebugFormatter[TObs cmp.Ordered, TToken, TTokenRole, TKind comparable] s
 	FormatKind func(TKind) string
 
 	/* Optional render hooks */
-	FormatToken     func(lexarch.Lexeme[TObs, TToken, TTokenRole]) string
+	FormatToken     func(Lexeme[TObs, TToken, TTokenRole]) string
 	FormatAttribute func(key string, value any) string
 
 	/* Coloring layer (nil = no color) */

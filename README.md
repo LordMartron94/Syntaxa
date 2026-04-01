@@ -16,7 +16,7 @@ Key features:
 - **Execution modes**: Normal (committed, report errors) vs Probe (speculative, no diagnostics) for optionals and choice.
 - **Recovery**: Rules declare recovery tokens; on FailureError the engine consumes until a sync token (e.g. `}`, `)`) before continuing.
 - **Grammar package**: Root grammar is turned into a `GrammarPackage` (rules map, tokens, nests, path/label maps). The core CFG and nullable/first/follow analysis are not stored on the package; they are produced on demand via `syntaxa/lowering` (see below).
-- **Multiple input sources**: Slice of lexemes, lexarch `LexerSession`, or lexarch `StreamingLexerSession` via `BuildExecRuleContext*` and `SyntaxaParserParseWithContext`.
+- **Multiple input sources**: Slice of syntaxa lexemes or a live lexarch `LexingSession` via `BuildExecRuleContext*` and `SyntaxaParserParseWithContext`.
 
 ## Design Philosophy
 
@@ -37,13 +37,13 @@ Key features:
 ```text
 syntaxa
 ├── syntaxa/rule   (rule factory: RuleBuilder, Token, Rule, Pratt endpoints)
-├── lexarch        (Lexeme, LexerSession, StreamingLexerSession for token input)
-└── (caller)       (BuildExecRuleContextFromSlice / FromLexerSession / FromStreamingSession,
+├── lexarch        (LexingSession + token spans)
+└── (caller)       (BuildExecRuleContextFromSlice / FromLexerSession,
                     SyntaxaParserParseWithContext)
 ```
 
-- **lexarch**: Supplies token streams (slice of lexemes or live lexer sessions). Syntaxa does not lex; it only consumes tokens.
-- **syntaxa/rule**: Depends on `syntaxa` (ParserRule, Grammar, ExecRuleContext, RuleResult) and `lexarch` (Lexeme). Rules built there are executed by the syntaxa parser.
+- **lexarch**: Supplies live token streams and span metadata. Syntaxa does not lex; it only consumes tokens.
+- **syntaxa/rule**: Depends on `syntaxa` (ParserRule, Grammar, ExecRuleContext, RuleResult, Lexeme). Rules built there are executed by the syntaxa parser.
 
 ## Packages
 
@@ -51,7 +51,7 @@ syntaxa
 
 - **Grammar IR**: `Grammar[TToken, TNodeKind]` with kinds GToken, GConcat, GChoice, GRepeat, GOptional, GEpsilon, GNest. Optional `OutputNodeKind` for the LST node kind produced when the grammar is the root of a rule. Constructors: `Token`, `Concat`, `Choice`, `Repeat`, `Optional`, `ZeroOrMore`, `OneOrMore`, `Nest`, etc.
 - **Rules**: `ParserRule` (identity, executor, contract, recovery tokens, grammar). Created with `ParserRuleCreate`. Executed by the engine; never called directly by the user.
-- **Context**: `ExecRuleContext` exposes `Token` (stream), `Recovery`, `Skip`, `Error`, `ExecuteRule`, `Editor`, `SetLexerState`, `Select`, `Finalization`. Built via `BuildExecRuleContextFromSlice`, `BuildExecRuleContextFromLexerSession`, or `BuildExecRuleContextFromStreamingSession`.
+- **Context**: `ExecRuleContext` exposes `Token` (stream), `Recovery`, `Skip`, `Error`, `ExecuteRule`, `Editor`, `SetLexerState`, `Select`, `Finalization`. Built via `BuildExecRuleContextFromSlice` or `BuildExecRuleContextFromLexerSession`.
 - **Parser**: `SyntaxaParser` is built from a grammar package (with entry rule set). `SyntaxaParserCreate(grammarPackage, ..., getAnalysis)` takes a `GrammarPackage` and an optional `getAnalysis` (e.g. `lowering.GetAnalysis(grammarPackage)`) for nullable/first/follow when using Predict or Pratt; pass nil otherwise. `SyntaxaParserParseWithContext(parser, ctx)` runs the parse. For LST allocation tuning, `SetNodePoolPrefill(n)` pre-allocates reusable node buffers per context, and `SetNodePoolGrowFn(func(currentCap, needed int) int)` customizes growth when the pool runs empty (same shape as memforge `GrowthStrategy`: current free-list slice capacity, minimum required length after grow; return new target capacity, `>= needed`).
 - **LST**: `SyntaxaLSTNode` (kind, parent, children, tokens, attributes, span). `LSTEditor` is the only way to create/mutate nodes during parsing (`NewNode`, `NewTransientNode`, `AttachChild`, `Detach`, etc.).
 - **Grammar package**: `ProducePackage(rootGrammar, name, version, entryRule)` builds a `GrammarPackage` (entry rule ID, rules map, tokens, nests, path/label maps, and optionally the entry `ParserRule`). It does **not** store the core CFG (pattern/Contexta IR) or nullable/first/follow analysis; those are produced on demand via `syntaxa/lowering` (ToPatternGrammar, GetAnalysis, CompileEngine). Pass a non-nil `entryRule` when the package will be used to create a parser; pass nil for analysis-only use. Duplicate rule-root GrammarIDs panic.
@@ -72,7 +72,7 @@ On-demand lowering of a `GrammarPackage` into other representations. The core pa
 - **Token endpoint**: `Expect`, `ExpectVirtual`, `ExpectOneOf`, `List` (open/element/separator/close, trailing mode, empty-list option).
 - **Rule endpoint**: `Optional`, `OptionalPrefix`, `OptionalWhen`, `OptionalSuffix`, `Predict`, `Required`, `Root`, `Sequence`, `Block`, `NOrMore`, `ZeroOrMore`, `OneOrMore`, `TransparentNOrMore`, `TransparentZeroOrMore`, `Nest`, `TransparentNest`, `RecoverSync`. `OptionalSuffix` runs a rule then optionally consumes a suffix token and wraps the result. `Predict` runs a rule only when a lookahead predicate holds (false yields FailureNoMatch for Choice); use to resolve prefix overlap.
 - **Pratt endpoint**: `Expression(grammarID, PrattConfig)` — precedence-climbing expression rule. Config holds `Primary` (atom rule), `PrefixOps` (token, right binding power, node kind), `InfixOps` (token, left/right binding power, node kind), and optional `RecoveryTokens`. Binding power: higher = tighter binding; left-assoc uses `RightBP < LeftBP`, right-assoc uses `RightBP = LeftBP`. Returns a Rule that composes with Sequence, Choice, etc.
-- **Types**: `Rule` and `Result` are aliases for `syntaxa.ParserRule` and `syntaxa.RuleResult`. `Lexeme` is an alias for `lexarch.Lexeme`.
+- **Types**: `Rule` and `Result` are aliases for `syntaxa.ParserRule` and `syntaxa.RuleResult`. `Lexeme` is an alias for `syntaxa.Lexeme`.
 - **TrailingSeparatorMode**: `TrailingForbidden`, `TrailingOptional`, `TrailingRequired` for list rules.
 
 **Example (rule factory + parse from slice):**

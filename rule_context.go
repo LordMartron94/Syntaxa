@@ -11,8 +11,8 @@ import (
 // =============================================================
 
 type tokenStream[TObs cmp.Ordered, TToken comparable, TTokenRole comparable] struct {
-	peekRaw    func(int) lexarch.Lexeme[TObs, TToken, TTokenRole]
-	consumeRaw func() lexarch.Lexeme[TObs, TToken, TTokenRole]
+	peekRaw    func(int) Lexeme[TObs, TToken, TTokenRole]
+	consumeRaw func() Lexeme[TObs, TToken, TTokenRole]
 
 	eofToken TToken
 	skipCore *skipCore[TTokenRole]
@@ -21,7 +21,7 @@ type tokenStream[TObs cmp.Ordered, TToken comparable, TTokenRole comparable] str
 	nextVisibleCached   bool
 }
 
-func (ts *tokenStream[TObs, TToken, TTokenRole]) isEOF(l lexarch.Lexeme[TObs, TToken, TTokenRole]) bool {
+func (ts *tokenStream[TObs, TToken, TTokenRole]) isEOF(l Lexeme[TObs, TToken, TTokenRole]) bool {
 	return l.Token == ts.eofToken
 }
 
@@ -30,13 +30,13 @@ func (ts *tokenStream[TObs, TToken, TTokenRole]) invalidatePeekCache() {
 	ts.nextVisibleRawIndex = 0
 }
 
-func (ts *tokenStream[TObs, TToken, TTokenRole]) consumeRawAndInvalidate() lexarch.Lexeme[TObs, TToken, TTokenRole] {
+func (ts *tokenStream[TObs, TToken, TTokenRole]) consumeRawAndInvalidate() Lexeme[TObs, TToken, TTokenRole] {
 	consumed := ts.consumeRaw()
 	ts.invalidatePeekCache()
 	return consumed
 }
 
-func (ts *tokenStream[TObs, TToken, TTokenRole]) resolveNextVisibleRaw() (lexarch.Lexeme[TObs, TToken, TTokenRole], int) {
+func (ts *tokenStream[TObs, TToken, TTokenRole]) resolveNextVisibleRaw() (Lexeme[TObs, TToken, TTokenRole], int) {
 	rawIndex := 0
 	for {
 		cur := ts.peekRaw(rawIndex)
@@ -59,7 +59,7 @@ func (ts *tokenStream[TObs, TToken, TTokenRole]) skipForward() {
 	}
 }
 
-func (ts *tokenStream[TObs, TToken, TTokenRole]) Peek(n int) lexarch.Lexeme[TObs, TToken, TTokenRole] {
+func (ts *tokenStream[TObs, TToken, TTokenRole]) Peek(n int) Lexeme[TObs, TToken, TTokenRole] {
 	if n < 0 {
 		panic("Peek: n must be >= 0")
 	}
@@ -98,16 +98,16 @@ func (ts *tokenStream[TObs, TToken, TTokenRole]) Peek(n int) lexarch.Lexeme[TObs
 	}
 }
 
-func (ts *tokenStream[TObs, TToken, TTokenRole]) PeekRaw(n int) lexarch.Lexeme[TObs, TToken, TTokenRole] {
+func (ts *tokenStream[TObs, TToken, TTokenRole]) PeekRaw(n int) Lexeme[TObs, TToken, TTokenRole] {
 	return ts.peekRaw(n)
 }
 
-func (ts *tokenStream[TObs, TToken, TTokenRole]) Consume() lexarch.Lexeme[TObs, TToken, TTokenRole] {
+func (ts *tokenStream[TObs, TToken, TTokenRole]) Consume() Lexeme[TObs, TToken, TTokenRole] {
 	ts.skipForward()
 	return ts.consumeRawAndInvalidate()
 }
 
-func (ts *tokenStream[TObs, TToken, TTokenRole]) ConsumeRaw() lexarch.Lexeme[TObs, TToken, TTokenRole] {
+func (ts *tokenStream[TObs, TToken, TTokenRole]) ConsumeRaw() Lexeme[TObs, TToken, TTokenRole] {
 	return ts.consumeRawAndInvalidate()
 }
 
@@ -293,7 +293,7 @@ func (ec *errorCore[TObs, _, _]) ReportHere(ruleName, message string) {
 	})
 }
 
-func (ec *errorCore[TObs, TToken, TTokenRole]) ReportAt(ruleName string, lexeme lexarch.Lexeme[TObs, TToken, TTokenRole], message string) {
+func (ec *errorCore[TObs, TToken, TTokenRole]) ReportAt(ruleName string, lexeme Lexeme[TObs, TToken, TTokenRole], message string) {
 	ec.sink.report(SyntaxError[TObs]{
 		Rule:             ruleName,
 		Message:          message,
@@ -306,7 +306,7 @@ func (ec *errorCore[TObs, TToken, TTokenRole]) ReportAt(ruleName string, lexeme 
 	})
 }
 
-func (ec *errorCore[TObs, TToken, TTokenRole]) ReportAtEnd(ruleName string, lexeme lexarch.Lexeme[TObs, TToken, TTokenRole], message string) {
+func (ec *errorCore[TObs, TToken, TTokenRole]) ReportAtEnd(ruleName string, lexeme Lexeme[TObs, TToken, TTokenRole], message string) {
 	ec.sink.report(SyntaxError[TObs]{
 		Rule:             ruleName,
 		Message:          message,
@@ -332,7 +332,7 @@ func (ec *errorCore[TObs, TToken, TTokenRole]) ReportAdvanced(ruleName string, s
 	})
 }
 
-func (ec *errorCore[TObs, TToken, TTokenRole]) replaceBestErrorAt(ruleName string, lexeme lexarch.Lexeme[TObs, TToken, TTokenRole], message string) bool {
+func (ec *errorCore[TObs, TToken, TTokenRole]) replaceBestErrorAt(ruleName string, lexeme Lexeme[TObs, TToken, TTokenRole], message string) bool {
 	err := SyntaxError[TObs]{
 		Rule:             ruleName,
 		Message:          message,
@@ -396,7 +396,7 @@ type ExecRuleContext[
 	Select       *SelectRuleContext[TObservation, TToken, TTokenRole]
 	Finalization *FinalizationCtx[TObservation, TToken, TTokenRole, TNodeKind]
 
-	lastLexingError func() *lexarch.LexingError[TObservation, TToken]
+	lastLexingError func() error
 	createErrorNode func(string) *SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind]
 
 	/*
@@ -404,7 +404,7 @@ type ExecRuleContext[
 		Used to report "expected X" at the end of the previous token (e.g. missing semicolon after "lspec").
 		May be nil when the token source does not support it.
 	*/
-	GetLastConsumedLexeme func() (lexarch.Lexeme[TObservation, TToken, TTokenRole], bool)
+	GetLastConsumedLexeme func() (Lexeme[TObservation, TToken, TTokenRole], bool)
 
 	GetAnalysis func() *GrammarAnalysis[TToken]
 
@@ -486,11 +486,11 @@ type SelectRuleContext[TObservation cmp.Ordered, TToken, TTokenRole comparable] 
 	ts *tokenStream[TObservation, TToken, TTokenRole]
 }
 
-func (s *SelectRuleContext[TObservation, TToken, TTokenRole]) Peek(n int) lexarch.Lexeme[TObservation, TToken, TTokenRole] {
+func (s *SelectRuleContext[TObservation, TToken, TTokenRole]) Peek(n int) Lexeme[TObservation, TToken, TTokenRole] {
 	return s.ts.Peek(n)
 }
 
-func (s *SelectRuleContext[TObservation, TToken, TTokenRole]) PeekRaw(n int) lexarch.Lexeme[TObservation, TToken, TTokenRole] {
+func (s *SelectRuleContext[TObservation, TToken, TTokenRole]) PeekRaw(n int) Lexeme[TObservation, TToken, TTokenRole] {
 	return s.ts.PeekRaw(n)
 }
 
@@ -513,8 +513,8 @@ func (f *FinalizationCtx[TObservation, TToken, TTokenRole, TNodeKind]) DeleteAtt
 // =============================================================
 
 type rawSource[TObs cmp.Ordered, TToken, TTokenRole comparable] struct {
-	peek    func(int) lexarch.Lexeme[TObs, TToken, TTokenRole]
-	consume func() lexarch.Lexeme[TObs, TToken, TTokenRole]
+	peek    func(int) Lexeme[TObs, TToken, TTokenRole]
+	consume func() Lexeme[TObs, TToken, TTokenRole]
 }
 
 func BuildExecRuleContextFromSlice[
@@ -525,23 +525,23 @@ func BuildExecRuleContextFromSlice[
 	TNodeKind comparable,
 ](
 	parser *SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
-	lexemes []lexarch.Lexeme[TObservation, TToken, TTokenRole],
+	lexemes []Lexeme[TObservation, TToken, TTokenRole],
 	errors *SyntaxErrors[TObservation],
 	cursor *int,
 	streamStats *ParseStreamStats,
 	engineStats *ParseEngineStats,
 ) *ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
-	eofLex := lexarch.Lexeme[TObservation, TToken, TTokenRole]{Token: parser.eofToken}
+	eofLex := Lexeme[TObservation, TToken, TTokenRole]{Token: parser.eofToken}
 
 	src := rawSource[TObservation, TToken, TTokenRole]{
-		peek: func(n int) lexarch.Lexeme[TObservation, TToken, TTokenRole] {
+		peek: func(n int) Lexeme[TObservation, TToken, TTokenRole] {
 			idx := *cursor + n
 			if idx >= len(lexemes) {
 				return eofLex
 			}
 			return lexemes[idx]
 		},
-		consume: func() lexarch.Lexeme[TObservation, TToken, TTokenRole] {
+		consume: func() Lexeme[TObservation, TToken, TTokenRole] {
 			if *cursor >= len(lexemes) {
 				return eofLex
 			}
@@ -562,13 +562,13 @@ func BuildExecRuleContextFromSlice[
 	ctx := buildBaseContext(parser, errors, src, save, restore, streamStats, engineStats)
 
 	// Context specific overrides
-	ctx.lastLexingError = func() *lexarch.LexingError[TObservation, TToken] { return nil }
+	ctx.lastLexingError = func() error { return nil }
 	ctx.SetLexerState = func(s TLexerState) {}
-	ctx.GetLastConsumedLexeme = func() (lexarch.Lexeme[TObservation, TToken, TTokenRole], bool) {
+	ctx.GetLastConsumedLexeme = func() (Lexeme[TObservation, TToken, TTokenRole], bool) {
 		if *cursor > 0 {
 			return lexemes[*cursor-1], true
 		}
-		var z lexarch.Lexeme[TObservation, TToken, TTokenRole]
+		var z Lexeme[TObservation, TToken, TTokenRole]
 		return z, false
 	}
 
@@ -583,20 +583,46 @@ func BuildExecRuleContextFromLexerSession[
 	TNodeKind comparable,
 ](
 	parser *SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TState],
-	lexer *lexarch.Lexer[TObservation, TState, TToken, TTokenRole],
-	session *lexarch.LexerSession[TObservation, TState, TToken, TTokenRole],
+	lexer *lexarch.Lexer,
+	session *lexarch.LexingSession,
+	source string,
 	errors *SyntaxErrors[TObservation],
 	streamStats *ParseStreamStats,
 	engineStats *ParseEngineStats,
 ) *ExecRuleContext[TObservation, TToken, TTokenRole, TState, TNodeKind] {
-	var lastConsumed lexarch.Lexeme[TObservation, TToken, TTokenRole]
+	var lastConsumed Lexeme[TObservation, TToken, TTokenRole]
 	var hasConsumed bool
+	eofLex := Lexeme[TObservation, TToken, TTokenRole]{Token: parser.eofToken}
+	out := lexarch.LexingSessionNextResultCreate()
+	nextTokenNumber := 0
+
+	resolveLexeme := func(tokenNumber int) Lexeme[TObservation, TToken, TTokenRole] {
+		// When lexer reports a runtime/validation error, present EOF to parser logic.
+		// The concrete error is still available via ctx.lastLexingError().
+		if out.LexingError != nil || out.Token == nil {
+			return eofLex
+		}
+
+		if out.Token.Kind == lexarch.TokenKindEOF {
+			return eofLex
+		}
+
+		if out.Token.Kind == lexarch.TokenKindError {
+			return eofLex
+		}
+
+		return LexemeFromToken[TObservation, TToken, TTokenRole](out.Token, source, 4, tokenNumber)
+	}
+
 	src := rawSource[TObservation, TToken, TTokenRole]{
-		peek: func(n int) lexarch.Lexeme[TObservation, TToken, TTokenRole] {
-			return lexarch.LexerPeek(lexer, session, n)
+		peek: func(n int) Lexeme[TObservation, TToken, TTokenRole] {
+			lexarch.LexingSessionPeek(session, out, n+1)
+			return resolveLexeme(nextTokenNumber + n)
 		},
-		consume: func() lexarch.Lexeme[TObservation, TToken, TTokenRole] {
-			l := lexarch.LexerConsume(lexer, session)
+		consume: func() Lexeme[TObservation, TToken, TTokenRole] {
+			lexarch.LexingSessionConsume(session, out)
+			l := resolveLexeme(nextTokenNumber)
+			nextTokenNumber++
 			lastConsumed = l
 			hasConsumed = true
 			return l
@@ -604,17 +630,20 @@ func BuildExecRuleContextFromLexerSession[
 	}
 
 	save := func() ParserSnapshot[TObservation, TState] {
-		snap := session.Snapshot()
-		return ParserSnapshot[TObservation, TState]{tokenIndex: snap.Position, lexerSnap: snap}
+		snap := lexarch.LexingSessionSnapshotCreate(session)
+		return ParserSnapshot[TObservation, TState]{tokenIndex: nextTokenNumber, lexerSnap: snap}
 	}
 
-	restore := func(c ParserSnapshot[TObservation, TState]) { session.RestoreSnapshot(c.lexerSnap) }
+	restore := func(c ParserSnapshot[TObservation, TState]) {
+		lexarch.LexingSessionSnapshotRestore(session, c.lexerSnap)
+		nextTokenNumber = c.tokenIndex
+	}
 
 	ctx := buildBaseContext(parser, errors, src, save, restore, streamStats, engineStats)
 
-	ctx.lastLexingError = func() *lexarch.LexingError[TObservation, TToken] { return session.GetLastError() }
-	ctx.SetLexerState = func(state TState) { lexarch.LexerSessionSetState(session, state) }
-	ctx.GetLastConsumedLexeme = func() (lexarch.Lexeme[TObservation, TToken, TTokenRole], bool) {
+	ctx.lastLexingError = func() error { return out.LexingError }
+	ctx.SetLexerState = func(state TState) { lexarch.LexingSessionSet(session, fmt.Sprintf("%v", state)) }
+	ctx.GetLastConsumedLexeme = func() (Lexeme[TObservation, TToken, TTokenRole], bool) {
 		return lastConsumed, hasConsumed
 	}
 
@@ -642,11 +671,11 @@ func buildBaseContext[
 	if streamStats != nil {
 		origPeek := peekRaw
 		origConsume := consumeRaw
-		peekRaw = func(n int) lexarch.Lexeme[TObservation, TToken, TTokenRole] {
+		peekRaw = func(n int) Lexeme[TObservation, TToken, TTokenRole] {
 			streamStats.RawPeekCalls++
 			return origPeek(n)
 		}
-		consumeRaw = func() lexarch.Lexeme[TObservation, TToken, TTokenRole] {
+		consumeRaw = func() Lexeme[TObservation, TToken, TTokenRole] {
 			streamStats.RawConsumeCalls++
 			return origConsume()
 		}

@@ -59,7 +59,7 @@ implementation that created it.
 type ParserSnapshot[TObs cmp.Ordered, TState comparable] struct {
 	tokenIndex int
 
-	lexerSnap lexarch.LexerSessionSnapshot[TState]
+	lexerSnap lexarch.LexingSnapshot
 
 	nextVisibleRawIndex int
 	nextVisibleCached   bool
@@ -130,7 +130,7 @@ type SyntaxaParser[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind, TLex
 	nodePoolGrow     func(currentCap, needed int) int
 
 	tokenFormatter       func(token TToken) string
-	observationFormatter lexarch.ObservationFormatter[TObservation]
+	observationFormatter ObservationFormatter[TObservation]
 
 	eofToken TToken
 
@@ -157,7 +157,7 @@ func SyntaxaParserCreate[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind
 	grammarPackage *GrammarPackage[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
 	registry RuleRegistry[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	tokenFormatter func(token TToken) string,
-	observationFormatter lexarch.ObservationFormatter[TObservation],
+	observationFormatter ObservationFormatter[TObservation],
 	nodePostProcessor NodePostProcessor[TObservation, TToken, TTokenRole, TNodeKind],
 	eofToken TToken,
 	rootNodeKind, errorNodeKind TNodeKind,
@@ -292,7 +292,7 @@ func parseWithContext[
 
 	// 2. Report Lexer Errors
 	if lexErr := ctx.lastLexingError(); lexErr != nil {
-		ctx.Error.reportLexerError(lexErr.StartLine, lexErr.StartColumn, fmt.Sprintf("lexing error: %s", lexErr.Error()))
+		ctx.Error.reportLexerError(0, 0, fmt.Sprintf("lexing error: %s", lexErr.Error()))
 	}
 
 	// 3. Finalize AST
@@ -421,7 +421,7 @@ func handleFailureState[
 	result RuleResult[TObservation, TToken, TTokenRole, TNodeKind],
 	startSnap ParserSnapshot[TObservation, TLexerState],
 	mode RuleExecutionMode,
-	lexemePreRule lexarch.Lexeme[TObservation, TToken, TTokenRole],
+	lexemePreRule Lexeme[TObservation, TToken, TTokenRole],
 ) (RuleResult[TObservation, TToken, TTokenRole, TNodeKind], bool, bool, bool, []TToken) {
 
 	if mode != ExecutionNormal || result.Kind != FailureError {
@@ -542,7 +542,7 @@ func validateRuleSuccess[
 	result RuleResult[TObservation, TToken, TTokenRole, TNodeKind],
 	startPos int,
 	endPos int,
-	lexemePreRule lexarch.Lexeme[TObservation, TToken, TTokenRole],
+	lexemePreRule Lexeme[TObservation, TToken, TTokenRole],
 ) error {
 
 	contract := rule.contract

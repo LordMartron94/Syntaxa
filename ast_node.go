@@ -3,7 +3,6 @@ package syntaxa
 import (
 	"cmp"
 	"fmt"
-	"lexarch"
 	"strings"
 	"structarch"
 )
@@ -57,7 +56,7 @@ type SyntaxaLSTNode[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind comp
 	// TOKEN PRESERVATION
 	// ---------------------------------------------------------
 
-	tokens []lexarch.Lexeme[TObservation, TToken, TTokenRole]
+	tokens []Lexeme[TObservation, TToken, TTokenRole]
 
 	// ---------------------------------------------------------
 	// METADATA
@@ -160,8 +159,8 @@ func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) SlotNames() []string {
 }
 
 /* Tokens returns a defensive copy of attached tokens. */
-func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) Tokens() []lexarch.Lexeme[TObs, TToken, TTokenRole] {
-	out := make([]lexarch.Lexeme[TObs, TToken, TTokenRole], len(n.tokens))
+func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) Tokens() []Lexeme[TObs, TToken, TTokenRole] {
+	out := make([]Lexeme[TObs, TToken, TTokenRole], len(n.tokens))
 	copy(out, n.tokens)
 	return out
 }

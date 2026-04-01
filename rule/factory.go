@@ -3,7 +3,6 @@ package rule
 import (
 	"cmp"
 	"fmt"
-	"lexarch"
 	"slices"
 	"strings"
 	"syntaxa"
@@ -26,11 +25,11 @@ It is the return type of rule execution: success/failure, optional LST node, and
 type Result[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind comparable] = syntaxa.RuleResult[TObservation, TToken, TTokenRole, TNodeKind]
 
 /*
-Lexeme is an alias for lexarch.Lexeme.
+Lexeme is an alias for syntaxa.Lexeme.
 
 Represents a single token with observation (position, etc.), token value, and role.
 */
-type Lexeme[TObservation cmp.Ordered, TToken, TTokenRole comparable] = lexarch.Lexeme[TObservation, TToken, TTokenRole]
+type Lexeme[TObservation cmp.Ordered, TToken, TTokenRole comparable] = syntaxa.Lexeme[TObservation, TToken, TTokenRole]
 
 // ------------------------------------------------------------- TOKEN ENDPOINT
 
@@ -304,13 +303,13 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 	exec := func(ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) Result[TObservation, TToken, TTokenRole, TNodeKind] {
 		results := syntaxa.ExecRuleContextAcquireResultsScratch(ctx, len(rules))
 		defer syntaxa.ExecRuleContextReleaseResultsScratch(ctx)
-		startMarker := ctx.Token.PeekRaw(0).TokenNumber
+		startMarker := ctx.Token.PeekRaw(0).Start
 
 		for i, rule := range rules {
 			result := ctx.ExecuteRule(rule, syntaxa.ExecutionNormal)
 
 			if result.Failed() {
-				currentMarker := ctx.Token.PeekRaw(0).TokenNumber
+				currentMarker := ctx.Token.PeekRaw(0).Start
 				effectiveKind := sequenceCommitmentFailureKind(startMarker, currentMarker, result.Kind)
 
 				if effectiveKind == syntaxa.FailureError && result.Kind == syntaxa.FailureNoMatch {
@@ -492,7 +491,7 @@ func (t *tokenEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 	ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	name syntaxa.RuleLabel,
 	node *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind],
-	peek lexarch.Lexeme[TObservation, TToken, TTokenRole],
+	peek syntaxa.Lexeme[TObservation, TToken, TTokenRole],
 	allowEmpty bool,
 ) Result[TObservation, TToken, TTokenRole, TNodeKind] {
 	if !allowEmpty {
@@ -510,7 +509,7 @@ func (t *tokenEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 	ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	parent *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind],
 	kind TNodeKind,
-	lexeme lexarch.Lexeme[TObservation, TToken, TTokenRole],
+	lexeme syntaxa.Lexeme[TObservation, TToken, TTokenRole],
 ) {
 	elem := ctx.Editor.NewNode(kind)
 	ctx.Editor.AddToken(elem, lexeme)
@@ -523,7 +522,7 @@ reportMismatch reports a syntax error for "unexpected X, expected Y" and returns
 func (t *tokenEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) reportMismatch(
 	ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	name syntaxa.RuleLabel,
-	found lexarch.Lexeme[TObservation, TToken, TTokenRole],
+	found syntaxa.Lexeme[TObservation, TToken, TTokenRole],
 	expected TToken,
 ) Result[TObservation, TToken, TTokenRole, TNodeKind] {
 	ctx.Error.ReportAt(string(name), found, t.sharedCore.formatUnexpectedExpected(found.Token, expected))
@@ -1075,13 +1074,13 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 	exec := func(ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) Result[TObservation, TToken, TTokenRole, TNodeKind] {
 		results := syntaxa.ExecRuleContextAcquireResultsScratch(ctx, len(rules))
 		defer syntaxa.ExecRuleContextReleaseResultsScratch(ctx)
-		startMarker := ctx.Token.PeekRaw(0).TokenNumber
+		startMarker := ctx.Token.PeekRaw(0).Start
 
 		for i, rule := range rules {
 			result := ctx.ExecuteRule(rule, syntaxa.ExecutionNormal)
 
 			if result.Failed() {
-				currentMarker := ctx.Token.PeekRaw(0).TokenNumber
+				currentMarker := ctx.Token.PeekRaw(0).Start
 				effectiveKind := sequenceCommitmentFailureKind(startMarker, currentMarker, result.Kind)
 
 				if effectiveKind == syntaxa.FailureError && result.Kind == syntaxa.FailureNoMatch {
@@ -1155,7 +1154,7 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 	grammar.OutputNodeKind = &nodeKind
 
 	exec := func(ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) Result[TObservation, TToken, TTokenRole, TNodeKind] {
-		startMarker := ctx.Token.PeekRaw(0).TokenNumber
+		startMarker := ctx.Token.PeekRaw(0).Start
 		result := ctx.ExecuteRule(rule, syntaxa.ExecutionNormal)
 
 		if !result.Failed() {
@@ -1188,7 +1187,7 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 	startMarker int,
 	result Result[TObservation, TToken, TTokenRole, TNodeKind],
 ) Result[TObservation, TToken, TTokenRole, TNodeKind] {
-	currentMarker := ctx.Token.PeekRaw(0).TokenNumber
+	currentMarker := ctx.Token.PeekRaw(0).Start
 	effectiveKind := sequenceCommitmentFailureKind(startMarker, currentMarker, result.Kind)
 
 	isPromotedError := effectiveKind == syntaxa.FailureError && result.Kind == syntaxa.FailureNoMatch
@@ -1210,7 +1209,7 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 	ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	ruleName syntaxa.RuleLabel,
 	expectedLabel string,
-	peeked lexarch.Lexeme[TObservation, TToken, TTokenRole],
+	peeked syntaxa.Lexeme[TObservation, TToken, TTokenRole],
 ) {
 	msg := fmt.Sprintf("expected %s", expectedLabel)
 	if lastLex, ok := ctx.GetLastConsumedLexeme(); ok {
@@ -1265,15 +1264,15 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 /*
 sequenceCommitmentFailureKind returns the failure kind to surface when a sub-rule fails in a sequence or committed context.
 
-Commitment is determined by whether the lexer progressed: if the token position did not advance (startTokenNumber == currentTokenNumber) and the failure was NoMatch, the sequence is not committed and FailureNoMatch is returned. Otherwise the sequence is committed and FailureError is returned.
+Commitment is determined by whether the lexer progressed: if the token span start offset did not advance (startSpanOffset == currentSpanOffset) and the failure was NoMatch, the sequence is not committed and FailureNoMatch is returned. Otherwise the sequence is committed and FailureError is returned.
 
 Use this whenever a production has logically "started" (e.g. after consuming a token or running a sub-rule that could consume) and a subsequent failure must be classified as grammar boundary (NoMatch) vs syntax error (Error). Do not use rule indices to infer commitment; use token position.
 */
 func sequenceCommitmentFailureKind(
-	startTokenNumber, currentTokenNumber int,
+	startSpanOffset, currentSpanOffset int,
 	failureKind syntaxa.FailureKind,
 ) syntaxa.FailureKind {
-	if failureKind == syntaxa.FailureNoMatch && startTokenNumber == currentTokenNumber {
+	if failureKind == syntaxa.FailureNoMatch && startSpanOffset == currentSpanOffset {
 		return syntaxa.FailureNoMatch
 	}
 	return syntaxa.FailureError
@@ -1348,7 +1347,7 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 
 		case syntaxa.FailureError:
 			after := ctx.Token.PeekRaw(0)
-			noProgress := before.TokenNumber == after.TokenNumber
+			noProgress := before.Start == after.Start
 			leaveSyncForParent := !result.ConsumeSyncToken
 			if noProgress || leaveSyncForParent {
 				return count, result, true
@@ -1433,7 +1432,7 @@ handleRepetitionFailure centralizes the switch statement for repetition loop fai
 func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) handleRepetitionFailure(
 	ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	result Result[TObservation, TToken, TTokenRole, TNodeKind],
-	before lexarch.Lexeme[TObservation, TToken, TTokenRole],
+	before syntaxa.Lexeme[TObservation, TToken, TTokenRole],
 	count int,
 ) (int, Result[TObservation, TToken, TTokenRole, TNodeKind], bool) {
 	if result.Kind == syntaxa.FailureNoMatch {
@@ -1441,7 +1440,7 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 	}
 
 	after := ctx.Token.PeekRaw(0)
-	noProgress := before.TokenNumber == after.TokenNumber
+	noProgress := before.Start == after.Start
 	leaveSyncForParent := !result.ConsumeSyncToken
 
 	if noProgress || leaveSyncForParent {
@@ -1905,10 +1904,10 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 	ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	innerRule Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 ) Result[TObservation, TToken, TTokenRole, TNodeKind] {
-	startMarker := ctx.Token.PeekRaw(0).TokenNumber
+	startMarker := ctx.Token.PeekRaw(0).Start
 	result := ctx.ExecuteRule(innerRule, syntaxa.ExecutionNormal)
 	if result.Failed() {
-		currentMarker := ctx.Token.PeekRaw(0).TokenNumber
+		currentMarker := ctx.Token.PeekRaw(0).Start
 		effectiveKind := sequenceCommitmentFailureKind(startMarker, currentMarker, result.Kind)
 		return r.sharedCore.buildFailureRuleResult(nil, effectiveKind)
 	}
@@ -2225,7 +2224,7 @@ func (r *ruleEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
 	ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	rule Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	identity syntaxa.RuleIdentity,
-	peeked lexarch.Lexeme[TObservation, TToken, TTokenRole],
+	peeked syntaxa.Lexeme[TObservation, TToken, TTokenRole],
 ) (bool, Result[TObservation, TToken, TTokenRole, TNodeKind]) {
 	analysis := ctx.GetAnalysis()
 	if analysis == nil || rule.GetGrammar() == nil || rule.GetGrammar().NodePath == nil {

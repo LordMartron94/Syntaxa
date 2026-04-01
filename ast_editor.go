@@ -2,7 +2,6 @@ package syntaxa
 
 import (
 	"cmp"
-	"lexarch"
 	"sync/atomic"
 )
 
@@ -334,17 +333,17 @@ func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) DeleteAttribute(node *Synta
 
 func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) AddToken(
 	node *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind],
-	tok lexarch.Lexeme[TObs, TToken, TTokenRole],
+	tok Lexeme[TObs, TToken, TTokenRole],
 ) {
 	e.ensureMutable()
 	node.tokens = append(node.tokens, tok)
 	e.markDirtyNode(node)
 }
 
-func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) SetTokens(node *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind], toks []lexarch.Lexeme[TObs, TToken, TTokenRole]) {
+func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) SetTokens(node *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind], toks []Lexeme[TObs, TToken, TTokenRole]) {
 	e.ensureMutable()
 
-	node.tokens = make([]lexarch.Lexeme[TObs, TToken, TTokenRole], len(toks))
+	node.tokens = make([]Lexeme[TObs, TToken, TTokenRole], len(toks))
 	copy(node.tokens, toks)
 
 	e.markDirtyNode(node)
@@ -446,7 +445,7 @@ func spanFromNode[TObs cmp.Ordered, TToken, TTokenRole, TKind comparable](
 }
 
 func spanFromToken[TObs cmp.Ordered, TToken, TTokenRole comparable](
-	t lexarch.Lexeme[TObs, TToken, TTokenRole],
+	t Lexeme[TObs, TToken, TTokenRole],
 ) span {
 	return span{
 		start: t.Start,

@@ -26,7 +26,7 @@
 // For behaviour not covered by these combinators, construct rules manually via
 // syntaxa.ParserRuleCreate and the syntaxa grammar IR (Token, Concat, Choice, etc.).
 //
-// Integration: This package depends on syntaxa for ParserRule, Grammar, ExecRuleContext, and
-// RuleResult; and on lexarch for Lexeme. Rules produced here are executed by the syntaxa
+// Integration: This package depends on syntaxa for ParserRule, Grammar, ExecRuleContext,
+// RuleResult, and Lexeme. Rules produced here are executed by the syntaxa
 // parser engine; the factory only builds rule values and their grammar IR.
 package rule
