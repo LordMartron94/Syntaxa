@@ -1,27 +1,16 @@
 package lowering
 
 import (
-	"cmp"
 	"autarch/pattern"
 	"syntaxa"
 )
 
 /*
 GetAnalysis computes nullable, first, and follow analysis for the grammar package.
-
-It uses ToPatternGrammar and pattern.ComputeAnalysis; the result is keyed by NodeKey
-via syntaxa.GrammarAnalysisFromPattern. Returns nil if the package or its Root is nil,
-or if ToPatternGrammar returns nil.
 */
-func GetAnalysis[
-	TObservation cmp.Ordered,
-	TToken comparable,
-	TTokenRole comparable,
-	TNodeKind comparable,
-	TLexerState comparable,
-](
-	pkg *syntaxa.GrammarPackage[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
-) *syntaxa.GrammarAnalysis[TToken] {
+func GetAnalysis[TNodeKind comparable](
+	pkg *syntaxa.GrammarPackage[TNodeKind],
+) *syntaxa.GrammarAnalysis {
 	if pkg == nil || pkg.Root == nil {
 		return nil
 	}

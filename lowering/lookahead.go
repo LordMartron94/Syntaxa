@@ -1,27 +1,30 @@
 package lowering
 
-import "syntaxa"
+import (
+	"lexarch"
+	"syntaxa"
+)
 
-type gStackEntry[TToken, TNodeKind comparable] struct {
+type gStackEntry[TNodeKind comparable] struct {
 	isRepetition bool
 	label        syntaxa.GrammarLabel
-	repeatNode   *syntaxa.Grammar[TToken, TNodeKind]
-	remaining    []*syntaxa.Grammar[TToken, TNodeKind]
+	repeatNode   *syntaxa.Grammar[lexarch.TokenKind, TNodeKind]
+	remaining    []*syntaxa.Grammar[lexarch.TokenKind, TNodeKind]
 
-	recovery  []TToken
-	noConsume []TToken
+	recovery  []lexarch.TokenKind
+	noConsume []lexarch.TokenKind
 }
 
-type gTerminal[TToken, TNodeKind comparable] struct {
-	token     TToken
+type gTerminal[TNodeKind comparable] struct {
+	token     lexarch.TokenKind
 	nodeKind  *TNodeKind
-	remaining []*syntaxa.Grammar[TToken, TNodeKind]
-	stack     []gStackEntry[TToken, TNodeKind]
-	nestNode  *syntaxa.Grammar[TToken, TNodeKind]
+	remaining []*syntaxa.Grammar[lexarch.TokenKind, TNodeKind]
+	stack     []gStackEntry[TNodeKind]
+	nestNode  *syntaxa.Grammar[lexarch.TokenKind, TNodeKind]
 	popOffset int
 }
 
-func (t *gTerminal[TToken, TNodeKind]) getLastRemaining() *[]*syntaxa.Grammar[TToken, TNodeKind] {
+func (t *gTerminal[TNodeKind]) getLastRemaining() *[]*syntaxa.Grammar[lexarch.TokenKind, TNodeKind] {
 	if len(t.stack) == 0 {
 		return &t.remaining
 	}
@@ -30,22 +33,22 @@ func (t *gTerminal[TToken, TNodeKind]) getLastRemaining() *[]*syntaxa.Grammar[TT
 
 type visiting map[syntaxa.GrammarLabel]bool
 
-func lookahead[TToken, TNodeKind comparable](
-	node *syntaxa.Grammar[TToken, TNodeKind],
-	rules map[syntaxa.GrammarLabel]*syntaxa.Grammar[TToken, TNodeKind],
+func lookahead[TNodeKind comparable](
+	node *syntaxa.Grammar[lexarch.TokenKind, TNodeKind],
+	rules map[syntaxa.GrammarLabel]*syntaxa.Grammar[lexarch.TokenKind, TNodeKind],
 	visiting visiting,
-	analysis *syntaxa.GrammarAnalysis[TToken],
-) ([]gTerminal[TToken, TNodeKind], bool) {
+	analysis *syntaxa.GrammarAnalysis,
+) ([]gTerminal[TNodeKind], bool) {
 	if node == nil {
 		return nil, true
 	}
 
-	var ts []gTerminal[TToken, TNodeKind]
+	var ts []gTerminal[TNodeKind]
 	var n bool
 
 	switch node.Kind {
 	case syntaxa.GToken:
-		ts, n = []gTerminal[TToken, TNodeKind]{{token: node.Token, nodeKind: node.OutputNodeKind}}, false
+		ts, n = []gTerminal[TNodeKind]{{token: node.Token, nodeKind: node.OutputNodeKind}}, false
 	case syntaxa.GEpsilon:
 		ts, n = nil, true
 	case syntaxa.GConcat:
@@ -67,7 +70,7 @@ func lookahead[TToken, TNodeKind comparable](
 	if node.Kind != syntaxa.GRepeat && node.Kind != syntaxa.GOptional && node.Kind != syntaxa.GReference {
 		if len(node.RecoveryTokens) > 0 || len(node.NoConsumeOnRecoveryTokens) > 0 {
 			for i := range ts {
-				ts[i].stack = append(ts[i].stack, gStackEntry[TToken, TNodeKind]{
+				ts[i].stack = append(ts[i].stack, gStackEntry[TNodeKind]{
 					isRepetition: false,
 					label:        node.GrammarLabel,
 					recovery:     node.RecoveryTokens,
@@ -80,13 +83,13 @@ func lookahead[TToken, TNodeKind comparable](
 	return ts, n
 }
 
-func lookaheadChoice[TToken, TNodeKind comparable](
-	node *syntaxa.Grammar[TToken, TNodeKind],
-	rules map[syntaxa.GrammarLabel]*syntaxa.Grammar[TToken, TNodeKind],
+func lookaheadChoice[TNodeKind comparable](
+	node *syntaxa.Grammar[lexarch.TokenKind, TNodeKind],
+	rules map[syntaxa.GrammarLabel]*syntaxa.Grammar[lexarch.TokenKind, TNodeKind],
 	visiting visiting,
-	analysis *syntaxa.GrammarAnalysis[TToken],
-) ([]gTerminal[TToken, TNodeKind], bool) {
-	var all []gTerminal[TToken, TNodeKind]
+	analysis *syntaxa.GrammarAnalysis,
+) ([]gTerminal[TNodeKind], bool) {
+	var all []gTerminal[TNodeKind]
 	anyNull := false
 	for _, child := range node.Children {
 		ts, n := lookahead(child, rules, visiting, analysis)
@@ -99,19 +102,19 @@ func lookaheadChoice[TToken, TNodeKind comparable](
 	return all, anyNull
 }
 
-func lookaheadRepetition[TToken, TNodeKind comparable](
-	node *syntaxa.Grammar[TToken, TNodeKind],
-	rules map[syntaxa.GrammarLabel]*syntaxa.Grammar[TToken, TNodeKind],
+func lookaheadRepetition[TNodeKind comparable](
+	node *syntaxa.Grammar[lexarch.TokenKind, TNodeKind],
+	rules map[syntaxa.GrammarLabel]*syntaxa.Grammar[lexarch.TokenKind, TNodeKind],
 	visiting visiting,
-	analysis *syntaxa.GrammarAnalysis[TToken],
-) ([]gTerminal[TToken, TNodeKind], bool) {
+	analysis *syntaxa.GrammarAnalysis,
+) ([]gTerminal[TNodeKind], bool) {
 	child := node.Children[0]
 	ts, _ := lookahead(child, rules, visiting, analysis)
 
 	isRep := node.Kind == syntaxa.GRepeat
 
 	for i := range ts {
-		ts[i].stack = append(ts[i].stack, gStackEntry[TToken, TNodeKind]{
+		ts[i].stack = append(ts[i].stack, gStackEntry[TNodeKind]{
 			isRepetition: isRep,
 			repeatNode:   node,
 			label:        node.GrammarLabel,
@@ -126,12 +129,12 @@ func lookaheadRepetition[TToken, TNodeKind comparable](
 	return ts, nullable
 }
 
-func lookaheadReference[TToken, TNodeKind comparable](
-	node *syntaxa.Grammar[TToken, TNodeKind],
-	rules map[syntaxa.GrammarLabel]*syntaxa.Grammar[TToken, TNodeKind],
+func lookaheadReference[TNodeKind comparable](
+	node *syntaxa.Grammar[lexarch.TokenKind, TNodeKind],
+	rules map[syntaxa.GrammarLabel]*syntaxa.Grammar[lexarch.TokenKind, TNodeKind],
 	visiting visiting,
-	analysis *syntaxa.GrammarAnalysis[TToken],
-) ([]gTerminal[TToken, TNodeKind], bool) {
+	analysis *syntaxa.GrammarAnalysis,
+) ([]gTerminal[TNodeKind], bool) {
 	target := node.ResolvedReference
 	if target == nil {
 		target = rules[node.ReferenceTarget]
@@ -143,7 +146,7 @@ func lookaheadReference[TToken, TNodeKind comparable](
 	ts, n := lookahead(target, rules, visiting, analysis)
 	delete(visiting, node.ReferenceTarget)
 	for i := range ts {
-		ts[i].stack = append(ts[i].stack, gStackEntry[TToken, TNodeKind]{
+		ts[i].stack = append(ts[i].stack, gStackEntry[TNodeKind]{
 			isRepetition: false,
 			label:        node.ReferenceTarget,
 			recovery:     node.RecoveryTokens,
@@ -156,26 +159,26 @@ func lookaheadReference[TToken, TNodeKind comparable](
 	return ts, n
 }
 
-func lookaheadNest[TToken, TNodeKind comparable](
-	node *syntaxa.Grammar[TToken, TNodeKind],
-) ([]gTerminal[TToken, TNodeKind], bool) {
-	t := gTerminal[TToken, TNodeKind]{
+func lookaheadNest[TNodeKind comparable](
+	node *syntaxa.Grammar[lexarch.TokenKind, TNodeKind],
+) ([]gTerminal[TNodeKind], bool) {
+	t := gTerminal[TNodeKind]{
 		token:    *node.OpenToken,
 		nodeKind: node.OutputNodeKind,
 		nestNode: node,
 	}
-	return []gTerminal[TToken, TNodeKind]{t}, false
+	return []gTerminal[TNodeKind]{t}, false
 }
 
-func lookaheadConcat[TToken, TNodeKind comparable](
-	concatNode *syntaxa.Grammar[TToken, TNodeKind],
-	nodes []*syntaxa.Grammar[TToken, TNodeKind],
-	rules map[syntaxa.GrammarLabel]*syntaxa.Grammar[TToken, TNodeKind],
+func lookaheadConcat[TNodeKind comparable](
+	concatNode *syntaxa.Grammar[lexarch.TokenKind, TNodeKind],
+	nodes []*syntaxa.Grammar[lexarch.TokenKind, TNodeKind],
+	rules map[syntaxa.GrammarLabel]*syntaxa.Grammar[lexarch.TokenKind, TNodeKind],
 	visiting visiting,
-	analysis *syntaxa.GrammarAnalysis[TToken],
-) ([]gTerminal[TToken, TNodeKind], bool) {
+	analysis *syntaxa.GrammarAnalysis,
+) ([]gTerminal[TNodeKind], bool) {
 	nullable := true
-	var terms []gTerminal[TToken, TNodeKind]
+	var terms []gTerminal[TNodeKind]
 
 	for i, node := range nodes {
 		ts, n := lookahead(node, rules, visiting, analysis)
@@ -183,7 +186,7 @@ func lookaheadConcat[TToken, TNodeKind comparable](
 
 		for j := range ts {
 			last := ts[j].getLastRemaining()
-			extended := make([]*syntaxa.Grammar[TToken, TNodeKind], len(*last)+len(suffix))
+			extended := make([]*syntaxa.Grammar[lexarch.TokenKind, TNodeKind], len(*last)+len(suffix))
 			copy(extended, *last)
 			copy(extended[len(*last):], suffix)
 			*last = extended

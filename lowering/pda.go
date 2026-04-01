@@ -1,7 +1,7 @@
 package lowering
 
 import (
-	"cmp"
+		"lexarch"
 	"fmt"
 	"strings"
 
@@ -19,13 +19,13 @@ was LL(1) and a deterministic engine was built; otherwise the NPDA fallback is u
 StackToNode maps autarch.StackSymbolID (from PDA transitions) to syntaxa.NodeKey so that
 reductions during parsing can be attributed to the correct grammar node for IR construction.
 */
-type PDAEngine[TToken comparable, TOutcome any] struct {
+type PDAEngine[TOutcome any] struct {
 	IsDPDA         bool
-	DPDA           *autarch.DPDA[TToken, pattern.AnnotatedOutcome[TOutcome]]
-	NPDA           *autarch.NPDA[TToken, pattern.AnnotatedOutcome[TOutcome]]
+	DPDA           *autarch.DPDA[lexarch.TokenKind, pattern.AnnotatedOutcome[TOutcome]]
+	NPDA           *autarch.NPDA[lexarch.TokenKind, pattern.AnnotatedOutcome[TOutcome]]
 	Transitions    []autarch.PDATransition
 	StackToNode    map[autarch.StackSymbolID]syntaxa.NodeKey
-	InputIDToToken map[uint64]TToken
+	InputIDToToken map[uint64]lexarch.TokenKind
 	DebugMap       map[autarch.StackSymbolID]string
 	DPDAError      error
 }
@@ -95,11 +95,11 @@ Prerequisites: pkg must be a valid GrammarPackage produced by ProducePackage wit
 TokensUsed set. allocFn must be a valid memarch allocation function. config is used only
 when falling back to NPDA (MaxEpsilonSteps is used for DPDA as well).
 */
-func CompileEngine[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind, TLexerState comparable, TOutcome any](
-	pkg *syntaxa.GrammarPackage[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
+func CompileEngine[TNodeKind comparable, TOutcome any](
+	pkg *syntaxa.GrammarPackage[TNodeKind],
 	allocFn memarch.AllocationFn,
 	config NPDAConfig,
-) (*PDAEngine[TToken, TOutcome], error) {
+) (*PDAEngine[TOutcome], error) {
 	if pkg == nil || pkg.Root == nil {
 		return nil, fmt.Errorf("CompileEngine: package or Root is nil")
 	}
@@ -140,37 +140,37 @@ func CompileEngine[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind, TLex
 	return engine, npdaErr
 }
 
-func buildAlphabetAndIndexer[TToken comparable](
-	tokens []TToken,
+func buildAlphabetAndIndexer(
+	tokens []lexarch.TokenKind,
 ) (
-	[]autarch.SymbolDefinition[TToken],
-	autarch.DeterministicSymbolResolver[TToken],
-	autarch.NondeterministicSymbolResolver[TToken],
-	map[uint64]TToken,
+	[]autarch.SymbolDefinition[lexarch.TokenKind],
+	autarch.DeterministicSymbolResolver[lexarch.TokenKind],
+	autarch.NondeterministicSymbolResolver[lexarch.TokenKind],
+	map[uint64]lexarch.TokenKind,
 ) {
-	alphabet := make([]autarch.SymbolDefinition[TToken], 0, len(tokens))
-	tokenToID := make(map[TToken]uint64, len(tokens))
-	idToToken := make(map[uint64]TToken, len(tokens))
+	alphabet := make([]autarch.SymbolDefinition[lexarch.TokenKind], 0, len(tokens))
+	tokenToID := make(map[lexarch.TokenKind]uint64, len(tokens))
+	idToToken := make(map[uint64]lexarch.TokenKind, len(tokens))
 	var nextID uint64 = 1
 	for _, t := range tokens {
 		tokenValue := t
 		tokenToID[tokenValue] = nextID
 		idToToken[nextID] = tokenValue
-		alphabet = append(alphabet, autarch.SymbolDefinition[TToken]{
+		alphabet = append(alphabet, autarch.SymbolDefinition[lexarch.TokenKind]{
 			ID:          nextID,
 			Name:        fmt.Sprintf("%v", tokenValue),
-			Match:       func(observation TToken) bool { return observation == tokenValue },
+			Match:       func(observation lexarch.TokenKind) bool { return observation == tokenValue },
 			Observation: &tokenValue,
 		})
 		nextID++
 	}
-	deterministic := func(obs TToken) (uint64, bool) {
+	deterministic := func(obs lexarch.TokenKind) (uint64, bool) {
 		if id, exists := tokenToID[obs]; exists {
 			return id, true
 		}
 		return 0, false
 	}
-	nondeterministic := func(obs TToken) []uint64 {
+	nondeterministic := func(obs lexarch.TokenKind) []uint64 {
 		id, ok := deterministic(obs)
 		if !ok {
 			return nil
@@ -180,19 +180,19 @@ func buildAlphabetAndIndexer[TToken comparable](
 	return alphabet, deterministic, nondeterministic, idToToken
 }
 
-func compileFallbackNPDA[TToken comparable, TOutcome any](
-	cfg *pattern.Grammar[TToken, struct{}],
+func compileFallbackNPDA[TOutcome any](
+	cfg *pattern.Grammar[lexarch.TokenKind, struct{}],
 	allocFn memarch.AllocationFn,
-	alphabet []autarch.SymbolDefinition[TToken],
-	deterministic autarch.DeterministicSymbolResolver[TToken],
-	nondeterministic autarch.NondeterministicSymbolResolver[TToken],
+	alphabet []autarch.SymbolDefinition[lexarch.TokenKind],
+	deterministic autarch.DeterministicSymbolResolver[lexarch.TokenKind],
+	nondeterministic autarch.NondeterministicSymbolResolver[lexarch.TokenKind],
 	acceptOutcome TOutcome,
 	config NPDAConfig,
 	ruleNameToNodeKey map[string]syntaxa.NodeKey,
 	pathToGrammarLabel map[syntaxa.NodeKey]syntaxa.GrammarLabel,
 	debugMap map[autarch.StackSymbolID]string,
-	reverseMap map[uint64]TToken,
-) (*PDAEngine[TToken, TOutcome], error) {
+	reverseMap map[uint64]lexarch.TokenKind,
+) (*PDAEngine[TOutcome], error) {
 	npda, transitions, debugMapOut, err := pattern.CompileNPDA(
 		cfg, allocFn, alphabet, deterministic, nondeterministic, acceptOutcome,
 		config.MaxStackNodes, config.MaxStackDepth, config.MaxBranches, config.MaxEpsilonSteps,
@@ -203,19 +203,19 @@ func compileFallbackNPDA[TToken comparable, TOutcome any](
 	return buildEngine(false, nil, npda, transitions, ruleNameToNodeKey, pathToGrammarLabel, debugMapOut, reverseMap, nil), nil
 }
 
-func buildEngine[TToken comparable, TOutcome any](
+func buildEngine[TOutcome any](
 	isDPDA bool,
-	dpda *autarch.DPDA[TToken, pattern.AnnotatedOutcome[TOutcome]],
-	npda *autarch.NPDA[TToken, pattern.AnnotatedOutcome[TOutcome]],
+	dpda *autarch.DPDA[lexarch.TokenKind, pattern.AnnotatedOutcome[TOutcome]],
+	npda *autarch.NPDA[lexarch.TokenKind, pattern.AnnotatedOutcome[TOutcome]],
 	transitions []autarch.PDATransition,
 	ruleNameToNodeKey map[string]syntaxa.NodeKey,
 	pathToGrammarLabel map[syntaxa.NodeKey]syntaxa.GrammarLabel,
 	debugMap map[autarch.StackSymbolID]string,
-	reverseMap map[uint64]TToken,
+	reverseMap map[uint64]lexarch.TokenKind,
 	dpdaError error,
-) *PDAEngine[TToken, TOutcome] {
+) *PDAEngine[TOutcome] {
 	nodeMap := mapStackToNodes(ruleNameToNodeKey, debugMap)
-	return &PDAEngine[TToken, TOutcome]{
+	return &PDAEngine[TOutcome]{
 		IsDPDA:         isDPDA,
 		DPDA:           dpda,
 		NPDA:           npda,
@@ -227,12 +227,12 @@ func buildEngine[TToken comparable, TOutcome any](
 	}
 }
 
-func translateGrammarError[TToken comparable](
+func translateGrammarError(
 	err error,
 	ruleNameToNodeKey map[string]syntaxa.NodeKey,
 	pathToGrammarLabel map[syntaxa.NodeKey]syntaxa.GrammarLabel,
 	debugMap map[autarch.StackSymbolID]string,
-	reverseMap map[uint64]TToken,
+	reverseMap map[uint64]lexarch.TokenKind,
 ) error {
 	if err == nil {
 		return nil

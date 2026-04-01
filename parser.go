@@ -1,7 +1,6 @@
 package syntaxa
 
 import (
-	"cmp"
 	"fmt"
 	"lexarch"
 )
@@ -40,9 +39,9 @@ tokens). It must not be used to access or mutate global semantic structures.
 
 This hook is optional and has zero behavioral impact when unset.
 */
-type NodePostProcessor[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind comparable] func(
-	node *SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind],
-	finalizationCTX *FinalizationCtx[TObservation, TToken, TTokenRole, TNodeKind],
+type NodePostProcessor[TNodeKind comparable] func(
+	node *SyntaxaLSTNode[TNodeKind],
+	finalizationCTX *FinalizationCtx[TNodeKind],
 	ruleIdentity RuleIdentity,
 )
 
@@ -56,7 +55,7 @@ ParserSnapshot represents a snapshot of parser progress.
 It is opaque by design and only meaningful to the RuleContext
 implementation that created it.
 */
-type ParserSnapshot[TObs cmp.Ordered, TState comparable] struct {
+type ParserSnapshot struct {
 	tokenIndex int
 
 	lexerSnap lexarch.LexingSnapshot
@@ -65,7 +64,7 @@ type ParserSnapshot[TObs cmp.Ordered, TState comparable] struct {
 	nextVisibleCached   bool
 }
 
-func (p *ParserSnapshot[_, _]) Index() int {
+func (p *ParserSnapshot) Index() int {
 	return p.tokenIndex
 }
 
@@ -73,10 +72,10 @@ func (p *ParserSnapshot[_, _]) Index() int {
 // PARSER
 // =============================================================
 
-type ParseTraceEvent[TToken any] struct {
+type ParseTraceEvent struct {
 	Cursor        int
-	RawToken      TToken
-	LogicalToken  TToken
+	RawToken      lexarch.TokenKind
+	LogicalToken  lexarch.TokenKind
 	RuleSucceeded bool
 	Consumed      bool
 	NodeReturned  bool
@@ -85,17 +84,17 @@ type ParseTraceEvent[TToken any] struct {
 	RecoveryAttempted bool
 	Recovered         bool
 	LandedOnOurs      bool
-	RecoveryTokenSet  []TToken
+	RecoveryTokenSet  []lexarch.TokenKind
 }
 
-type ParseTrace[TToken any] struct {
-	Events []ParseTraceEvent[TToken]
+type ParseTrace struct {
+	Events []ParseTraceEvent
 }
 
-type ParseResult[TObs cmp.Ordered, TToken, TTokenRole, TKind comparable] struct {
-	Root   *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]
-	Errors *SyntaxErrors[TObs]
-	Trace  *ParseTrace[TToken]
+type ParseResult[TKind comparable] struct {
+	Root   *SyntaxaLSTNode[TKind]
+	Errors *SyntaxErrors
+	Trace  *ParseTrace
 }
 
 /*
@@ -104,7 +103,7 @@ RuleRegistry maps grammar labels to executable parser rules.
 It serves as the late-binding lookup table for GReference nodes.
 Only named, context-boundary rules need to be registered here.
 */
-type RuleRegistry[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable] map[GrammarLabel]ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
+type RuleRegistry[TNodeKind comparable] map[GrammarLabel]ParserRule[TNodeKind]
 
 /*
 SyntaxaParser is a generic parsing engine using top-down recursive parsing.
@@ -117,22 +116,22 @@ Responsibilities:
   - centralized error recovery
   - LST assembly
 */
-type SyntaxaParser[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind, TLexerState comparable] struct {
-	grammarPackage *GrammarPackage[TObservation, TToken, TTokenRole, TNodeKind, TLexerState]
-	registry       RuleRegistry[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
+type SyntaxaParser[TNodeKind comparable] struct {
+	grammarPackage *GrammarPackage[TNodeKind]
+	registry       RuleRegistry[TNodeKind]
 
-	programRule ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
+	programRule ParserRule[TNodeKind]
 
-	postProcessor NodePostProcessor[TObservation, TToken, TTokenRole, TNodeKind]
+	postProcessor NodePostProcessor[TNodeKind]
 
-	defaultSkipRoles []TTokenRole
+	defaultSkipRoles []lexarch.TokenRole
 	nodePoolPrefill  int
 	nodePoolGrow     func(currentCap, needed int) int
 
-	tokenFormatter       func(token TToken) string
-	observationFormatter ObservationFormatter[TObservation]
+	tokenFormatter       func(token lexarch.TokenKind) string
+	observationFormatter ObservationFormatter
 
-	eofToken TToken
+	eofToken lexarch.TokenKind
 
 	rootNodeKind  TNodeKind
 	errorNodeKind TNodeKind
@@ -141,7 +140,7 @@ type SyntaxaParser[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind, TLex
 	debugTrace       bool
 
 	// getAnalysis returns nullable/first/follow when set; used by rule context. Optional.
-	getAnalysis func() *GrammarAnalysis[TToken]
+	getAnalysis func() *GrammarAnalysis
 }
 
 /*
@@ -153,23 +152,23 @@ nodePostProcessor is optional and allowed to be nil.
 getAnalysis is optional; when set, the rule context can use it for nullable/first/follow
 (e.g. for Predict or Pratt). Pass lowering.GetAnalysis(grammarPackage) or nil.
 */
-func SyntaxaParserCreate[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind, TLexerState comparable](
-	grammarPackage *GrammarPackage[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
-	registry RuleRegistry[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
-	tokenFormatter func(token TToken) string,
-	observationFormatter ObservationFormatter[TObservation],
-	nodePostProcessor NodePostProcessor[TObservation, TToken, TTokenRole, TNodeKind],
-	eofToken TToken,
+func SyntaxaParserCreate[TNodeKind comparable](
+	grammarPackage *GrammarPackage[TNodeKind],
+	registry RuleRegistry[TNodeKind],
+	tokenFormatter func(token lexarch.TokenKind) string,
+	observationFormatter ObservationFormatter,
+	nodePostProcessor NodePostProcessor[TNodeKind],
+	eofToken lexarch.TokenKind,
 	rootNodeKind, errorNodeKind TNodeKind,
 	freezeAfterParse bool,
-	getAnalysis func() *GrammarAnalysis[TToken],
-) *SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TLexerState] {
+	getAnalysis func() *GrammarAnalysis,
+) *SyntaxaParser[TNodeKind] {
 	if grammarPackage == nil || grammarPackage.EntryRuleParserRule == nil {
 		panic("SyntaxaParserCreate: grammar package must have EntryRuleParserRule set (produce package with entry rule)")
 	}
 	boundRegistry := bindMergedRecoveryIntoRegistry(registry, grammarPackage.MergedRecoveryByGrammarLabel)
 	programRule := bindMergedRecoveryToRule(*grammarPackage.EntryRuleParserRule, grammarPackage.MergedRecoveryByGrammarLabel)
-	return &SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TLexerState]{
+	return &SyntaxaParser[TNodeKind]{
 		grammarPackage:       grammarPackage,
 		registry:             boundRegistry,
 		programRule:          programRule,
@@ -185,22 +184,22 @@ func SyntaxaParserCreate[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind
 	}
 }
 
-func (p *SyntaxaParser[_, _, TTokenRole, _, _]) SetDefaultSkips(roles ...TTokenRole) {
-	p.defaultSkipRoles = append([]TTokenRole(nil), roles...)
+func (p *SyntaxaParser[TNodeKind]) SetDefaultSkips(roles ...lexarch.TokenRole) {
+	p.defaultSkipRoles = append([]lexarch.TokenRole(nil), roles...)
 }
 
-func (p *SyntaxaParser[_, _, TTokenRole, _, _]) GetDefaultSkips() []TTokenRole {
+func (p *SyntaxaParser[TNodeKind]) GetDefaultSkips() []lexarch.TokenRole {
 	return p.defaultSkipRoles
 }
 
-func (p *SyntaxaParser[_, _, _, _, _]) SetNodePoolPrefill(hint int) {
+func (p *SyntaxaParser[TNodeKind]) SetNodePoolPrefill(hint int) {
 	if hint < 0 {
 		panic("SetNodePoolPrefill: hint must be >= 0")
 	}
 	p.nodePoolPrefill = hint
 }
 
-func (p *SyntaxaParser[_, _, _, _, _]) GetNodePoolPrefill() int {
+func (p *SyntaxaParser[TNodeKind]) GetNodePoolPrefill() int {
 	return p.nodePoolPrefill
 }
 
@@ -212,15 +211,15 @@ growFn receives currentCap = cap(nodeFree) before growth and needed = len(nodeFr
 this grow (same idea as memforge.GrowthStrategy); the editor clamps to at least needed
 and allocates that many new nodes when the pool was empty.
 */
-func (p *SyntaxaParser[_, _, _, _, _]) SetNodePoolGrowFn(growFn func(currentCap, needed int) int) {
+func (p *SyntaxaParser[TNodeKind]) SetNodePoolGrowFn(growFn func(currentCap, needed int) int) {
 	p.nodePoolGrow = growFn
 }
 
-func (p *SyntaxaParser[_, _, _, _, _]) EnableTrace(enable bool) {
+func (p *SyntaxaParser[TNodeKind]) EnableTrace(enable bool) {
 	p.debugTrace = enable
 }
 
-func (p *SyntaxaParser[_, _, _, _, _]) TraceEnabled() bool {
+func (p *SyntaxaParser[TNodeKind]) TraceEnabled() bool {
 	return p.debugTrace
 }
 
@@ -245,31 +244,19 @@ This function guarantees:
   - centralized error recovery
   - consistent LST assembly
 */
-func SyntaxaParserParseWithContext[
-	TObservation cmp.Ordered,
-	TToken,
-	TTokenRole,
-	TNodeKind,
-	TLexerState comparable,
-](
-	parser *SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
-	ctx *ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
-) (*SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind], *ParseTrace[TToken], error) {
+func SyntaxaParserParseWithContext[TNodeKind comparable](
+	parser *SyntaxaParser[TNodeKind],
+	ctx *ExecRuleContext[TNodeKind],
+) (*SyntaxaLSTNode[TNodeKind], *ParseTrace, error) {
 	return parseWithContext(parser, ctx)
 }
 
 // -------------------------------------------------------- PRIVATE HELPERS
 
-func parseWithContext[
-	TObservation cmp.Ordered,
-	TToken,
-	TTokenRole,
-	TLexerState,
-	TNodeKind comparable,
-](
-	parser *SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
-	ctx *ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
-) (*SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind], *ParseTrace[TToken], error) {
+func parseWithContext[TNodeKind comparable](
+	parser *SyntaxaParser[TNodeKind],
+	ctx *ExecRuleContext[TNodeKind],
+) (*SyntaxaLSTNode[TNodeKind], *ParseTrace, error) {
 	editor := ctx.Editor
 
 	if parser.freezeAfterParse {
@@ -324,18 +311,12 @@ func parseWithContext[
 	return programResult.Node, ctx.trace, nil
 }
 
-func syntaxaParserExecuteRule[
-	TObservation cmp.Ordered,
-	TToken,
-	TTokenRole,
-	TNodeKind,
-	TLexerState comparable,
-](
-	parser *SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
-	ctx *ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
-	rule ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+func syntaxaParserExecuteRule[TNodeKind comparable](
+	parser *SyntaxaParser[TNodeKind],
+	ctx *ExecRuleContext[TNodeKind],
+	rule ParserRule[TNodeKind],
 	mode RuleExecutionMode,
-) RuleResult[TObservation, TToken, TTokenRole, TNodeKind] {
+) RuleResult[TNodeKind] {
 	if st := ctx.EngineStats; st != nil {
 		st.RuleExecuteCalls++
 		if mode == ExecutionProbe {
@@ -359,7 +340,7 @@ func syntaxaParserExecuteRule[
 	ruleResult := rule.executionFn(ctx)
 
 	var recoveryAttempted, recovered, landedOnOurs bool
-	var recoveryTokenSet []TToken
+	var recoveryTokenSet []lexarch.TokenKind
 
 	if !ruleResult.Succeeded {
 		ctx.Editor.TruncateCreated(startLSTNodeCreationIdx)
@@ -373,7 +354,7 @@ func syntaxaParserExecuteRule[
 	}
 
 	if ctx.trace != nil {
-		ctx.trace.Events = append(ctx.trace.Events, ParseTraceEvent[TToken]{
+		ctx.trace.Events = append(ctx.trace.Events, ParseTraceEvent{
 			Cursor:            startPos,
 			RawToken:          lexemePreRuleRaw.Token,
 			LogicalToken:      lexemePreRule.Token,
@@ -408,21 +389,15 @@ func syntaxaParserExecuteRule[
 	return ruleResult
 }
 
-func handleFailureState[
-	TObservation cmp.Ordered,
-	TToken,
-	TTokenRole,
-	TNodeKind,
-	TLexerState comparable,
-](
-	ctx *ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
-	parser *SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
-	rule ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
-	result RuleResult[TObservation, TToken, TTokenRole, TNodeKind],
-	startSnap ParserSnapshot[TObservation, TLexerState],
+func handleFailureState[TNodeKind comparable](
+	ctx *ExecRuleContext[TNodeKind],
+	parser *SyntaxaParser[TNodeKind],
+	rule ParserRule[TNodeKind],
+	result RuleResult[TNodeKind],
+	startSnap ParserSnapshot,
 	mode RuleExecutionMode,
-	lexemePreRule Lexeme[TObservation, TToken, TTokenRole],
-) (RuleResult[TObservation, TToken, TTokenRole, TNodeKind], bool, bool, bool, []TToken) {
+	lexemePreRule Lexeme,
+) (RuleResult[TNodeKind], bool, bool, bool, []lexarch.TokenKind) {
 
 	if mode != ExecutionNormal || result.Kind != FailureError {
 		ctx.restore(startSnap)
@@ -471,16 +446,10 @@ func handleFailureState[
 	return result, recoveryAttempted, recovered, landedOnOurs, recoveryTokenSet
 }
 
-func processPostRuleHooks[
-	TObservation cmp.Ordered,
-	TToken,
-	TTokenRole,
-	TNodeKind,
-	TLexerState comparable,
-](
-	parser *SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
-	ctx *ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
-	rule ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+func processPostRuleHooks[TNodeKind comparable](
+	parser *SyntaxaParser[TNodeKind],
+	ctx *ExecRuleContext[TNodeKind],
+	rule ParserRule[TNodeKind],
 	startLSTNodeCreationIdx int,
 ) {
 	if parser.postProcessor == nil {
@@ -496,18 +465,12 @@ func processPostRuleHooks[
 	}
 }
 
-func performRecovery[
-	TObs cmp.Ordered,
-	TToken,
-	TTokenRole,
-	TLexerState,
-	TKind comparable,
-](
-	ctx *ExecRuleContext[TObs, TToken, TTokenRole, TLexerState, TKind],
-	parser *SyntaxaParser[TObs, TToken, TTokenRole, TKind, TLexerState],
-	eof TToken,
-	recoveryFromRule ParserRule[TObs, TToken, TTokenRole, TLexerState, TKind],
-) (recovered bool, landedOnCurrentRule bool, recoveryTokenSet []TToken) {
+func performRecovery[TNodeKind comparable](
+	ctx *ExecRuleContext[TNodeKind],
+	parser *SyntaxaParser[TNodeKind],
+	eof lexarch.TokenKind,
+	recoveryFromRule ParserRule[TNodeKind],
+) (recovered bool, landedOnCurrentRule bool, recoveryTokenSet []lexarch.TokenKind) {
 	recoveryTokenSet = ctx.Recovery.CollectAllRecoveryTokens()
 
 	for {
@@ -530,19 +493,13 @@ func performRecovery[
 	}
 }
 
-func validateRuleSuccess[
-	TObservation cmp.Ordered,
-	TToken,
-	TTokenRole comparable,
-	TLexerState,
-	TNodeKind comparable,
-](
-	parser *SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
-	rule ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
-	result RuleResult[TObservation, TToken, TTokenRole, TNodeKind],
+func validateRuleSuccess[TNodeKind comparable](
+	parser *SyntaxaParser[TNodeKind],
+	rule ParserRule[TNodeKind],
+	result RuleResult[TNodeKind],
 	startPos int,
 	endPos int,
-	lexemePreRule Lexeme[TObservation, TToken, TTokenRole],
+	lexemePreRule Lexeme,
 ) error {
 
 	contract := rule.contract
@@ -581,28 +538,24 @@ func validateRuleSuccess[
 	return nil
 }
 
-func bindMergedRecoveryIntoRegistry[
-	TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind, TLexerState comparable,
-](
-	registry RuleRegistry[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
-	mergedByLabel map[GrammarLabel]RecoverySpec[TToken],
-) RuleRegistry[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
+func bindMergedRecoveryIntoRegistry[TNodeKind comparable](
+	registry RuleRegistry[TNodeKind],
+	mergedByLabel map[GrammarLabel]RecoverySpec,
+) RuleRegistry[TNodeKind] {
 	if len(registry) == 0 {
 		return registry
 	}
-	out := make(RuleRegistry[TObservation, TToken, TTokenRole, TLexerState, TNodeKind], len(registry))
+	out := make(RuleRegistry[TNodeKind], len(registry))
 	for label, rule := range registry {
 		out[label] = bindMergedRecoveryToRule(rule, mergedByLabel)
 	}
 	return out
 }
 
-func bindMergedRecoveryToRule[
-	TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind, TLexerState comparable,
-](
-	rule ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
-	mergedByLabel map[GrammarLabel]RecoverySpec[TToken],
-) ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
+func bindMergedRecoveryToRule[TNodeKind comparable](
+	rule ParserRule[TNodeKind],
+	mergedByLabel map[GrammarLabel]RecoverySpec,
+) ParserRule[TNodeKind] {
 	spec, exists := mergedByLabel[rule.GetGrammarLabel()]
 	if !exists {
 		return rule

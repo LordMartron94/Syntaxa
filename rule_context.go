@@ -1,7 +1,6 @@
 package syntaxa
 
 import (
-	"cmp"
 	"fmt"
 	"lexarch"
 )
@@ -10,33 +9,33 @@ import (
 // CORES
 // =============================================================
 
-type tokenStream[TObs cmp.Ordered, TToken comparable, TTokenRole comparable] struct {
-	peekRaw    func(int) Lexeme[TObs, TToken, TTokenRole]
-	consumeRaw func() Lexeme[TObs, TToken, TTokenRole]
+type tokenStream struct {
+	peekRaw    func(int) Lexeme
+	consumeRaw func() Lexeme
 
-	eofToken TToken
-	skipCore *skipCore[TTokenRole]
+	eofToken lexarch.TokenKind
+	skipCore *skipCore
 
 	nextVisibleRawIndex int
 	nextVisibleCached   bool
 }
 
-func (ts *tokenStream[TObs, TToken, TTokenRole]) isEOF(l Lexeme[TObs, TToken, TTokenRole]) bool {
+func (ts *tokenStream) isEOF(l Lexeme) bool {
 	return l.Token == ts.eofToken
 }
 
-func (ts *tokenStream[TObs, TToken, TTokenRole]) invalidatePeekCache() {
+func (ts *tokenStream) invalidatePeekCache() {
 	ts.nextVisibleCached = false
 	ts.nextVisibleRawIndex = 0
 }
 
-func (ts *tokenStream[TObs, TToken, TTokenRole]) consumeRawAndInvalidate() Lexeme[TObs, TToken, TTokenRole] {
+func (ts *tokenStream) consumeRawAndInvalidate() Lexeme {
 	consumed := ts.consumeRaw()
 	ts.invalidatePeekCache()
 	return consumed
 }
 
-func (ts *tokenStream[TObs, TToken, TTokenRole]) resolveNextVisibleRaw() (Lexeme[TObs, TToken, TTokenRole], int) {
+func (ts *tokenStream) resolveNextVisibleRaw() (Lexeme, int) {
 	rawIndex := 0
 	for {
 		cur := ts.peekRaw(rawIndex)
@@ -47,7 +46,7 @@ func (ts *tokenStream[TObs, TToken, TTokenRole]) resolveNextVisibleRaw() (Lexeme
 	}
 }
 
-func (ts *tokenStream[TObs, TToken, TTokenRole]) skipForward() {
+func (ts *tokenStream) skipForward() {
 	for {
 		cur := ts.peekRaw(0)
 		if ts.isEOF(cur) || !ts.skipCore.isSkipped(cur.Role) {
@@ -59,7 +58,7 @@ func (ts *tokenStream[TObs, TToken, TTokenRole]) skipForward() {
 	}
 }
 
-func (ts *tokenStream[TObs, TToken, TTokenRole]) Peek(n int) Lexeme[TObs, TToken, TTokenRole] {
+func (ts *tokenStream) Peek(n int) Lexeme {
 	if n < 0 {
 		panic("Peek: n must be >= 0")
 	}
@@ -98,16 +97,16 @@ func (ts *tokenStream[TObs, TToken, TTokenRole]) Peek(n int) Lexeme[TObs, TToken
 	}
 }
 
-func (ts *tokenStream[TObs, TToken, TTokenRole]) PeekRaw(n int) Lexeme[TObs, TToken, TTokenRole] {
+func (ts *tokenStream) PeekRaw(n int) Lexeme {
 	return ts.peekRaw(n)
 }
 
-func (ts *tokenStream[TObs, TToken, TTokenRole]) Consume() Lexeme[TObs, TToken, TTokenRole] {
+func (ts *tokenStream) Consume() Lexeme {
 	ts.skipForward()
 	return ts.consumeRawAndInvalidate()
 }
 
-func (ts *tokenStream[TObs, TToken, TTokenRole]) ConsumeRaw() Lexeme[TObs, TToken, TTokenRole] {
+func (ts *tokenStream) ConsumeRaw() Lexeme {
 	return ts.consumeRawAndInvalidate()
 }
 
@@ -119,20 +118,20 @@ type recoveryFrame struct {
 	barrier    bool
 }
 
-type recoveryCore[TObservation cmp.Ordered, TToken comparable, TTokenRole comparable] struct {
-	ts *tokenStream[TObservation, TToken, TTokenRole]
+type recoveryCore struct {
+	ts *tokenStream
 
-	defaultRecovery []TToken
+	defaultRecovery []lexarch.TokenKind
 	stack           []recoveryFrame
-	tokensFlight    []TToken
+	tokensFlight    []lexarch.TokenKind
 }
 
-func (rc *recoveryCore[_, TToken, _]) setDefaultRecovery(tokens ...TToken) {
+func (rc *recoveryCore) setDefaultRecovery(tokens ...lexarch.TokenKind) {
 	// Allocate once.
-	rc.defaultRecovery = append([]TToken(nil), tokens...)
+	rc.defaultRecovery = append([]lexarch.TokenKind(nil), tokens...)
 }
 
-func (rc *recoveryCore[_, TToken, _]) pushRecovery(barrier bool, tokens ...TToken) {
+func (rc *recoveryCore) pushRecovery(barrier bool, tokens ...lexarch.TokenKind) {
 	start := len(rc.tokensFlight)
 	rc.tokensFlight = append(rc.tokensFlight, tokens...)
 
@@ -143,7 +142,7 @@ func (rc *recoveryCore[_, TToken, _]) pushRecovery(barrier bool, tokens ...TToke
 	})
 }
 
-func (rc *recoveryCore[_, TToken, _]) popRecovery() {
+func (rc *recoveryCore) popRecovery() {
 	if len(rc.stack) == 0 {
 		return
 	}
@@ -158,7 +157,7 @@ func (rc *recoveryCore[_, TToken, _]) popRecovery() {
 IsRecoveryToken queries the active scopes directly.
 Zero allocations. Zero map hashing. Returns immediately on match.
 */
-func (rc *recoveryCore[_, TToken, _]) IsRecoveryToken(token TToken) bool {
+func (rc *recoveryCore) IsRecoveryToken(token lexarch.TokenKind) bool {
 	if len(rc.stack) > 0 {
 		top := rc.stack[len(rc.stack)-1]
 		if containsToken(rc.tokensFlight[top.startIndex:top.endIndex], token) {
@@ -177,7 +176,7 @@ IsInAllFrames answers the question without building a merged set.
 Used by performRecovery to determine if a token is safe to consume.
 Zero allocations.
 */
-func (rc *recoveryCore[_, TToken, _]) IsInAllFrames(token TToken) bool {
+func (rc *recoveryCore) IsInAllFrames(token lexarch.TokenKind) bool {
 	if containsToken(rc.defaultRecovery, token) {
 		return true
 	}
@@ -196,7 +195,7 @@ func (rc *recoveryCore[_, TToken, _]) IsInAllFrames(token TToken) bool {
 }
 
 // Helper method keeping functions small and single-responsibility.
-func containsToken[TToken comparable](slice []TToken, token TToken) bool {
+func containsToken(slice []lexarch.TokenKind, token lexarch.TokenKind) bool {
 	for _, t := range slice {
 		if t == token {
 			return true
@@ -209,8 +208,8 @@ func containsToken[TToken comparable](slice []TToken, token TToken) bool {
 CollectAllRecoveryTokens extracts all active recovery tokens into a flat slice.
 This allocates memory and should ONLY be called on the cold path (when an error has occurred and recovery is actually executing).
 */
-func (rc *recoveryCore[_, TToken, _]) CollectAllRecoveryTokens() []TToken {
-	var result []TToken
+func (rc *recoveryCore) CollectAllRecoveryTokens() []lexarch.TokenKind {
+	var result []lexarch.TokenKind
 	result = append(result, rc.defaultRecovery...)
 
 	for i := len(rc.stack) - 1; i >= 0; i-- {
@@ -226,8 +225,8 @@ func (rc *recoveryCore[_, TToken, _]) CollectAllRecoveryTokens() []TToken {
 
 // deduplicateTokens uses a simple linear scan. Since recovery sets are typically
 // very small (< 10 items), this avoids map hashing overhead and allocations.
-func deduplicateTokens[TToken comparable](tokens []TToken) []TToken {
-	var out []TToken
+func deduplicateTokens(tokens []lexarch.TokenKind) []lexarch.TokenKind {
+	var out []lexarch.TokenKind
 	for _, t := range tokens {
 		if !containsToken(out, t) {
 			out = append(out, t)
@@ -238,13 +237,13 @@ func deduplicateTokens[TToken comparable](tokens []TToken) []TToken {
 
 // -------------------------------------------------------------
 
-type skipCore[TTokenRole comparable] struct {
-	stack    []tokenSet[TTokenRole]
+type skipCore struct {
+	stack    []tokenSet
 	onChange func()
 }
 
-func (sc *skipCore[TTokenRole]) PushSkipRoles(roles ...TTokenRole) {
-	set := make(tokenSet[TTokenRole])
+func (sc *skipCore) PushSkipRoles(roles ...lexarch.TokenRole) {
+	set := make(tokenSet)
 	for _, r := range roles {
 		set[r] = struct{}{}
 	}
@@ -254,7 +253,7 @@ func (sc *skipCore[TTokenRole]) PushSkipRoles(roles ...TTokenRole) {
 	}
 }
 
-func (sc *skipCore[TTokenRole]) PopSkipRoles() {
+func (sc *skipCore) PopSkipRoles() {
 	if len(sc.stack) > 0 {
 		sc.stack = sc.stack[:len(sc.stack)-1]
 		if sc.onChange != nil {
@@ -263,7 +262,7 @@ func (sc *skipCore[TTokenRole]) PopSkipRoles() {
 	}
 }
 
-func (sc *skipCore[TTokenRole]) isSkipped(role TTokenRole) bool {
+func (sc *skipCore) isSkipped(role lexarch.TokenRole) bool {
 	if len(sc.stack) == 0 {
 		return false
 	}
@@ -273,15 +272,15 @@ func (sc *skipCore[TTokenRole]) isSkipped(role TTokenRole) bool {
 
 // -------------------------------------------------------------
 
-type errorCore[TObs cmp.Ordered, TToken, TTokenRole comparable] struct {
-	sink *SyntaxErrors[TObs]
-	ts   *tokenStream[TObs, TToken, TTokenRole]
+type errorCore struct {
+	sink *SyntaxErrors
+	ts   *tokenStream
 }
 
-func (ec *errorCore[TObs, _, _]) ReportHere(ruleName, message string) {
+func (ec *errorCore) ReportHere(ruleName, message string) {
 	current := ec.ts.Peek(0)
 
-	ec.sink.report(SyntaxError[TObs]{
+	ec.sink.report(SyntaxError{
 		Rule:             ruleName,
 		Message:          message,
 		AbsolutePosition: current.Start,
@@ -290,8 +289,8 @@ func (ec *errorCore[TObs, _, _]) ReportHere(ruleName, message string) {
 	})
 }
 
-func (ec *errorCore[TObs, TToken, TTokenRole]) ReportAt(ruleName string, lexeme Lexeme[TObs, TToken, TTokenRole], message string) {
-	ec.sink.report(SyntaxError[TObs]{
+func (ec *errorCore) ReportAt(ruleName string, lexeme Lexeme, message string) {
+	ec.sink.report(SyntaxError{
 		Rule:             ruleName,
 		Message:          message,
 		AbsolutePosition: lexeme.Start,
@@ -300,8 +299,8 @@ func (ec *errorCore[TObs, TToken, TTokenRole]) ReportAt(ruleName string, lexeme 
 	})
 }
 
-func (ec *errorCore[TObs, TToken, TTokenRole]) ReportAtEnd(ruleName string, lexeme Lexeme[TObs, TToken, TTokenRole], message string) {
-	ec.sink.report(SyntaxError[TObs]{
+func (ec *errorCore) ReportAtEnd(ruleName string, lexeme Lexeme, message string) {
+	ec.sink.report(SyntaxError{
 		Rule:             ruleName,
 		Message:          message,
 		AbsolutePosition: lexeme.End,
@@ -310,12 +309,12 @@ func (ec *errorCore[TObs, TToken, TTokenRole]) ReportAtEnd(ruleName string, lexe
 	})
 }
 
-func (ec *errorCore[TObs, TToken, TTokenRole]) ReportAdvanced(ruleName string, startLine, startColumn, endLine, endColumn, absolutePosition, tokenNumber int, message string) {
+func (ec *errorCore) ReportAdvanced(ruleName string, startLine, startColumn, endLine, endColumn, absolutePosition, tokenNumber int, message string) {
 	_ = startLine
 	_ = startColumn
 	_ = endLine
 	_ = endColumn
-	ec.sink.report(SyntaxError[TObs]{
+	ec.sink.report(SyntaxError{
 		Rule:             ruleName,
 		Message:          message,
 		AbsolutePosition: absolutePosition,
@@ -324,8 +323,8 @@ func (ec *errorCore[TObs, TToken, TTokenRole]) ReportAdvanced(ruleName string, s
 	})
 }
 
-func (ec *errorCore[TObs, TToken, TTokenRole]) replaceBestErrorAt(ruleName string, lexeme Lexeme[TObs, TToken, TTokenRole], message string) bool {
-	err := SyntaxError[TObs]{
+func (ec *errorCore) replaceBestErrorAt(ruleName string, lexeme Lexeme, message string) bool {
+	err := SyntaxError{
 		Rule:             ruleName,
 		Message:          message,
 		AbsolutePosition: lexeme.Start,
@@ -336,68 +335,62 @@ func (ec *errorCore[TObs, TToken, TTokenRole]) replaceBestErrorAt(ruleName strin
 	return ec.sink.replaceBest(err)
 }
 
-func (ec *errorCore[TObs, _, _]) reportLexerError(line, column int, description string) {
-	ec.sink.report(SyntaxError[TObs]{
-		Message:         description,
-		StartLine:       line,
-		StartColumn:     column,
-		EndLine:         line,
-		EndColumn:       column,
+func (ec *errorCore) reportLexerError(line, column int, description string) {
+	ec.sink.report(SyntaxError{
+		Message:          description,
+		StartLine:        line,
+		StartColumn:      column,
+		EndLine:          line,
+		EndColumn:        column,
 		AbsolutePosition: 0,
 		AbsoluteEnd:      0,
-		ProducedByLexer: true,
+		ProducedByLexer:  true,
 	})
 }
 
-type tokenSet[TToken comparable] map[TToken]struct{}
+type tokenSet map[lexarch.TokenRole]struct{}
 
 /*
 ExecRuleContext exposes transactional, mutating parsing operations.
 */
-type ExecRuleContext[
-	TObservation cmp.Ordered,
-	TToken,
-	TTokenRole,
-	TLexerState,
-	TNodeKind comparable,
-] struct {
+type ExecRuleContext[TNodeKind comparable] struct {
 	/* The Token endpoint provides access to the lexer token stream. */
-	Token *tokenStream[TObservation, TToken, TTokenRole]
+	Token *tokenStream
 
 	/* The Recovery endpoint provides access to syntax error recovery functionality. */
-	Recovery *recoveryCore[TObservation, TToken, TTokenRole]
+	Recovery *recoveryCore
 
 	/* The Skip endpoint provides access to skip token functionality. */
-	Skip *skipCore[TTokenRole]
+	Skip *skipCore
 
 	/* The Error endpoint provides access to syntax error reporting functionality. */
-	Error *errorCore[TObservation, TToken, TTokenRole]
+	Error *errorCore
 
 	/* ExecuteRule routes a rule through the parser for invariant detection. */
-	ExecuteRule func(rule ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind], mode RuleExecutionMode) RuleResult[TObservation, TToken, TTokenRole, TNodeKind]
+	ExecuteRule func(rule ParserRule[TNodeKind], mode RuleExecutionMode) RuleResult[TNodeKind]
 
-	ExecuteReference func(targetRule GrammarLabel, mode RuleExecutionMode) RuleResult[TObservation, TToken, TTokenRole, TNodeKind]
+	ExecuteReference func(targetRule GrammarLabel, mode RuleExecutionMode) RuleResult[TNodeKind]
 
 	// Specific LST/State helpers
-	Editor *LSTEditor[TObservation, TToken, TTokenRole, TNodeKind]
+	Editor *LSTEditor[TNodeKind]
 
 	/* SetLexerState alters the lexer state for languages with multiple lexer states. */
-	SetLexerState func(TLexerState)
+	SetLexerState func(string)
 
-	Select       *SelectRuleContext[TObservation, TToken, TTokenRole]
-	Finalization *FinalizationCtx[TObservation, TToken, TTokenRole, TNodeKind]
+	Select       *SelectRuleContext
+	Finalization *FinalizationCtx[TNodeKind]
 
 	lastLexingError func() error
-	createErrorNode func(string) *SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind]
+	createErrorNode func(string) *SyntaxaLSTNode[TNodeKind]
 
 	/*
 		GetLastConsumedLexeme returns the last consumed lexeme and true if any token has been consumed.
 		Used to report "expected X" at the end of the previous token (e.g. missing semicolon after "lspec").
 		May be nil when the token source does not support it.
 	*/
-	GetLastConsumedLexeme func() (Lexeme[TObservation, TToken, TTokenRole], bool)
+	GetLastConsumedLexeme func() (Lexeme, bool)
 
-	GetAnalysis func() *GrammarAnalysis[TToken]
+	GetAnalysis func() *GrammarAnalysis
 
 	/*
 		EngineStats receives optional parse-engine counters when the caller passes a non-nil
@@ -405,25 +398,19 @@ type ExecRuleContext[
 	*/
 	EngineStats *ParseEngineStats
 
-	trace *ParseTrace[TToken]
+	trace *ParseTrace
 
-	save    func() ParserSnapshot[TObservation, TLexerState]
-	restore func(snapshot ParserSnapshot[TObservation, TLexerState])
+	save    func() ParserSnapshot
+	restore func(snapshot ParserSnapshot)
 
-	resultsScratch      []RuleResult[TObservation, TToken, TTokenRole, TNodeKind]
+	resultsScratch      []RuleResult[TNodeKind]
 	resultsScratchMarks []int
 }
 
-func ExecRuleContextAcquireResultsScratch[
-	TObservation cmp.Ordered,
-	TToken,
-	TTokenRole,
-	TLexerState,
-	TNodeKind comparable,
-](
-	ctx *ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+func ExecRuleContextAcquireResultsScratch[TNodeKind comparable](
+	ctx *ExecRuleContext[TNodeKind],
 	size int,
-) []RuleResult[TObservation, TToken, TTokenRole, TNodeKind] {
+) []RuleResult[TNodeKind] {
 	if size < 0 {
 		panic("ExecRuleContextAcquireResultsScratch: size must be >= 0")
 	}
@@ -439,7 +426,7 @@ func ExecRuleContextAcquireResultsScratch[
 			nextCapacity = 2 * cap(ctx.resultsScratch)
 		}
 
-		next := make([]RuleResult[TObservation, TToken, TTokenRole, TNodeKind], len(ctx.resultsScratch), nextCapacity)
+		next := make([]RuleResult[TNodeKind], len(ctx.resultsScratch), nextCapacity)
 		copy(next, ctx.resultsScratch)
 		ctx.resultsScratch = next
 	}
@@ -448,14 +435,8 @@ func ExecRuleContextAcquireResultsScratch[
 	return ctx.resultsScratch[start:end]
 }
 
-func ExecRuleContextReleaseResultsScratch[
-	TObservation cmp.Ordered,
-	TToken,
-	TTokenRole,
-	TLexerState,
-	TNodeKind comparable,
-](
-	ctx *ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+func ExecRuleContextReleaseResultsScratch[TNodeKind comparable](
+	ctx *ExecRuleContext[TNodeKind],
 ) {
 	if len(ctx.resultsScratchMarks) == 0 {
 		panic("ExecRuleContextReleaseResultsScratch: release without acquire")
@@ -465,7 +446,7 @@ func ExecRuleContextReleaseResultsScratch[
 	start := ctx.resultsScratchMarks[last]
 	ctx.resultsScratchMarks = ctx.resultsScratchMarks[:last]
 
-	var zero RuleResult[TObservation, TToken, TTokenRole, TNodeKind]
+	var zero RuleResult[TNodeKind]
 	for i := start; i < len(ctx.resultsScratch); i++ {
 		ctx.resultsScratch[i] = zero
 	}
@@ -473,29 +454,29 @@ func ExecRuleContextReleaseResultsScratch[
 	ctx.resultsScratch = ctx.resultsScratch[:start]
 }
 
-type SelectRuleContext[TObservation cmp.Ordered, TToken, TTokenRole comparable] struct {
-	ts *tokenStream[TObservation, TToken, TTokenRole]
+type SelectRuleContext struct {
+	ts *tokenStream
 }
 
-func (s *SelectRuleContext[TObservation, TToken, TTokenRole]) Peek(n int) Lexeme[TObservation, TToken, TTokenRole] {
+func (s *SelectRuleContext) Peek(n int) Lexeme {
 	return s.ts.Peek(n)
 }
 
-func (s *SelectRuleContext[TObservation, TToken, TTokenRole]) PeekRaw(n int) Lexeme[TObservation, TToken, TTokenRole] {
+func (s *SelectRuleContext) PeekRaw(n int) Lexeme {
 	return s.ts.PeekRaw(n)
 }
 
-type FinalizationCtx[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind comparable] struct {
-	editor *LSTEditor[TObservation, TToken, TTokenRole, TNodeKind]
+type FinalizationCtx[TNodeKind comparable] struct {
+	editor *LSTEditor[TNodeKind]
 }
 
 /* SetAttribute sets a named attribute for the node, overriding any attribute with the same name if existent.*/
-func (f *FinalizationCtx[TObservation, TToken, TTokenRole, TNodeKind]) SetAttribute(node *SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind], attributeName string, value any) {
+func (f *FinalizationCtx[TNodeKind]) SetAttribute(node *SyntaxaLSTNode[TNodeKind], attributeName string, value any) {
 	f.editor.SetAttribute(node, attributeName, value)
 }
 
 /* DeleteAttribute deletes a named attribute for the node.*/
-func (f *FinalizationCtx[TObservation, TToken, TTokenRole, TNodeKind]) DeleteAttribute(node *SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind], attributeName string) {
+func (f *FinalizationCtx[TNodeKind]) DeleteAttribute(node *SyntaxaLSTNode[TNodeKind], attributeName string) {
 	f.editor.DeleteAttribute(node, attributeName)
 }
 
@@ -503,36 +484,30 @@ func (f *FinalizationCtx[TObservation, TToken, TTokenRole, TNodeKind]) DeleteAtt
 // BUILDERS
 // =============================================================
 
-type rawSource[TObs cmp.Ordered, TToken, TTokenRole comparable] struct {
-	peek    func(int) Lexeme[TObs, TToken, TTokenRole]
-	consume func() Lexeme[TObs, TToken, TTokenRole]
+type rawSource struct {
+	peek    func(int) Lexeme
+	consume func() Lexeme
 }
 
-func BuildExecRuleContextFromSlice[
-	TObservation cmp.Ordered,
-	TToken,
-	TTokenRole,
-	TLexerState,
-	TNodeKind comparable,
-](
-	parser *SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
-	lexemes []Lexeme[TObservation, TToken, TTokenRole],
-	errors *SyntaxErrors[TObservation],
+func BuildExecRuleContextFromSlice[TNodeKind comparable](
+	parser *SyntaxaParser[TNodeKind],
+	lexemes []Lexeme,
+	errors *SyntaxErrors,
 	cursor *int,
 	streamStats *ParseStreamStats,
 	engineStats *ParseEngineStats,
-) *ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
-	eofLex := Lexeme[TObservation, TToken, TTokenRole]{Token: parser.eofToken}
+) *ExecRuleContext[TNodeKind] {
+	eofLex := Lexeme{Token: parser.eofToken}
 
-	src := rawSource[TObservation, TToken, TTokenRole]{
-		peek: func(n int) Lexeme[TObservation, TToken, TTokenRole] {
+	src := rawSource{
+		peek: func(n int) Lexeme {
 			idx := *cursor + n
 			if idx >= len(lexemes) {
 				return eofLex
 			}
 			return lexemes[idx]
 		},
-		consume: func() Lexeme[TObservation, TToken, TTokenRole] {
+		consume: func() Lexeme {
 			if *cursor >= len(lexemes) {
 				return eofLex
 			}
@@ -542,11 +517,11 @@ func BuildExecRuleContextFromSlice[
 		},
 	}
 
-	save := func() ParserSnapshot[TObservation, TLexerState] {
-		return ParserSnapshot[TObservation, TLexerState]{tokenIndex: *cursor}
+	save := func() ParserSnapshot {
+		return ParserSnapshot{tokenIndex: *cursor}
 	}
 
-	restore := func(c ParserSnapshot[TObservation, TLexerState]) {
+	restore := func(c ParserSnapshot) {
 		*cursor = c.tokenIndex
 	}
 
@@ -554,40 +529,34 @@ func BuildExecRuleContextFromSlice[
 
 	// Context specific overrides
 	ctx.lastLexingError = func() error { return nil }
-	ctx.SetLexerState = func(s TLexerState) {}
-	ctx.GetLastConsumedLexeme = func() (Lexeme[TObservation, TToken, TTokenRole], bool) {
+	ctx.SetLexerState = func(s string) {}
+	ctx.GetLastConsumedLexeme = func() (Lexeme, bool) {
 		if *cursor > 0 {
 			return lexemes[*cursor-1], true
 		}
-		var z Lexeme[TObservation, TToken, TTokenRole]
+		var z Lexeme
 		return z, false
 	}
 
 	return ctx
 }
 
-func BuildExecRuleContextFromLexerSession[
-	TObservation cmp.Ordered,
-	TState comparable,
-	TToken comparable,
-	TTokenRole comparable,
-	TNodeKind comparable,
-](
-	parser *SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TState],
+func BuildExecRuleContextFromLexerSession[TNodeKind comparable](
+	parser *SyntaxaParser[TNodeKind],
 	lexer *lexarch.Lexer,
 	session *lexarch.LexingSession,
 	source string,
-	errors *SyntaxErrors[TObservation],
+	errors *SyntaxErrors,
 	streamStats *ParseStreamStats,
 	engineStats *ParseEngineStats,
-) *ExecRuleContext[TObservation, TToken, TTokenRole, TState, TNodeKind] {
-	var lastConsumed Lexeme[TObservation, TToken, TTokenRole]
+) *ExecRuleContext[TNodeKind] {
+	var lastConsumed Lexeme
 	var hasConsumed bool
-	eofLex := Lexeme[TObservation, TToken, TTokenRole]{Token: parser.eofToken}
+	eofLex := Lexeme{Token: parser.eofToken}
 	out := lexarch.LexingSessionNextResultCreate()
 	nextTokenNumber := 0
 
-	resolveLexeme := func(tokenNumber int) Lexeme[TObservation, TToken, TTokenRole] {
+	resolveLexeme := func(tokenNumber int) Lexeme {
 		// When lexer reports a runtime/validation error, present EOF to parser logic.
 		// The concrete error is still available via ctx.lastLexingError().
 		if out.LexingError != nil || out.Token == nil {
@@ -602,15 +571,15 @@ func BuildExecRuleContextFromLexerSession[
 			return eofLex
 		}
 
-		return LexemeFromToken[TObservation, TToken, TTokenRole](out.Token, source, 4, tokenNumber)
+		return LexemeFromToken(out.Token, source, 4, tokenNumber)
 	}
 
-	src := rawSource[TObservation, TToken, TTokenRole]{
-		peek: func(n int) Lexeme[TObservation, TToken, TTokenRole] {
+	src := rawSource{
+		peek: func(n int) Lexeme {
 			lexarch.LexingSessionPeek(session, out, n+1)
 			return resolveLexeme(nextTokenNumber + n)
 		},
-		consume: func() Lexeme[TObservation, TToken, TTokenRole] {
+		consume: func() Lexeme {
 			lexarch.LexingSessionConsume(session, out)
 			l := resolveLexeme(nextTokenNumber)
 			nextTokenNumber++
@@ -620,12 +589,12 @@ func BuildExecRuleContextFromLexerSession[
 		},
 	}
 
-	save := func() ParserSnapshot[TObservation, TState] {
+	save := func() ParserSnapshot {
 		snap := lexarch.LexingSessionSnapshotCreate(session)
-		return ParserSnapshot[TObservation, TState]{tokenIndex: nextTokenNumber, lexerSnap: snap}
+		return ParserSnapshot{tokenIndex: nextTokenNumber, lexerSnap: snap}
 	}
 
-	restore := func(c ParserSnapshot[TObservation, TState]) {
+	restore := func(c ParserSnapshot) {
 		lexarch.LexingSessionSnapshotRestore(session, c.lexerSnap)
 		nextTokenNumber = c.tokenIndex
 	}
@@ -633,52 +602,46 @@ func BuildExecRuleContextFromLexerSession[
 	ctx := buildBaseContext(parser, errors, src, save, restore, streamStats, engineStats)
 
 	ctx.lastLexingError = func() error { return out.LexingError }
-	ctx.SetLexerState = func(state TState) { lexarch.LexingSessionSet(session, fmt.Sprintf("%v", state)) }
-	ctx.GetLastConsumedLexeme = func() (Lexeme[TObservation, TToken, TTokenRole], bool) {
+	ctx.SetLexerState = func(state string) { lexarch.LexingSessionSet(session, state) }
+	ctx.GetLastConsumedLexeme = func() (Lexeme, bool) {
 		return lastConsumed, hasConsumed
 	}
 
 	return ctx
 }
 
-func buildBaseContext[
-	TObservation cmp.Ordered,
-	TToken,
-	TTokenRole,
-	TLexerState,
-	TNodeKind comparable,
-](
-	parser *SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
-	errors *SyntaxErrors[TObservation],
-	src rawSource[TObservation, TToken, TTokenRole],
-	saveFn func() ParserSnapshot[TObservation, TLexerState],
-	restoreFn func(ParserSnapshot[TObservation, TLexerState]),
+func buildBaseContext[TNodeKind comparable](
+	parser *SyntaxaParser[TNodeKind],
+	errors *SyntaxErrors,
+	src rawSource,
+	saveFn func() ParserSnapshot,
+	restoreFn func(ParserSnapshot),
 	streamStats *ParseStreamStats,
 	engineStats *ParseEngineStats,
-) *ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
+) *ExecRuleContext[TNodeKind] {
 
 	peekRaw := src.peek
 	consumeRaw := src.consume
 	if streamStats != nil {
 		origPeek := peekRaw
 		origConsume := consumeRaw
-		peekRaw = func(n int) Lexeme[TObservation, TToken, TTokenRole] {
+		peekRaw = func(n int) Lexeme {
 			streamStats.RawPeekCalls++
 			return origPeek(n)
 		}
-		consumeRaw = func() Lexeme[TObservation, TToken, TTokenRole] {
+		consumeRaw = func() Lexeme {
 			streamStats.RawConsumeCalls++
 			return origConsume()
 		}
 	}
 
 	// Initialize Cores
-	sCore := &skipCore[TTokenRole]{stack: make([]tokenSet[TTokenRole], 0)}
+	sCore := &skipCore{stack: make([]tokenSet, 0)}
 	if len(parser.defaultSkipRoles) > 0 {
 		sCore.PushSkipRoles(parser.defaultSkipRoles...)
 	}
 
-	tStream := &tokenStream[TObservation, TToken, TTokenRole]{
+	tStream := &tokenStream{
 		peekRaw:    peekRaw,
 		consumeRaw: consumeRaw,
 		skipCore:   sCore,
@@ -686,70 +649,70 @@ func buildBaseContext[
 	}
 	sCore.onChange = tStream.invalidatePeekCache
 
-	rCore := &recoveryCore[TObservation, TToken, TTokenRole]{
+	rCore := &recoveryCore{
 		ts: tStream,
 	}
 	rCore.setDefaultRecovery(parser.eofToken)
-	eCore := &errorCore[TObservation, TToken, TTokenRole]{sink: errors, ts: tStream}
+	eCore := &errorCore{sink: errors, ts: tStream}
 
-	editor := &LSTEditor[TObservation, TToken, TTokenRole, TNodeKind]{
-		created:          make([]*SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind], 0),
-		nodeFree:         make([]*SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind], 0, parser.nodePoolPrefill),
+	editor := &LSTEditor[TNodeKind]{
+		created:          make([]*SyntaxaLSTNode[TNodeKind], 0),
+		nodeFree:         make([]*SyntaxaLSTNode[TNodeKind], 0, parser.nodePoolPrefill),
 		nodeGrow:         parser.nodePoolGrow,
 		parseEngineStats: engineStats,
 	}
 	for i := 0; i < parser.nodePoolPrefill; i++ {
-		editor.nodeFree = append(editor.nodeFree, &SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind]{})
+		editor.nodeFree = append(editor.nodeFree, &SyntaxaLSTNode[TNodeKind]{})
 	}
 
-	selectCtx := &SelectRuleContext[TObservation, TToken, TTokenRole]{
+	selectCtx := &SelectRuleContext{
 		ts: tStream,
 	}
 
-	finalCtx := &FinalizationCtx[TObservation, TToken, TTokenRole, TNodeKind]{
+	finalCtx := &FinalizationCtx[TNodeKind]{
 		editor: editor,
 	}
 
-	var cachedAnalysis *GrammarAnalysis[TToken]
+	var cachedAnalysis *GrammarAnalysis
 	if parser.getAnalysis != nil {
 		cachedAnalysis = parser.getAnalysis()
 	}
 
 	// Assemble Context
-	ctx := ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]{
+	ctx := ExecRuleContext[TNodeKind]{
 		Token:    tStream,
 		Recovery: rCore,
 		Skip:     sCore,
 		Error:    eCore,
 		Editor:   editor,
-		createErrorNode: func(message string) *SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind] {
+		createErrorNode: func(message string) *SyntaxaLSTNode[TNodeKind] {
 			n := editor.NewNode(parser.errorNodeKind)
 			editor.SetAttribute(n, "error", message)
 			return n
 		},
-		save: func() ParserSnapshot[TObservation, TLexerState] {
+		save: func() ParserSnapshot {
 			snapshot := saveFn()
 			snapshot.nextVisibleRawIndex = tStream.nextVisibleRawIndex
 			snapshot.nextVisibleCached = tStream.nextVisibleCached
 			return snapshot
 		},
-		restore: func(snapshot ParserSnapshot[TObservation, TLexerState]) {
+		restore: func(snapshot ParserSnapshot) {
 			restoreFn(snapshot)
 			tStream.nextVisibleRawIndex = snapshot.nextVisibleRawIndex
 			tStream.nextVisibleCached = snapshot.nextVisibleCached
 		},
 		Select:       selectCtx,
 		Finalization: finalCtx,
-		GetAnalysis: func() *GrammarAnalysis[TToken] {
+		GetAnalysis: func() *GrammarAnalysis {
 			return cachedAnalysis
 		},
 		EngineStats: engineStats,
 	}
 
-	var trace *ParseTrace[TToken]
+	var trace *ParseTrace
 	if parser.debugTrace {
-		trace = &ParseTrace[TToken]{
-			Events: make([]ParseTraceEvent[TToken], 0),
+		trace = &ParseTrace{
+			Events: make([]ParseTraceEvent, 0),
 		}
 		ctx.trace = trace
 	}
@@ -757,13 +720,13 @@ func buildBaseContext[
 	ctxPtr := &ctx
 
 	ctxPtr.ExecuteRule = func(
-		rule ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+		rule ParserRule[TNodeKind],
 		mode RuleExecutionMode,
-	) RuleResult[TObservation, TToken, TTokenRole, TNodeKind] {
+	) RuleResult[TNodeKind] {
 		return syntaxaParserExecuteRule(parser, ctxPtr, rule, mode)
 	}
 
-	ctxPtr.ExecuteReference = func(targetRule GrammarLabel, mode RuleExecutionMode) RuleResult[TObservation, TToken, TTokenRole, TNodeKind] {
+	ctxPtr.ExecuteReference = func(targetRule GrammarLabel, mode RuleExecutionMode) RuleResult[TNodeKind] {
 		if st := ctxPtr.EngineStats; st != nil {
 			st.ReferenceDirectCalls++
 		}

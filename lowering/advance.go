@@ -1,14 +1,17 @@
 package lowering
 
-import "syntaxa"
+import (
+	"lexarch"
+	"syntaxa"
+)
 
-func advanceTerminal[TToken, TNodeKind comparable](
-	term gTerminal[TToken, TNodeKind],
-	rules map[syntaxa.GrammarLabel]*syntaxa.Grammar[TToken, TNodeKind],
-	analysis *syntaxa.GrammarAnalysis[TToken],
-) ([]gTerminal[TToken, TNodeKind], bool) {
+func advanceTerminal[TNodeKind comparable](
+	term gTerminal[TNodeKind],
+	rules map[syntaxa.GrammarLabel]*syntaxa.Grammar[lexarch.TokenKind, TNodeKind],
+	analysis *syntaxa.GrammarAnalysis,
+) ([]gTerminal[TNodeKind], bool) {
 	levels := len(term.stack) + 1
-	var result []gTerminal[TToken, TNodeKind]
+	var result []gTerminal[TNodeKind]
 	isNullable := true
 
 	for i := 0; i < levels; i++ {
@@ -33,10 +36,10 @@ func advanceTerminal[TToken, TNodeKind comparable](
 	return result, isNullable
 }
 
-func extractFrameDetails[TToken, TNodeKind comparable](
-	term gTerminal[TToken, TNodeKind],
+func extractFrameDetails[TNodeKind comparable](
+	term gTerminal[TNodeKind],
 	level int,
-) ([]*syntaxa.Grammar[TToken, TNodeKind], bool, *syntaxa.Grammar[TToken, TNodeKind]) {
+) ([]*syntaxa.Grammar[lexarch.TokenKind, TNodeKind], bool, *syntaxa.Grammar[lexarch.TokenKind, TNodeKind]) {
 	if level == 0 {
 		return term.remaining, false, nil
 	}
@@ -44,13 +47,13 @@ func extractFrameDetails[TToken, TNodeKind comparable](
 	return entry.remaining, entry.isRepetition, entry.repeatNode
 }
 
-func computeLookaheadForFrame[TToken, TNodeKind comparable](
-	remaining []*syntaxa.Grammar[TToken, TNodeKind],
+func computeLookaheadForFrame[TNodeKind comparable](
+	remaining []*syntaxa.Grammar[lexarch.TokenKind, TNodeKind],
 	isRep bool,
-	repNode *syntaxa.Grammar[TToken, TNodeKind],
-	rules map[syntaxa.GrammarLabel]*syntaxa.Grammar[TToken, TNodeKind],
-	analysis *syntaxa.GrammarAnalysis[TToken],
-) ([]gTerminal[TToken, TNodeKind], bool) {
+	repNode *syntaxa.Grammar[lexarch.TokenKind, TNodeKind],
+	rules map[syntaxa.GrammarLabel]*syntaxa.Grammar[lexarch.TokenKind, TNodeKind],
+	analysis *syntaxa.GrammarAnalysis,
+) ([]gTerminal[TNodeKind], bool) {
 	visiting := make(visiting)
 
 	if isRep {
@@ -60,7 +63,7 @@ func computeLookaheadForFrame[TToken, TNodeKind comparable](
 		// Attach the continuation to the loop terminals so they know what follows
 		for j := range loopTs {
 			last := loopTs[j].getLastRemaining()
-			extended := make([]*syntaxa.Grammar[TToken, TNodeKind], len(*last)+len(remaining))
+			extended := make([]*syntaxa.Grammar[lexarch.TokenKind, TNodeKind], len(*last)+len(remaining))
 			copy(extended, *last)
 			copy(extended[len(*last):], remaining)
 			*last = extended
@@ -76,13 +79,13 @@ func computeLookaheadForFrame[TToken, TNodeKind comparable](
 	return lookaheadConcat(nil, remaining, rules, visiting, analysis)
 }
 
-func appendLookaheadWithStack[TToken, TNodeKind comparable](
-	la []gTerminal[TToken, TNodeKind],
-	outerStack []gStackEntry[TToken, TNodeKind],
-	result []gTerminal[TToken, TNodeKind],
-) []gTerminal[TToken, TNodeKind] {
+func appendLookaheadWithStack[TNodeKind comparable](
+	la []gTerminal[TNodeKind],
+	outerStack []gStackEntry[TNodeKind],
+	result []gTerminal[TNodeKind],
+) []gTerminal[TNodeKind] {
 	for j := range la {
-		newStack := make([]gStackEntry[TToken, TNodeKind], len(la[j].stack)+len(outerStack))
+		newStack := make([]gStackEntry[TNodeKind], len(la[j].stack)+len(outerStack))
 		copy(newStack, la[j].stack)
 		copy(newStack[len(la[j].stack):], outerStack)
 		la[j].stack = newStack

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"foundation/formatting"
 	"foundation/hash"
+	"lexarch"
 	"slices"
 	"sort"
 	"strconv"
@@ -29,7 +30,7 @@ TokenSet is a set of terminal tokens used as first/follow sets in grammar analys
 
 Implemented as map[TToken]struct{} for O(1) membership and easy merging.
 */
-type TokenSet[TToken comparable] map[TToken]struct{}
+type TokenSet map[lexarch.TokenKind]struct{}
 
 /*
 GrammarPackage is the flattened form of a grammar tree produced by ProducePackage.
@@ -46,23 +47,23 @@ a package for the parser. Nil when the package is produced for analysis-only use
 
 Root and AdditionalRules are kept for on-demand lowering (e.g. ToPatternGrammar, BuildStateGraph).
 */
-type GrammarPackage[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind, TLexerState comparable] struct {
+type GrammarPackage[TNodeKind comparable] struct {
 	Name                string
 	Version             string
 	EntryRule           GrammarLabel
-	Root                *Grammar[TToken, TNodeKind]
-	AdditionalRules     []*Grammar[TToken, TNodeKind]
-	Grammars            map[GrammarLabel]*Grammar[TToken, TNodeKind]
+	Root                *Grammar[lexarch.TokenKind, TNodeKind]
+	AdditionalRules     []*Grammar[lexarch.TokenKind, TNodeKind]
+	Grammars            map[GrammarLabel]*Grammar[lexarch.TokenKind, TNodeKind]
 	SortedGrammarLabels []GrammarLabel
-	TokensUsed          []TToken
-	Nests               []NestSpec[TToken, TNodeKind]
+	TokensUsed          []lexarch.TokenKind
+	Nests               []NestSpec[TNodeKind]
 	PathToGrammarLabel  map[NodeKey]GrammarLabel
-	NodeByGrammarKey    map[GrammarKey]*Grammar[TToken, TNodeKind]
-	NodesByGrammarLabel map[GrammarLabel][]*Grammar[TToken, TNodeKind]
+	NodeByGrammarKey    map[GrammarKey]*Grammar[lexarch.TokenKind, TNodeKind]
+	NodesByGrammarLabel map[GrammarLabel][]*Grammar[lexarch.TokenKind, TNodeKind]
 	// MergedRecoveryByGrammarLabel stores compile-time merged recovery metadata per rule label.
 	// It includes inherited reference-chain recovery/no-consume tokens in stable order.
-	MergedRecoveryByGrammarLabel map[GrammarLabel]RecoverySpec[TToken]
-	EntryRuleParserRule *ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
+	MergedRecoveryByGrammarLabel map[GrammarLabel]RecoverySpec
+	EntryRuleParserRule          *ParserRule[TNodeKind]
 }
 
 /*
@@ -71,12 +72,12 @@ NestSpec describes one bracketed (GNest) production: open token, close token, an
 Used by the parser for balanced delimiter matching and error recovery.
 ID and OwnerRule are GrammarLabels (context-boundary nodes; unique per nest).
 */
-type NestSpec[TToken, TNodeKind comparable] struct {
+type NestSpec[TNodeKind comparable] struct {
 	ID        GrammarLabel
-	Open      TToken
-	Close     TToken
+	Open      lexarch.TokenKind
+	Close     lexarch.TokenKind
 	OwnerRule GrammarLabel
-	Node      *Grammar[TToken, TNodeKind]
+	Node      *Grammar[lexarch.TokenKind, TNodeKind]
 }
 
 /*
@@ -84,10 +85,10 @@ GrammarAnalysis holds the results of nullable, first, and follow computation for
 
 Maps are keyed by NodeKey. Used by the parser for prediction and error reporting.
 */
-type GrammarAnalysis[TToken comparable] struct {
+type GrammarAnalysis struct {
 	Nullable map[NodeKey]bool
-	First    map[NodeKey]TokenSet[TToken]
-	Follow   map[NodeKey]TokenSet[TToken]
+	First    map[NodeKey]TokenSet
+	Follow   map[NodeKey]TokenSet
 }
 
 /*
@@ -96,9 +97,9 @@ RecoverySpec holds recovery token sets for a rule, used by Editor IR to resync o
 Tokens are sync tokens at which the engine resyncs (consumes until one is seen).
 NoConsume are sync tokens where the token is left in the stream for the parent.
 */
-type RecoverySpec[TToken comparable] struct {
-	Tokens    []TToken
-	NoConsume []TToken
+type RecoverySpec struct {
+	Tokens    []lexarch.TokenKind
+	NoConsume []lexarch.TokenKind
 }
 
 // ============================================================
@@ -117,19 +118,13 @@ targets are reported at once.
 entryRule is the executable parser rule for the entry production; pass it when the
 package will be used to create a parser. Pass nil for analysis-only use (e.g. debug dumps).
 */
-func ProducePackage[
-	TObservation cmp.Ordered,
-	TToken,
-	TTokenRole,
-	TNodeKind,
-	TLexerState comparable,
-](
-	root *Grammar[TToken, TNodeKind],
-	additionalRules []*Grammar[TToken, TNodeKind],
+func ProducePackage[TNodeKind comparable](
+	root *Grammar[lexarch.TokenKind, TNodeKind],
+	additionalRules []*Grammar[lexarch.TokenKind, TNodeKind],
 	name string,
 	version string,
-	entryRule *ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
-) GrammarPackage[TObservation, TToken, TTokenRole, TNodeKind, TLexerState] {
+	entryRule *ParserRule[TNodeKind],
+) GrammarPackage[TNodeKind] {
 	if root == nil {
 		panic("ProducePackage: root grammar is nil")
 	}
@@ -138,16 +133,16 @@ func ProducePackage[
 	finalizeGraphPaths(root, additionalRules)
 
 	hasher := hash.XXH3HasherCreateWithSeed(0)
-	rules := make(map[GrammarLabel]*Grammar[TToken, TNodeKind])
-	tokenSet := make(TokenSet[TToken])
-	nests := make([]NestSpec[TToken, TNodeKind], 0)
-	nodeByGrammarKey := make(map[GrammarKey]*Grammar[TToken, TNodeKind])
-	nodesByGrammarLabel := make(map[GrammarLabel][]*Grammar[TToken, TNodeKind])
+	rules := make(map[GrammarLabel]*Grammar[lexarch.TokenKind, TNodeKind])
+	tokenSet := make(TokenSet)
+	nests := make([]NestSpec[TNodeKind], 0)
+	nodeByGrammarKey := make(map[GrammarKey]*Grammar[lexarch.TokenKind, TNodeKind])
+	nodesByGrammarLabel := make(map[GrammarLabel][]*Grammar[lexarch.TokenKind, TNodeKind])
 	duplicateContextBoundaryLabels := make(map[GrammarLabel]struct{})
 	visitedLabels := make(map[GrammarLabel]struct{}) // To prevent duplicate Rules/Nests
 	visitedPaths := make(map[GrammarKey]struct{})    // To prevent infinite recursion in graph walks
 
-	slices.SortFunc(additionalRules, func(a, b *Grammar[TToken, TNodeKind]) int {
+	slices.SortFunc(additionalRules, func(a, b *Grammar[lexarch.TokenKind, TNodeKind]) int {
 		return cmp.Compare(a.GrammarLabel, b.GrammarLabel)
 	})
 
@@ -191,7 +186,7 @@ func ProducePackage[
 	}
 	mergedRecoveryByGrammarLabel := RecoverySpecMergedByGrammarLabel(rules)
 
-	tokensUsed := make([]TToken, 0, len(tokenSet))
+	tokensUsed := make([]lexarch.TokenKind, 0, len(tokenSet))
 	for t := range tokenSet {
 		tokensUsed = append(tokensUsed, t)
 	}
@@ -206,24 +201,24 @@ func ProducePackage[
 
 	pathToGrammarLabel := buildPathToGrammarLabel(root, additionalRules)
 
-	additionalCopy := make([]*Grammar[TToken, TNodeKind], len(additionalRules))
+	additionalCopy := make([]*Grammar[lexarch.TokenKind, TNodeKind], len(additionalRules))
 	copy(additionalCopy, additionalRules)
 
-	return GrammarPackage[TObservation, TToken, TTokenRole, TNodeKind, TLexerState]{
-		Name:                name,
-		Version:             version,
-		EntryRule:           root.GrammarLabel,
-		Root:                root,
-		AdditionalRules:     additionalCopy,
-		Grammars:            rules,
-		SortedGrammarLabels: sortedGrammarLabels,
-		TokensUsed:          tokensUsed,
-		Nests:               nests,
-		PathToGrammarLabel:  pathToGrammarLabel,
-		NodeByGrammarKey:    nodeByGrammarKey,
-		NodesByGrammarLabel: nodesByGrammarLabel,
+	return GrammarPackage[TNodeKind]{
+		Name:                         name,
+		Version:                      version,
+		EntryRule:                    root.GrammarLabel,
+		Root:                         root,
+		AdditionalRules:              additionalCopy,
+		Grammars:                     rules,
+		SortedGrammarLabels:          sortedGrammarLabels,
+		TokensUsed:                   tokensUsed,
+		Nests:                        nests,
+		PathToGrammarLabel:           pathToGrammarLabel,
+		NodeByGrammarKey:             nodeByGrammarKey,
+		NodesByGrammarLabel:          nodesByGrammarLabel,
 		MergedRecoveryByGrammarLabel: mergedRecoveryByGrammarLabel,
-		EntryRuleParserRule: entryRule,
+		EntryRuleParserRule:          entryRule,
 	}
 }
 
@@ -237,17 +232,17 @@ ruleNameToNodeKey maps pattern rule names (readable Label_hash) to NodeKey; when
 each pattern key is copied to the corresponding NodeKey. When nil, pattern keys are
 used as NodeKey directly (backward compatibility). Exported for use by syntaxa/lowering.
 */
-func GrammarAnalysisFromPattern[TToken comparable](pa *pattern.GrammarAnalysis[TToken], ruleNameToNodeKey map[string]NodeKey) *GrammarAnalysis[TToken] {
+func GrammarAnalysisFromPattern(pa *pattern.GrammarAnalysis[lexarch.TokenKind], ruleNameToNodeKey map[string]NodeKey) *GrammarAnalysis {
 	if pa == nil {
-		return &GrammarAnalysis[TToken]{
+		return &GrammarAnalysis{
 			Nullable: make(map[NodeKey]bool),
-			First:    make(map[NodeKey]TokenSet[TToken]),
-			Follow:   make(map[NodeKey]TokenSet[TToken]),
+			First:    make(map[NodeKey]TokenSet),
+			Follow:   make(map[NodeKey]TokenSet),
 		}
 	}
 	nullable := make(map[NodeKey]bool)
-	first := make(map[NodeKey]TokenSet[TToken])
-	follow := make(map[NodeKey]TokenSet[TToken])
+	first := make(map[NodeKey]TokenSet)
+	follow := make(map[NodeKey]TokenSet)
 	nodeKey := func(ruleName string) NodeKey {
 		if ruleNameToNodeKey != nil {
 			if k, ok := ruleNameToNodeKey[ruleName]; ok {
@@ -260,20 +255,20 @@ func GrammarAnalysisFromPattern[TToken comparable](pa *pattern.GrammarAnalysis[T
 		nullable[nodeKey(k)] = v
 	}
 	for k, s := range pa.First {
-		dst := make(TokenSet[TToken])
+		dst := make(TokenSet)
 		for t := range s {
 			dst[t] = struct{}{}
 		}
 		first[nodeKey(k)] = dst
 	}
 	for k, s := range pa.Follow {
-		dst := make(TokenSet[TToken])
+		dst := make(TokenSet)
 		for t := range s {
 			dst[t] = struct{}{}
 		}
 		follow[nodeKey(k)] = dst
 	}
-	return &GrammarAnalysis[TToken]{Nullable: nullable, First: first, Follow: follow}
+	return &GrammarAnalysis{Nullable: nullable, First: first, Follow: follow}
 }
 
 // ============================================================
@@ -284,7 +279,7 @@ func GrammarAnalysisFromPattern[TToken comparable](pa *pattern.GrammarAnalysis[T
 finalizeGraphPaths assigns unique topological addresses to all nodes in the namespace.
 The root tree starts at "0". Disconnected subgraphs start at "ext0", "ext1", etc.
 */
-func finalizeGraphPaths[TToken, TNodeKind comparable](root *Grammar[TToken, TNodeKind], additionals []*Grammar[TToken, TNodeKind]) {
+func finalizeGraphPaths[TNodeKind comparable](root *Grammar[lexarch.TokenKind, TNodeKind], additionals []*Grammar[lexarch.TokenKind, TNodeKind]) {
 	if root.NodePath == nil {
 		assignPathRec(root, "0")
 	}
@@ -295,7 +290,7 @@ func finalizeGraphPaths[TToken, TNodeKind comparable](root *Grammar[TToken, TNod
 	}
 }
 
-func assignPathRec[TToken, TNodeKind comparable](g *Grammar[TToken, TNodeKind], current string) {
+func assignPathRec[TNodeKind comparable](g *Grammar[lexarch.TokenKind, TNodeKind], current string) {
 	if g == nil || g.NodePath != nil {
 		return
 	}
@@ -325,7 +320,7 @@ func assignPathRec[TToken, TNodeKind comparable](g *Grammar[TToken, TNodeKind], 
 /*
 buildPathToGrammarLabel walks all graphs and builds a map from each node's path to its GrammarLabel.
 */
-func buildPathToGrammarLabel[TToken, TNodeKind comparable](root *Grammar[TToken, TNodeKind], additionals []*Grammar[TToken, TNodeKind]) map[NodeKey]GrammarLabel {
+func buildPathToGrammarLabel[TNodeKind comparable](root *Grammar[lexarch.TokenKind, TNodeKind], additionals []*Grammar[lexarch.TokenKind, TNodeKind]) map[NodeKey]GrammarLabel {
 	out := make(map[NodeKey]GrammarLabel)
 	buildPathToGrammarLabelRec(root, out)
 	for _, add := range additionals {
@@ -334,7 +329,7 @@ func buildPathToGrammarLabel[TToken, TNodeKind comparable](root *Grammar[TToken,
 	return out
 }
 
-func buildPathToGrammarLabelRec[TToken, TNodeKind comparable](g *Grammar[TToken, TNodeKind], out map[NodeKey]GrammarLabel) {
+func buildPathToGrammarLabelRec[TNodeKind comparable](g *Grammar[lexarch.TokenKind, TNodeKind], out map[NodeKey]GrammarLabel) {
 	if g == nil || g.NodePath == nil {
 		return
 	}
@@ -348,8 +343,8 @@ func buildPathToGrammarLabelRec[TToken, TNodeKind comparable](g *Grammar[TToken,
 /*
 NestSpecsOpenTokenCounts returns the count of each open token across the given nest specs.
 */
-func NestSpecsOpenTokenCounts[TToken comparable, TNodeKind comparable](nests []NestSpec[TToken, TNodeKind]) map[TToken]int {
-	counts := make(map[TToken]int)
+func NestSpecsOpenTokenCounts[TNodeKind comparable](nests []NestSpec[TNodeKind]) map[lexarch.TokenKind]int {
+	counts := make(map[lexarch.TokenKind]int)
 	for _, nest := range nests {
 		counts[nest.Open]++
 	}
@@ -370,14 +365,14 @@ collectAll walks the grammar tree. It uses a visited map for GrammarLabels to en
 that context-boundary nodes (rules) and Nests are only processed once, preventing
 duplicates in the package even if a rule is referenced multiple times.
 */
-func collectAll[TToken, TNodeKind comparable](
+func collectAll[TNodeKind comparable](
 	hasher *hash.XXH3Hasher,
-	g *Grammar[TToken, TNodeKind],
-	rules map[GrammarLabel]*Grammar[TToken, TNodeKind],
-	tokenSet TokenSet[TToken],
-	nests *[]NestSpec[TToken, TNodeKind],
-	nodeByGrammarKey map[GrammarKey]*Grammar[TToken, TNodeKind],
-	nodesByGrammarLabel map[GrammarLabel][]*Grammar[TToken, TNodeKind],
+	g *Grammar[lexarch.TokenKind, TNodeKind],
+	rules map[GrammarLabel]*Grammar[lexarch.TokenKind, TNodeKind],
+	tokenSet TokenSet,
+	nests *[]NestSpec[TNodeKind],
+	nodeByGrammarKey map[GrammarKey]*Grammar[lexarch.TokenKind, TNodeKind],
+	nodesByGrammarLabel map[GrammarLabel][]*Grammar[lexarch.TokenKind, TNodeKind],
 	duplicateContextBoundaryLabels map[GrammarLabel]struct{},
 	visitedLabels map[GrammarLabel]struct{},
 	visitedPaths map[GrammarKey]struct{},
@@ -425,7 +420,7 @@ func collectAll[TToken, TNodeKind comparable](
 		tokenSet[*g.CloseToken] = struct{}{}
 
 		if !labelSeen {
-			*nests = append(*nests, NestSpec[TToken, TNodeKind]{
+			*nests = append(*nests, NestSpec[TNodeKind]{
 				ID:        g.GrammarLabel,
 				Open:      *g.OpenToken,
 				Close:     *g.CloseToken,
@@ -451,10 +446,10 @@ func collectAll[TToken, TNodeKind comparable](
 collectUnresolvedReferences walks the root and additional graphs to find any ReferenceTarget
 labels that are not present in the global rules map.
 */
-func collectUnresolvedReferences[TToken, TNodeKind comparable](
-	root *Grammar[TToken, TNodeKind],
-	additionals []*Grammar[TToken, TNodeKind],
-	rules map[GrammarLabel]*Grammar[TToken, TNodeKind],
+func collectUnresolvedReferences[TNodeKind comparable](
+	root *Grammar[lexarch.TokenKind, TNodeKind],
+	additionals []*Grammar[lexarch.TokenKind, TNodeKind],
+	rules map[GrammarLabel]*Grammar[lexarch.TokenKind, TNodeKind],
 ) []string {
 	unresolved := make(map[string]struct{})
 
@@ -470,9 +465,9 @@ func collectUnresolvedReferences[TToken, TNodeKind comparable](
 	return out
 }
 
-func collectUnresolvedReferencesRec[TToken, TNodeKind comparable](
-	g *Grammar[TToken, TNodeKind],
-	rules map[GrammarLabel]*Grammar[TToken, TNodeKind],
+func collectUnresolvedReferencesRec[TNodeKind comparable](
+	g *Grammar[lexarch.TokenKind, TNodeKind],
+	rules map[GrammarLabel]*Grammar[lexarch.TokenKind, TNodeKind],
 	unresolved map[string]struct{},
 ) {
 	if g == nil {
@@ -493,9 +488,9 @@ setResolvedReferences walks the grammar tree via structural Children only and se
 ResolvedReference on each GReference node from the rules map. Call after collectAll
 and after validating no unresolved references, so the grammar walker can follow refs.
 */
-func setResolvedReferences[TToken, TNodeKind comparable](
-	g *Grammar[TToken, TNodeKind],
-	rules map[GrammarLabel]*Grammar[TToken, TNodeKind],
+func setResolvedReferences[TNodeKind comparable](
+	g *Grammar[lexarch.TokenKind, TNodeKind],
+	rules map[GrammarLabel]*Grammar[lexarch.TokenKind, TNodeKind],
 ) {
 	if g == nil {
 		return
@@ -516,10 +511,10 @@ RecoverySpecMergedByGrammarLabel computes merged recovery specs for each rule la
 Each merged spec includes the rule's own recovery/no-consume tokens plus inherited tokens
 from its reference-target chain (when the rule root is GReference), preserving stable append order.
 */
-func RecoverySpecMergedByGrammarLabel[TToken, TNodeKind comparable](
-	rules map[GrammarLabel]*Grammar[TToken, TNodeKind],
-) map[GrammarLabel]RecoverySpec[TToken] {
-	out := make(map[GrammarLabel]RecoverySpec[TToken], len(rules))
+func RecoverySpecMergedByGrammarLabel[TNodeKind comparable](
+	rules map[GrammarLabel]*Grammar[lexarch.TokenKind, TNodeKind],
+) map[GrammarLabel]RecoverySpec {
+	out := make(map[GrammarLabel]RecoverySpec, len(rules))
 	for label := range rules {
 		spec := recoverySpecMergedForLabel(label, rules)
 		out[label] = spec
@@ -527,11 +522,11 @@ func RecoverySpecMergedByGrammarLabel[TToken, TNodeKind comparable](
 	return out
 }
 
-func recoverySpecMergedForLabel[TToken, TNodeKind comparable](
+func recoverySpecMergedForLabel[TNodeKind comparable](
 	label GrammarLabel,
-	rules map[GrammarLabel]*Grammar[TToken, TNodeKind],
-) RecoverySpec[TToken] {
-	var merged RecoverySpec[TToken]
+	rules map[GrammarLabel]*Grammar[lexarch.TokenKind, TNodeKind],
+) RecoverySpec {
+	var merged RecoverySpec
 
 	currentLabel := label
 	visited := make(map[GrammarLabel]struct{})
@@ -570,7 +565,7 @@ func recoverySpecMergedForLabel[TToken, TNodeKind comparable](
 	return merged
 }
 
-func recoveryAppendUniqueStable[TToken comparable](dst *[]TToken, src []TToken) {
+func recoveryAppendUniqueStable(dst *[]lexarch.TokenKind, src []lexarch.TokenKind) {
 	for _, token := range src {
 		if recoveryContainsToken(*dst, token) {
 			continue
@@ -579,7 +574,7 @@ func recoveryAppendUniqueStable[TToken comparable](dst *[]TToken, src []TToken) 
 	}
 }
 
-func recoveryContainsToken[TToken comparable](tokens []TToken, token TToken) bool {
+func recoveryContainsToken(tokens []lexarch.TokenKind, token lexarch.TokenKind) bool {
 	for _, current := range tokens {
 		if current == token {
 			return true
@@ -592,7 +587,7 @@ func recoveryContainsToken[TToken comparable](tokens []TToken, token TToken) boo
 // HELPERS
 // ============================================================
 
-func mergeInto[TToken comparable](dst TokenSet[TToken], src TokenSet[TToken]) bool {
+func mergeInto(dst TokenSet, src TokenSet) bool {
 	changed := false
 	for t := range src {
 		if _, exists := dst[t]; !exists {

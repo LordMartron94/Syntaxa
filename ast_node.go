@@ -23,7 +23,7 @@ The node is designed to support:
   - format-preserving transformations
   - efficient tree navigation
 */
-type SyntaxaLSTNode[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind comparable] struct {
+type SyntaxaLSTNode[TNodeKind comparable] struct {
 
 	/* Stable unique identifier for this node instance. */
 	id uint64
@@ -48,15 +48,15 @@ type SyntaxaLSTNode[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind comp
 	// STRUCTURAL RELATIONSHIPS
 	// ---------------------------------------------------------
 
-	parent   *SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind]
-	children []*SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind]
-	slots    map[string]*SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind]
+	parent   *SyntaxaLSTNode[TNodeKind]
+	children []*SyntaxaLSTNode[TNodeKind]
+	slots    map[string]*SyntaxaLSTNode[TNodeKind]
 
 	// ---------------------------------------------------------
 	// TOKEN PRESERVATION
 	// ---------------------------------------------------------
 
-	tokens []Lexeme[TObservation, TToken, TTokenRole]
+	tokens []Lexeme
 
 	// ---------------------------------------------------------
 	// METADATA
@@ -73,19 +73,19 @@ type SyntaxaLSTNode[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind comp
 	postProcessed bool
 }
 
-func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) ID() uint64 {
+func (n *SyntaxaLSTNode[TKind]) ID() uint64 {
 	return n.id
 }
 
-func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) Kind() TKind {
+func (n *SyntaxaLSTNode[TKind]) Kind() TKind {
 	return n.kind
 }
 
-func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) Parent() *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind] {
+func (n *SyntaxaLSTNode[TKind]) Parent() *SyntaxaLSTNode[TKind] {
 	return n.parent
 }
 
-func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) GetContent(
+func (n *SyntaxaLSTNode[TKind]) GetContent(
 	sep string,
 ) string {
 
@@ -106,8 +106,8 @@ func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) GetContent(
 }
 
 /* Children returns a defensive copy of child nodes. */
-func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) Children() []*SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind] {
-	out := make([]*SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind], len(n.children))
+func (n *SyntaxaLSTNode[TKind]) Children() []*SyntaxaLSTNode[TKind] {
+	out := make([]*SyntaxaLSTNode[TKind], len(n.children))
 	copy(out, n.children)
 	return out
 }
@@ -119,7 +119,7 @@ The returned slice MUST be treated as read-only by callers. Its contents and bac
 may change after editor mutations (attach/detach/replace), so callers must not hold long-lived
 references or mutate the slice.
 */
-func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) ChildrenUnsafe() []*SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind] {
+func (n *SyntaxaLSTNode[TKind]) ChildrenUnsafe() []*SyntaxaLSTNode[TKind] {
 	return n.children
 }
 
@@ -128,8 +128,8 @@ ForEachChild iterates direct positional children without allocating.
 
 The callback receives each child in stored order. If callback returns false, iteration stops early.
 */
-func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) ForEachChild(
-	callback func(*SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) bool,
+func (n *SyntaxaLSTNode[TKind]) ForEachChild(
+	callback func(*SyntaxaLSTNode[TKind]) bool,
 ) {
 	for _, child := range n.children {
 		if !callback(child) {
@@ -139,7 +139,7 @@ func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) ForEachChild(
 }
 
 /* Slot retrieves a node assigned to a named slot or nil. */
-func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) Slot(name string) *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind] {
+func (n *SyntaxaLSTNode[TKind]) Slot(name string) *SyntaxaLSTNode[TKind] {
 	if n.slots == nil {
 		return nil
 	}
@@ -147,7 +147,7 @@ func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) Slot(name string) *Syn
 }
 
 /* SlotNames returns all defined slot keys. */
-func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) SlotNames() []string {
+func (n *SyntaxaLSTNode[TKind]) SlotNames() []string {
 	if n.slots == nil {
 		return nil
 	}
@@ -159,13 +159,13 @@ func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) SlotNames() []string {
 }
 
 /* Tokens returns a defensive copy of attached tokens. */
-func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) Tokens() []Lexeme[TObs, TToken, TTokenRole] {
-	out := make([]Lexeme[TObs, TToken, TTokenRole], len(n.tokens))
+func (n *SyntaxaLSTNode[TKind]) Tokens() []Lexeme {
+	out := make([]Lexeme, len(n.tokens))
 	copy(out, n.tokens)
 	return out
 }
 
-func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) Span() (int, int) {
+func (n *SyntaxaLSTNode[TKind]) Span() (int, int) {
 	if !n.spanValid {
 		panic("Span called without valid span!")
 	}
@@ -173,7 +173,7 @@ func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) Span() (int, int) {
 	return n.start, n.end
 }
 
-func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) LineSpan() (int, int, int, int) {
+func (n *SyntaxaLSTNode[TKind]) LineSpan() (int, int, int, int) {
 	if !n.spanValid {
 		panic("LineSpan called without valid span!")
 	}
@@ -181,7 +181,7 @@ func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) LineSpan() (int, int, 
 	return n.startLine, n.startColumn, n.endLine, n.endColumn
 }
 
-func (n *SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind]) FullSpan() Span {
+func (n *SyntaxaLSTNode[TNodeKind]) FullSpan() Span {
 	return Span{
 		Start:       n.start,
 		End:         n.end,
@@ -201,12 +201,12 @@ type Span struct {
 	EndColumn   int
 }
 
-func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) Revision() uint64 {
+func (n *SyntaxaLSTNode[TKind]) Revision() uint64 {
 	return n.revision
 }
 
 /* Attribute returns an attribute value and presence flag. */
-func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) Attribute(key string) (any, bool) {
+func (n *SyntaxaLSTNode[TKind]) Attribute(key string) (any, bool) {
 	if n.attributes == nil {
 		return nil, false
 	}
@@ -215,7 +215,7 @@ func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) Attribute(key string) 
 }
 
 func AttributeAs[TObs cmp.Ordered, TToken, TTokenRole, TKind comparable, TAttribute any](
-	n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind],
+	n *SyntaxaLSTNode[TKind],
 	key string,
 ) (TAttribute, bool) {
 	var zero TAttribute
@@ -234,7 +234,7 @@ func AttributeAs[TObs cmp.Ordered, TToken, TTokenRole, TKind comparable, TAttrib
 }
 
 /* AttributeKeys returns all attribute keys. */
-func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) AttributeKeys() []string {
+func (n *SyntaxaLSTNode[TKind]) AttributeKeys() []string {
 	if n.attributes == nil {
 		return nil
 	}
@@ -265,10 +265,10 @@ Callback return values:
 	stopWalk:
 	  when true, traversal stops immediately
 */
-func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) Walk(
+func (n *SyntaxaLSTNode[TKind]) Walk(
 	strategy structarch.StructArchWalkStrategy,
 	callback func(
-		node *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind],
+		node *SyntaxaLSTNode[TKind],
 	) (skipSubtree, stopWalk bool),
 ) error {
 	if n == nil {
@@ -277,23 +277,23 @@ func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) Walk(
 
 	return structarch.StructArchWalk(
 		structarch.WalkConfig[
-			*SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind],
+			*SyntaxaLSTNode[TKind],
 			uint64,
 		]{
 			Strategy: strategy,
 
-			ID: func(n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) uint64 {
+			ID: func(n *SyntaxaLSTNode[TKind]) uint64 {
 				return n.id
 			},
 
 			ChildrenInto: func(
-				n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind],
-				out []*SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind],
-			) []*SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind] {
+				n *SyntaxaLSTNode[TKind],
+				out []*SyntaxaLSTNode[TKind],
+			) []*SyntaxaLSTNode[TKind] {
 				return n.walkChildrenInto(out)
 			},
 
-			Parent: func(n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind] {
+			Parent: func(n *SyntaxaLSTNode[TKind]) *SyntaxaLSTNode[TKind] {
 				return n.parent
 			},
 
@@ -303,20 +303,20 @@ func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) Walk(
 	)
 }
 
-func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) WalkPre(
-	callback func(*SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) (skip, stop bool),
+func (n *SyntaxaLSTNode[TKind]) WalkPre(
+	callback func(*SyntaxaLSTNode[TKind]) (skip, stop bool),
 ) error {
 	return n.Walk(structarch.WALK_STRATEGY_PRE, callback)
 }
 
-func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) WalkPost(
-	callback func(*SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) (skip, stop bool),
+func (n *SyntaxaLSTNode[TKind]) WalkPost(
+	callback func(*SyntaxaLSTNode[TKind]) (skip, stop bool),
 ) error {
 	return n.Walk(structarch.WALK_STRATEGY_POST, callback)
 }
 
-func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) WalkBreadth(
-	callback func(*SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) (skip, stop bool),
+func (n *SyntaxaLSTNode[TKind]) WalkBreadth(
+	callback func(*SyntaxaLSTNode[TKind]) (skip, stop bool),
 ) error {
 	return n.Walk(structarch.WALK_STRATEGY_BREADTH, callback)
 }
@@ -329,13 +329,13 @@ Traversal order: pre-order (top-down).
 
 Returns nil if no match exists.
 */
-func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) FindFirst(
-	predicate func(*SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) bool,
-) *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind] {
+func (n *SyntaxaLSTNode[TKind]) FindFirst(
+	predicate func(*SyntaxaLSTNode[TKind]) bool,
+) *SyntaxaLSTNode[TKind] {
 
-	var found *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]
+	var found *SyntaxaLSTNode[TKind]
 
-	_ = n.WalkPre(func(cur *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) (bool, bool) {
+	_ = n.WalkPre(func(cur *SyntaxaLSTNode[TKind]) (bool, bool) {
 		if predicate(cur) {
 			found = cur
 			return false, true
@@ -351,13 +351,13 @@ FindAll returns all nodes in the subtree satisfying the predicate.
 
 Traversal order: pre-order.
 */
-func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) FindAll(
-	predicate func(*SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) bool,
-) []*SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind] {
+func (n *SyntaxaLSTNode[TKind]) FindAll(
+	predicate func(*SyntaxaLSTNode[TKind]) bool,
+) []*SyntaxaLSTNode[TKind] {
 
-	out := make([]*SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind], 0)
+	out := make([]*SyntaxaLSTNode[TKind], 0)
 
-	_ = n.WalkPre(func(cur *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) (bool, bool) {
+	_ = n.WalkPre(func(cur *SyntaxaLSTNode[TKind]) (bool, bool) {
 		if predicate(cur) {
 			out = append(out, cur)
 		}
@@ -372,11 +372,11 @@ FindFirstKind returns the first node of the given kind in the subtree.
 
 Returns nil if absent.
 */
-func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) FindFirstKind(
+func (n *SyntaxaLSTNode[TKind]) FindFirstKind(
 	kind TKind,
-) *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind] {
+) *SyntaxaLSTNode[TKind] {
 
-	return n.FindFirst(func(cur *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) bool {
+	return n.FindFirst(func(cur *SyntaxaLSTNode[TKind]) bool {
 		return cur.kind == kind
 	})
 }
@@ -384,11 +384,11 @@ func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) FindFirstKind(
 /*
 FindAllKind returns all nodes of the given kind in the subtree.
 */
-func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) FindAllKind(
+func (n *SyntaxaLSTNode[TKind]) FindAllKind(
 	kind TKind,
-) []*SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind] {
+) []*SyntaxaLSTNode[TKind] {
 
-	return n.FindAll(func(cur *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) bool {
+	return n.FindAll(func(cur *SyntaxaLSTNode[TKind]) bool {
 		return cur.kind == kind
 	})
 }
@@ -396,8 +396,8 @@ func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) FindAllKind(
 /*
 Exists reports whether any node in the subtree satisfies the predicate.
 */
-func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) Exists(
-	predicate func(*SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) bool,
+func (n *SyntaxaLSTNode[TKind]) Exists(
+	predicate func(*SyntaxaLSTNode[TKind]) bool,
 ) bool {
 	return n.FindFirst(predicate) != nil
 }
@@ -405,13 +405,13 @@ func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) Exists(
 /*
 Count returns the number of nodes satisfying the predicate.
 */
-func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) Count(
-	predicate func(*SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) bool,
+func (n *SyntaxaLSTNode[TKind]) Count(
+	predicate func(*SyntaxaLSTNode[TKind]) bool,
 ) int {
 
 	count := 0
 
-	_ = n.WalkPre(func(cur *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) (bool, bool) {
+	_ = n.WalkPre(func(cur *SyntaxaLSTNode[TKind]) (bool, bool) {
 		if predicate(cur) {
 			count++
 		}
@@ -421,7 +421,7 @@ func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) Count(
 	return count
 }
 
-func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) walkChildren() []*SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind] {
+func (n *SyntaxaLSTNode[TKind]) walkChildren() []*SyntaxaLSTNode[TKind] {
 
 	total := len(n.children)
 
@@ -433,7 +433,7 @@ func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) walkChildren() []*Synt
 		return nil
 	}
 
-	out := make([]*SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind], 0, total)
+	out := make([]*SyntaxaLSTNode[TKind], 0, total)
 	out = append(out, n.children...)
 
 	for _, ch := range n.slots {
@@ -445,9 +445,9 @@ func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) walkChildren() []*Synt
 	return out
 }
 
-func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) walkChildrenInto(
-	out []*SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind],
-) []*SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind] {
+func (n *SyntaxaLSTNode[TKind]) walkChildrenInto(
+	out []*SyntaxaLSTNode[TKind],
+) []*SyntaxaLSTNode[TKind] {
 	if n == nil {
 		return out
 	}
@@ -472,9 +472,9 @@ func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) walkChildrenInto(
 FindDirectChild inspects only the immediate children and slots.
 Returns the first node satisfying the predicate, or nil.
 */
-func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) FindDirectChild(
-	predicate func(*SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) bool,
-) *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind] {
+func (n *SyntaxaLSTNode[TKind]) FindDirectChild(
+	predicate func(*SyntaxaLSTNode[TKind]) bool,
+) *SyntaxaLSTNode[TKind] {
 	for _, child := range n.children {
 		if predicate(child) {
 			return child
@@ -495,11 +495,11 @@ func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) FindDirectChild(
 /*
 FindAllDirectChildren returns all immediate children satisfying the predicate.
 */
-func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) FindAllDirectChildren(
-	predicate func(*SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) bool,
-) []*SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind] {
+func (n *SyntaxaLSTNode[TKind]) FindAllDirectChildren(
+	predicate func(*SyntaxaLSTNode[TKind]) bool,
+) []*SyntaxaLSTNode[TKind] {
 
-	var out []*SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]
+	var out []*SyntaxaLSTNode[TKind]
 
 	for _, child := range n.children {
 		if predicate(child) {
@@ -522,11 +522,11 @@ func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) FindAllDirectChildren(
 FindDirectChildKind returns the first immediate child of the specified kind.
 Use this to resolve grammatical unions and structural boundaries.
 */
-func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) FindDirectChildKind(
+func (n *SyntaxaLSTNode[TKind]) FindDirectChildKind(
 	kind TKind,
-) *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind] {
+) *SyntaxaLSTNode[TKind] {
 
-	return n.FindDirectChild(func(cur *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) bool {
+	return n.FindDirectChild(func(cur *SyntaxaLSTNode[TKind]) bool {
 		return cur.kind == kind
 	})
 }
@@ -534,7 +534,7 @@ func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) FindDirectChildKind(
 /*
 HasDirectChildKind reports if an immediate child of the specified kind exists.
 */
-func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) HasDirectChildKind(
+func (n *SyntaxaLSTNode[TKind]) HasDirectChildKind(
 	kind TKind,
 ) bool {
 	return n.FindDirectChildKind(kind) != nil
@@ -545,9 +545,9 @@ Unwrap traverses down a chain of single-child wrapper nodes of specific kinds.
 It stops and returns the first node that is NOT in the allowed wrappers list,
 or the first node that has multiple children.
 */
-func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) Unwrap(
+func (n *SyntaxaLSTNode[TKind]) Unwrap(
 	allowedWrappers ...TKind,
-) *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind] {
+) *SyntaxaLSTNode[TKind] {
 
 	current := n
 	wrapperSet := make(map[TKind]struct{}, len(allowedWrappers))
@@ -557,7 +557,7 @@ func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) Unwrap(
 
 	for {
 		_, isWrapper := wrapperSet[current.kind]
-		var onlyChild *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]
+		var onlyChild *SyntaxaLSTNode[TKind]
 		childCount := 0
 		for _, child := range current.children {
 			childCount++
@@ -591,11 +591,11 @@ single-element slice containing the node. Otherwise returns the concatenation of
 FlattenByKind applied to each child (including slots). Use for associative chains
 (e.g. expression lists, alternations).
 */
-func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) FlattenByKind(
+func (n *SyntaxaLSTNode[TKind]) FlattenByKind(
 	kind TKind,
-) []*SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind] {
-	stack := make([]*SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind], 0, 8)
-	out := make([]*SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind], 0, 8)
+) []*SyntaxaLSTNode[TKind] {
+	stack := make([]*SyntaxaLSTNode[TKind], 0, 8)
+	out := make([]*SyntaxaLSTNode[TKind], 0, 8)
 	stack = append(stack, n)
 
 	for len(stack) > 0 {
@@ -608,7 +608,7 @@ func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) FlattenByKind(
 		}
 
 		directChildren := make(
-			[]*SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind],
+			[]*SyntaxaLSTNode[TKind],
 			0,
 			len(cur.children)+len(cur.slots),
 		)
@@ -638,8 +638,8 @@ func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) FlattenByKind(
 SingleChild returns the single logical child and true if the node has exactly one child
 (including slots). Otherwise returns (nil, false).
 */
-func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) SingleChild() (*SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind], bool) {
-	var onlyChild *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]
+func (n *SyntaxaLSTNode[TKind]) SingleChild() (*SyntaxaLSTNode[TKind], bool) {
+	var onlyChild *SyntaxaLSTNode[TKind]
 	childCount := 0
 	for _, child := range n.children {
 		childCount++
@@ -666,7 +666,7 @@ func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) SingleChild() (*Syntax
 RequireSingleChild returns the single logical child (including slots). Panics if the node
 does not have exactly one child.
 */
-func (n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) RequireSingleChild() *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind] {
+func (n *SyntaxaLSTNode[TKind]) RequireSingleChild() *SyntaxaLSTNode[TKind] {
 	child, ok := n.SingleChild()
 	if !ok {
 		childCount := len(n.children)

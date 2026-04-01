@@ -1,17 +1,14 @@
 package syntaxa
 
 import (
-	"cmp"
-	"fmt"
 	"lexarch"
-	"reflect"
 )
 
-type ObservationFormatter[TObservation cmp.Ordered] func(TObservation) string
+type ObservationFormatter func(rune) string
 
-type Lexeme[TObservation cmp.Ordered, TToken, TTokenRole comparable] struct {
-	Token       TToken
-	Role        TTokenRole
+type Lexeme struct {
+	Token       lexarch.TokenKind
+	Role        lexarch.TokenRole
 	Raw         []byte
 	Start       int
 	End         int
@@ -22,7 +19,7 @@ type Lexeme[TObservation cmp.Ordered, TToken, TTokenRole comparable] struct {
 	originalSpan lexarch.ByteSpan
 }
 
-func (l Lexeme[_, _, _]) FormatRawDiagnostic() string {
+func (l Lexeme) FormatRawDiagnostic() string {
 	if len(l.Raw) == 0 {
 		return ""
 	}
@@ -30,13 +27,13 @@ func (l Lexeme[_, _, _]) FormatRawDiagnostic() string {
 	return string(l.Raw)
 }
 
-func LexemeFromToken[TObservation cmp.Ordered, TToken, TTokenRole comparable](
+func LexemeFromToken(
 	token *lexarch.Token,
 	source string,
 	tabWidth int,
 	tokenNumber int,
-) Lexeme[TObservation, TToken, TTokenRole] {
-	var out Lexeme[TObservation, TToken, TTokenRole]
+) Lexeme {
+	var out Lexeme
 	if token == nil {
 		return out
 	}
@@ -57,16 +54,16 @@ func LexemeFromToken[TObservation cmp.Ordered, TToken, TTokenRole comparable](
 	out.End = end
 	out.TokenNumber = tokenNumber
 	out.Raw = []byte(source[start:end])
-	out.Token = lexemeConvertTokenKind[TToken](token.Kind)
-	out.Role = lexemeConvertTokenRole[TTokenRole](token.Role)
+	out.Token = token.Kind
+	out.Role = token.Role
 	out.source = source
 	out.tabWidth = tabWidth
 	out.originalSpan = token.Span
 	return out
 }
 
-func LexemeLineSpan[TObservation cmp.Ordered, TToken, TTokenRole comparable](
-	lexeme Lexeme[TObservation, TToken, TTokenRole],
+func LexemeLineSpan(
+	lexeme Lexeme,
 ) (startLine, startColumn, endLine, endColumn int) {
 	start := int(lexeme.originalSpan.Offset)
 	end := start + int(lexeme.originalSpan.Length)
@@ -77,46 +74,16 @@ func LexemeLineSpan[TObservation cmp.Ordered, TToken, TTokenRole comparable](
 	return sl, sc, el, ec
 }
 
-func LexemeStartLineColumn[TObservation cmp.Ordered, TToken, TTokenRole comparable](
-	lexeme Lexeme[TObservation, TToken, TTokenRole],
+func LexemeStartLineColumn(
+	lexeme Lexeme,
 ) (line, column int) {
 	sl, sc, _, _ := LexemeLineSpan(lexeme)
 	return sl, sc
 }
 
-func LexemeEndLineColumn[TObservation cmp.Ordered, TToken, TTokenRole comparable](
-	lexeme Lexeme[TObservation, TToken, TTokenRole],
+func LexemeEndLineColumn(
+	lexeme Lexeme,
 ) (line, column int) {
 	_, _, el, ec := LexemeLineSpan(lexeme)
 	return el, ec
-}
-
-func lexemeConvertTokenKind[TToken comparable](kind lexarch.TokenKind) TToken {
-	var zero TToken
-	target := reflect.TypeOf(zero)
-	if target == nil {
-		panic("syntaxa: invalid token type conversion target")
-	}
-
-	val := reflect.ValueOf(uint32(kind))
-	if !val.Type().ConvertibleTo(target) {
-		panic(fmt.Sprintf("syntaxa: token kind uint32 is not convertible to %s", target.String()))
-	}
-
-	return val.Convert(target).Interface().(TToken)
-}
-
-func lexemeConvertTokenRole[TTokenRole comparable](role lexarch.TokenRole) TTokenRole {
-	var zero TTokenRole
-	target := reflect.TypeOf(zero)
-	if target == nil {
-		panic("syntaxa: invalid token role conversion target")
-	}
-
-	val := reflect.ValueOf(uint32(role))
-	if !val.Type().ConvertibleTo(target) {
-		panic(fmt.Sprintf("syntaxa: token role uint32 is not convertible to %s", target.String()))
-	}
-
-	return val.Convert(target).Interface().(TTokenRole)
 }

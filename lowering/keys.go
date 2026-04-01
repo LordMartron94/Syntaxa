@@ -2,14 +2,15 @@ package lowering
 
 import (
 	"foundation/hash"
+	"lexarch"
 	"sort"
 	"syntaxa"
 	"unsafe"
 )
 
-func lookaheadKey[TToken, TNodeKind comparable](
-	terms []gTerminal[TToken, TNodeKind],
-	tokenHash func(TToken) uint64,
+func lookaheadKey[TNodeKind comparable](
+	terms []gTerminal[TNodeKind],
+	tokenHash func(lexarch.TokenKind) uint64,
 	nodeKindHash func(TNodeKind) uint64,
 	hasher *hash.XXH3Hasher,
 ) uint64 {
@@ -32,9 +33,9 @@ func lookaheadKey[TToken, TNodeKind comparable](
 	return hash.XXH3HasherHash64(hasher, byteData)
 }
 
-func terminalKey[TToken, TNodeKind comparable](
-	t gTerminal[TToken, TNodeKind],
-	tokenHash func(TToken) uint64,
+func terminalKey[TNodeKind comparable](
+	t gTerminal[TNodeKind],
+	tokenHash func(lexarch.TokenKind) uint64,
 	nodeKindHash func(TNodeKind) uint64,
 	hasher *hash.XXH3Hasher,
 ) uint64 {
@@ -65,9 +66,9 @@ func appendNodeKind[TNodeKind comparable](
 	return append(b, hashFunc(*nk))
 }
 
-func appendNestMarker[TToken, TNodeKind comparable](
+func appendNestMarker[TNodeKind comparable](
 	b []uint64,
-	nestNode *syntaxa.Grammar[TToken, TNodeKind],
+	nestNode *syntaxa.Grammar[lexarch.TokenKind, TNodeKind],
 	hasher *hash.XXH3Hasher,
 ) []uint64 {
 	if nestNode == nil {
@@ -77,10 +78,10 @@ func appendNestMarker[TToken, TNodeKind comparable](
 	return append(b, strHash(string(nestNode.GrammarLabel), hasher))
 }
 
-func appendRemaining[TToken, TNodeKind comparable](
+func appendRemaining[TNodeKind comparable](
 	b []uint64,
-	remaining []*syntaxa.Grammar[TToken, TNodeKind],
-	tokenHash func(TToken) uint64,
+	remaining []*syntaxa.Grammar[lexarch.TokenKind, TNodeKind],
+	tokenHash func(lexarch.TokenKind) uint64,
 	hasher *hash.XXH3Hasher,
 ) []uint64 {
 	b = append(b, uint64(len(remaining)))
@@ -90,14 +91,14 @@ func appendRemaining[TToken, TNodeKind comparable](
 	return b
 }
 
-func appendStackData[TToken, TNodeKind comparable](
+func appendStackData[TNodeKind comparable](
 	b []uint64,
-	stack []gStackEntry[TToken, TNodeKind],
-	tokenHash func(TToken) uint64,
+	stack []gStackEntry[TNodeKind],
+	tokenHash func(lexarch.TokenKind) uint64,
 	hasher *hash.XXH3Hasher,
 ) []uint64 {
 	var seenLabels [16]syntaxa.GrammarLabel
-	var seenReps [16]*syntaxa.Grammar[TToken, TNodeKind]
+	var seenReps [16]*syntaxa.Grammar[lexarch.TokenKind, TNodeKind]
 	labelsCount, repsCount := 0, 0
 
 	b = append(b, uint64(len(stack)))
@@ -113,12 +114,12 @@ func appendStackData[TToken, TNodeKind comparable](
 	return b
 }
 
-func processStackEntry[TToken, TNodeKind comparable](
+func processStackEntry[TNodeKind comparable](
 	b []uint64,
-	e gStackEntry[TToken, TNodeKind],
+	e gStackEntry[TNodeKind],
 	seenLabels []syntaxa.GrammarLabel, labelsCount int,
-	seenReps []*syntaxa.Grammar[TToken, TNodeKind], repsCount int,
-	tokenHash func(TToken) uint64,
+	seenReps []*syntaxa.Grammar[lexarch.TokenKind, TNodeKind], repsCount int,
+	tokenHash func(lexarch.TokenKind) uint64,
 	hasher *hash.XXH3Hasher,
 ) ([]uint64, int, int, bool) {
 	if e.isRepetition {
@@ -160,9 +161,9 @@ func trackLabel(seen []syntaxa.GrammarLabel, count int, label syntaxa.GrammarLab
 	return count
 }
 
-func containsRep[TToken, TNodeKind comparable](
-	list []*syntaxa.Grammar[TToken, TNodeKind],
-	node *syntaxa.Grammar[TToken, TNodeKind],
+func containsRep[TNodeKind comparable](
+	list []*syntaxa.Grammar[lexarch.TokenKind, TNodeKind],
+	node *syntaxa.Grammar[lexarch.TokenKind, TNodeKind],
 ) bool {
 	for _, n := range list {
 		if n == node {
@@ -172,10 +173,10 @@ func containsRep[TToken, TNodeKind comparable](
 	return false
 }
 
-func trackRep[TToken, TNodeKind comparable](
-	seen []*syntaxa.Grammar[TToken, TNodeKind],
+func trackRep[TNodeKind comparable](
+	seen []*syntaxa.Grammar[lexarch.TokenKind, TNodeKind],
 	count int,
-	node *syntaxa.Grammar[TToken, TNodeKind],
+	node *syntaxa.Grammar[lexarch.TokenKind, TNodeKind],
 ) int {
 	if count < len(seen) {
 		seen[count] = node
@@ -184,9 +185,9 @@ func trackRep[TToken, TNodeKind comparable](
 	return count
 }
 
-func grammarNodeKey[TToken, TNodeKind comparable](
-	n *syntaxa.Grammar[TToken, TNodeKind],
-	tokenHash func(TToken) uint64,
+func grammarNodeKey[TNodeKind comparable](
+	n *syntaxa.Grammar[lexarch.TokenKind, TNodeKind],
+	tokenHash func(lexarch.TokenKind) uint64,
 	hasher *hash.XXH3Hasher,
 ) uint64 {
 	if n == nil {

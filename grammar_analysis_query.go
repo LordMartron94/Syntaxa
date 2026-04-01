@@ -14,7 +14,7 @@ Caller must ensure node != nil and node.NodePath != nil (e.g. node is from a tre
 that was used in ProducePackage or had FinalizeNodePaths called).
 */
 func GrammarAnalysisNullable[TToken, TNodeKind comparable](
-	analysis *GrammarAnalysis[TToken],
+	analysis *GrammarAnalysis,
 	node *Grammar[TToken, TNodeKind],
 ) bool {
 	if analysis == nil || node == nil || node.NodePath == nil {
@@ -31,16 +31,16 @@ Returns a non-nil set (empty if the node is not in the analysis or has no first 
 Caller must ensure node != nil and node.NodePath != nil.
 */
 func GrammarAnalysisFirst[TToken, TNodeKind comparable](
-	analysis *GrammarAnalysis[TToken],
+	analysis *GrammarAnalysis,
 	node *Grammar[TToken, TNodeKind],
-) TokenSet[TToken] {
+) TokenSet {
 	if analysis == nil || node == nil || node.NodePath == nil {
-		return make(TokenSet[TToken])
+		return make(TokenSet)
 	}
 	key := NodeKeyFromPath(*node.NodePath)
 	set := analysis.First[key]
 	if set == nil {
-		return make(TokenSet[TToken])
+		return make(TokenSet)
 	}
 	return set
 }
@@ -53,11 +53,11 @@ child (or end of children). Used for lookahead over a suffix of a sequence.
 Returns non-nil set. concatNode and its children must have NodePath set.
 */
 func GrammarAnalysisFirstOfSuffix[TToken, TNodeKind comparable](
-	analysis *GrammarAnalysis[TToken],
+	analysis *GrammarAnalysis,
 	concatNode *Grammar[TToken, TNodeKind],
 	start int,
-) TokenSet[TToken] {
-	out := make(TokenSet[TToken])
+) TokenSet {
+	out := make(TokenSet)
 	if analysis == nil || concatNode == nil || start < 0 || start >= len(concatNode.Children) {
 		return out
 	}

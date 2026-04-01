@@ -1,7 +1,6 @@
 package syntaxa
 
 import (
-	"cmp"
 	"sync/atomic"
 )
 
@@ -14,15 +13,15 @@ propagate span and incremental revision updates.
 
 Once frozen, the LST becomes immutable.
 */
-type LSTEditor[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind comparable] struct {
+type LSTEditor[TNodeKind comparable] struct {
 	nextID uint64
-	root   *SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind]
+	root   *SyntaxaLSTNode[TNodeKind]
 	frozen bool
 	// treeDirty marks that at least one mutation happened since last full span reconciliation.
 	treeDirty bool
 
-	created  []*SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind]
-	nodeFree []*SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind]
+	created  []*SyntaxaLSTNode[TNodeKind]
+	nodeFree []*SyntaxaLSTNode[TNodeKind]
 	// nodeGrow is optional. currentCap is cap(nodeFree) before growth; needed is the minimum
 	// free slots required after growth (>= 1). Return value is the target capacity for the
 	// free-list slice after this grow (must be >= needed).
@@ -36,7 +35,7 @@ type LSTEditor[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind comparabl
 
 const lstEditorDefaultNodeGrowBatch = 32
 
-func (e *LSTEditor[TObservation, TToken, TTokenRole, TNodeKind]) begin() {
+func (e *LSTEditor[TNodeKind]) begin() {
 	if e.inUse.Load() {
 		panic("LSTEditor reused concurrently or across parses")
 	}
@@ -44,7 +43,7 @@ func (e *LSTEditor[TObservation, TToken, TTokenRole, TNodeKind]) begin() {
 	e.inUse.Store(true)
 }
 
-func (e *LSTEditor[TObservation, TToken, TTokenRole, TNodeKind]) end() {
+func (e *LSTEditor[TNodeKind]) end() {
 	e.root = nil
 	e.nextID = 0
 	e.frozen = false
@@ -53,7 +52,7 @@ func (e *LSTEditor[TObservation, TToken, TTokenRole, TNodeKind]) end() {
 	e.inUse.Store(false)
 }
 
-func (e *LSTEditor[TObservation, TToken, TTokenRole, TNodeKind]) setRoot(root *SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind]) {
+func (e *LSTEditor[TNodeKind]) setRoot(root *SyntaxaLSTNode[TNodeKind]) {
 	e.root = root
 	e.treeDirty = true
 }
@@ -61,14 +60,14 @@ func (e *LSTEditor[TObservation, TToken, TTokenRole, TNodeKind]) setRoot(root *S
 /*
 CreatedCount returns how many nodes have been created in this editor session (including detached nodes).
 */
-func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) CreatedCount() int {
+func (e *LSTEditor[TKind]) CreatedCount() int {
 	return len(e.created)
 }
 
 /*
 NewNode creates a detached LST node of the specified kind.
 */
-func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) NewNode(kind TKind) *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind] {
+func (e *LSTEditor[TKind]) NewNode(kind TKind) *SyntaxaLSTNode[TKind] {
 	e.ensureMutable()
 	node := e.nodeAcquire()
 	lstNodeResetForPool(node)
@@ -82,7 +81,7 @@ func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) NewNode(kind TKind) *Syntax
 	return node
 }
 
-func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) nodeAcquire() *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind] {
+func (e *LSTEditor[TKind]) nodeAcquire() *SyntaxaLSTNode[TKind] {
 	freeCount := len(e.nodeFree)
 	if freeCount > 0 {
 		if st := e.parseEngineStats; st != nil {
@@ -119,7 +118,7 @@ func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) nodeAcquire() *SyntaxaLSTNo
 	}
 
 	for i := 0; i < batch; i++ {
-		e.nodeFree = append(e.nodeFree, &SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]{})
+		e.nodeFree = append(e.nodeFree, &SyntaxaLSTNode[TKind]{})
 	}
 
 	last := len(e.nodeFree) - 1
@@ -128,7 +127,7 @@ func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) nodeAcquire() *SyntaxaLSTNo
 	return node
 }
 
-func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) TruncateCreated(after int) {
+func (e *LSTEditor[TKind]) TruncateCreated(after int) {
 	e.ensureMutable()
 	if after < 0 || after > len(e.created) {
 		panic("LSTEditor.TruncateCreated: index out of range")
@@ -146,7 +145,7 @@ func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) TruncateCreated(after int) 
 	e.created = e.created[:after]
 }
 
-func lstNodeResetForPool[TObs cmp.Ordered, TToken, TTokenRole, TKind comparable](n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) {
+func lstNodeResetForPool[TKind comparable](n *SyntaxaLSTNode[TKind]) {
 	if n == nil {
 		return
 	}
@@ -176,15 +175,15 @@ It does not receive a unique ID and is not added to the editor's created ledger.
 Use this strictly for temporary container nodes (Fragments) that will be unpacked
 and discarded before the parsing session ends.
 */
-func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) NewTransientNode(kind TKind) *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind] {
+func (e *LSTEditor[TKind]) NewTransientNode(kind TKind) *SyntaxaLSTNode[TKind] {
 	e.ensureMutable()
 
-	return &SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]{
+	return &SyntaxaLSTNode[TKind]{
 		kind: kind,
 	}
 }
 
-func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) AttachChild(parent, child *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) {
+func (e *LSTEditor[TKind]) AttachChild(parent, child *SyntaxaLSTNode[TKind]) {
 	e.ensureMutable()
 
 	if child == nil {
@@ -207,9 +206,9 @@ func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) AttachChild(parent, child *
 	e.markDirtyPair(child, parent)
 }
 
-func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) AttachResult(
-	parent *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind],
-	result RuleResult[TObs, TToken, TTokenRole, TKind],
+func (e *LSTEditor[TKind]) AttachResult(
+	parent *SyntaxaLSTNode[TKind],
+	result RuleResult[TKind],
 ) {
 	if result.Node == nil {
 		return
@@ -226,7 +225,7 @@ func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) AttachResult(
 	}
 }
 
-func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) SetSlot(parent *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind], name string, child *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) {
+func (e *LSTEditor[TKind]) SetSlot(parent *SyntaxaLSTNode[TKind], name string, child *SyntaxaLSTNode[TKind]) {
 	e.ensureMutable()
 
 	if child.parent != nil {
@@ -234,7 +233,7 @@ func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) SetSlot(parent *SyntaxaLSTN
 	}
 
 	if parent.slots == nil {
-		parent.slots = make(map[string]*SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind])
+		parent.slots = make(map[string]*SyntaxaLSTNode[TKind])
 	}
 
 	if old := parent.slots[name]; old != nil {
@@ -247,7 +246,7 @@ func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) SetSlot(parent *SyntaxaLSTN
 	e.markDirtyPair(child, parent)
 }
 
-func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) Replace(oldNode, newNode *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) {
+func (e *LSTEditor[TKind]) Replace(oldNode, newNode *SyntaxaLSTNode[TKind]) {
 	e.ensureMutable()
 
 	parent := oldNode.parent
@@ -282,7 +281,7 @@ func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) Replace(oldNode, newNode *S
 	panic("node not owned by parent")
 }
 
-func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) Detach(node *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) {
+func (e *LSTEditor[TKind]) Detach(node *SyntaxaLSTNode[TKind]) {
 	e.ensureMutable()
 
 	parent := node.parent
@@ -311,7 +310,7 @@ func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) Detach(node *SyntaxaLSTNode
 	}
 }
 
-func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) SetAttribute(node *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind], key string, value any) {
+func (e *LSTEditor[TKind]) SetAttribute(node *SyntaxaLSTNode[TKind], key string, value any) {
 	e.ensureMutable()
 
 	if node.attributes == nil {
@@ -321,7 +320,7 @@ func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) SetAttribute(node *SyntaxaL
 	e.markDirtyNode(node)
 }
 
-func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) DeleteAttribute(node *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind], key string) {
+func (e *LSTEditor[TKind]) DeleteAttribute(node *SyntaxaLSTNode[TKind], key string) {
 	e.ensureMutable()
 
 	if node.attributes == nil {
@@ -331,26 +330,26 @@ func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) DeleteAttribute(node *Synta
 	e.markDirtyNode(node)
 }
 
-func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) AddToken(
-	node *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind],
-	tok Lexeme[TObs, TToken, TTokenRole],
+func (e *LSTEditor[TKind]) AddToken(
+	node *SyntaxaLSTNode[TKind],
+	tok Lexeme,
 ) {
 	e.ensureMutable()
 	node.tokens = append(node.tokens, tok)
 	e.markDirtyNode(node)
 }
 
-func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) SetTokens(node *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind], toks []Lexeme[TObs, TToken, TTokenRole]) {
+func (e *LSTEditor[TKind]) SetTokens(node *SyntaxaLSTNode[TKind], toks []Lexeme) {
 	e.ensureMutable()
 
-	node.tokens = make([]Lexeme[TObs, TToken, TTokenRole], len(toks))
+	node.tokens = make([]Lexeme, len(toks))
 	copy(node.tokens, toks)
 
 	e.markDirtyNode(node)
 }
 
-func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) SetSpan(
-	node *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind],
+func (e *LSTEditor[TKind]) SetSpan(
+	node *SyntaxaLSTNode[TKind],
 	start, end int,
 ) {
 	e.ensureMutable()
@@ -361,8 +360,8 @@ func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) SetSpan(
 	e.markDirtyNode(node)
 }
 
-func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) SetLineSpan(
-	node *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind],
+func (e *LSTEditor[TKind]) SetLineSpan(
+	node *SyntaxaLSTNode[TKind],
 	sl, sc, el, ec int,
 ) {
 	e.ensureMutable()
@@ -375,7 +374,7 @@ func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) SetLineSpan(
 	e.markDirtyNode(node)
 }
 
-func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) markDirtyNode(n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind]) {
+func (e *LSTEditor[TKind]) markDirtyNode(n *SyntaxaLSTNode[TKind]) {
 	if n == nil {
 		return
 	}
@@ -384,9 +383,9 @@ func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) markDirtyNode(n *SyntaxaLST
 	e.treeDirty = true
 }
 
-func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) markDirtyPair(
-	nodeA *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind],
-	nodeB *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind],
+func (e *LSTEditor[TKind]) markDirtyPair(
+	nodeA *SyntaxaLSTNode[TKind],
+	nodeB *SyntaxaLSTNode[TKind],
 ) {
 	e.markDirtyNode(nodeA)
 	if nodeA == nodeB {
@@ -415,8 +414,8 @@ func merge(base span, next span, isEmpty bool) span {
 	return base
 }
 
-func spanFromNode[TObs cmp.Ordered, TToken, TTokenRole, TKind comparable](
-	n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind],
+func spanFromNode[TKind comparable](
+	n *SyntaxaLSTNode[TKind],
 ) span {
 	return span{
 		start: n.start,
@@ -424,8 +423,8 @@ func spanFromNode[TObs cmp.Ordered, TToken, TTokenRole, TKind comparable](
 	}
 }
 
-func spanFromToken[TObs cmp.Ordered, TToken, TTokenRole comparable](
-	t Lexeme[TObs, TToken, TTokenRole],
+func spanFromToken(
+	t Lexeme,
 ) span {
 	return span{
 		start: t.Start,
@@ -433,8 +432,8 @@ func spanFromToken[TObs cmp.Ordered, TToken, TTokenRole comparable](
 	}
 }
 
-func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) ensureSpanValid(
-	n *SyntaxaLSTNode[TObs, TToken, TTokenRole, TKind],
+func (e *LSTEditor[TKind]) ensureSpanValid(
+	n *SyntaxaLSTNode[TKind],
 	forceRecompute bool,
 ) {
 	if n == nil {
@@ -490,7 +489,7 @@ func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) ensureSpanValid(
 }
 
 /* ComputeSpans should be called to ensure all spans inside the tree are valid. */
-func (e *LSTEditor[TObservation, TToken, TTokenRole, TNodeKind]) ComputeSpans() {
+func (e *LSTEditor[TNodeKind]) ComputeSpans() {
 	if e.root == nil {
 		panic("editor does not have root set yet")
 	}
@@ -503,7 +502,7 @@ func (e *LSTEditor[TObservation, TToken, TTokenRole, TNodeKind]) ComputeSpans() 
 }
 
 /* Freeze calls editor.end because this is the only place the editor session actually ends. */
-func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) Freeze() {
+func (e *LSTEditor[TKind]) Freeze() {
 	if e.root != nil {
 		e.ensureSpanValid(e.root, true)
 		e.treeDirty = false
@@ -513,7 +512,7 @@ func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) Freeze() {
 	e.end()
 }
 
-func (e *LSTEditor[TObs, TToken, TTokenRole, TKind]) ensureMutable() {
+func (e *LSTEditor[TKind]) ensureMutable() {
 	if e.frozen {
 		panic("LST is frozen and immutable")
 	}

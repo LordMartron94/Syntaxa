@@ -1,7 +1,7 @@
 package lowering
 
 import (
-	"cmp"
+	"lexarch"
 	"fmt"
 	"foundation/hash"
 	"strings"
@@ -86,8 +86,8 @@ scope to these transitions. The invalid.illegal.unexpected-token scope should
 instead be applied to a synthesised catch-all rule for input that matches none
 of the normal or recovery transitions.
 */
-type Transition[TToken, TNodeKind comparable] struct {
-	Token                TToken
+type Transition[TNodeKind comparable] struct {
+	Token                lexarch.TokenKind
 	NodeKind             *TNodeKind
 	Operation            StackOp
 	TargetContextIDs     []string
@@ -112,23 +112,23 @@ transitions in its Transitions entry. These recovery transitions carry the union
 all recovery sets from all enclosing grammar frames, exactly mirroring the
 currentRecoveryAllFrames() computation performed by the parser at runtime.
 */
-type StateGraph[TToken, TNodeKind comparable] struct {
+type StateGraph[TNodeKind comparable] struct {
 	Contexts                  []Context
 	ContextMeta               map[string]ContextMeta
 	RootContextID             string
-	Transitions               map[string][]Transition[TToken, TNodeKind]
+	Transitions               map[string][]Transition[TNodeKind]
 	NestBodyContextIDs        map[syntaxa.GrammarLabel]string
 	NestContentParentNodeKind map[string]TNodeKind
 }
 
 const rootLabel = "root"
 
-type pendingEntry[TToken, TNodeKind comparable] struct {
+type pendingEntry[TNodeKind comparable] struct {
 	ctxID          string
 	ctxKey         uint64
-	terms          []gTerminal[TToken, TNodeKind]
+	terms          []gTerminal[TNodeKind]
 	nameHint       syntaxa.GrammarLabel
-	inheritedSyncs []TToken
+	inheritedSyncs []lexarch.TokenKind
 }
 
 /*
@@ -149,18 +149,12 @@ Prerequisites:
 Edge cases:
 - Returns an error if the entry rule is missing or hashing components are nil.
 */
-func BuildStateGraph[
-	TObservation cmp.Ordered,
-	TToken comparable,
-	TTokenRole comparable,
-	TNodeKind comparable,
-	TLexerState comparable,
-](
-	pkg *syntaxa.GrammarPackage[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
-	tokenHash func(TToken) uint64,
+func BuildStateGraph[TNodeKind comparable](
+	pkg *syntaxa.GrammarPackage[TNodeKind],
+	tokenHash func(lexarch.TokenKind) uint64,
 	nodeKindHash func(TNodeKind) uint64,
 	hasher *hash.XXH3Hasher,
-) (*StateGraph[TToken, TNodeKind], error) {
+) (*StateGraph[TNodeKind], error) {
 	if pkg == nil || tokenHash == nil || nodeKindHash == nil || hasher == nil {
 		return nil, fmt.Errorf("BuildStateGraph: nil package, tokenHash, nodeKindHash, or hasher")
 	}
@@ -177,7 +171,7 @@ func BuildStateGraph[
 	}
 
 	ctxByKey := make(map[uint64]*Context)
-	transitionsByID := make(map[string][]Transition[TToken, TNodeKind])
+	transitionsByID := make(map[string][]Transition[TNodeKind])
 	metaByID := make(map[string]ContextMeta)
 	nestBodyIDs := make(map[syntaxa.GrammarLabel]string)
 	nestContentParentNodeKind := make(map[string]TNodeKind)
@@ -191,7 +185,7 @@ func BuildStateGraph[
 		metaByID[rootLabel] = ContextMeta{HasOptionalContinuation: true}
 	}
 
-	queue := []pendingEntry[TToken, TNodeKind]{{
+	queue := []pendingEntry[TNodeKind]{{
 		ctxID: rootLabel, ctxKey: rootKey, terms: entryTerminals, nameHint: entryLabel, inheritedSyncs: nil,
 	}}
 
@@ -221,7 +215,7 @@ func BuildStateGraph[
 		}
 	}
 
-	return &StateGraph[TToken, TNodeKind]{
+	return &StateGraph[TNodeKind]{
 		Contexts:                  contexts,
 		ContextMeta:               metaByID,
 		RootContextID:             rootLabel,
@@ -231,22 +225,22 @@ func BuildStateGraph[
 	}, nil
 }
 
-func buildTransition[TToken, TNodeKind comparable](
-	term gTerminal[TToken, TNodeKind],
+func buildTransition[TNodeKind comparable](
+	term gTerminal[TNodeKind],
 	nameHint syntaxa.GrammarLabel,
-	rules map[syntaxa.GrammarLabel]*syntaxa.Grammar[TToken, TNodeKind],
-	analysis *syntaxa.GrammarAnalysis[TToken],
-	tokenHash func(TToken) uint64,
+	rules map[syntaxa.GrammarLabel]*syntaxa.Grammar[lexarch.TokenKind, TNodeKind],
+	analysis *syntaxa.GrammarAnalysis,
+	tokenHash func(lexarch.TokenKind) uint64,
 	nodeKindHash func(TNodeKind) uint64,
 	hasher *hash.XXH3Hasher,
 	ctxByKey map[uint64]*Context,
-	transitionsByID map[string][]Transition[TToken, TNodeKind],
+	transitionsByID map[string][]Transition[TNodeKind],
 	metaByID map[string]ContextMeta,
 	nestBodyIDs map[syntaxa.GrammarLabel]string,
 	nestContentParentNodeKind map[string]TNodeKind,
-	queue *[]pendingEntry[TToken, TNodeKind],
-	inheritedSyncs []TToken,
-) Transition[TToken, TNodeKind] {
+	queue *[]pendingEntry[TNodeKind],
+	inheritedSyncs []lexarch.TokenKind,
+) Transition[TNodeKind] {
 
 	if term.nestNode != nil {
 		return buildNestTransition(term, rules, analysis, tokenHash, nodeKindHash, hasher, ctxByKey, transitionsByID, metaByID, nestBodyIDs, nestContentParentNodeKind, queue, inheritedSyncs)
@@ -255,18 +249,18 @@ func buildTransition[TToken, TNodeKind comparable](
 	return buildStandardTransition(term, nameHint, rules, analysis, tokenHash, nodeKindHash, hasher, ctxByKey, metaByID, queue, inheritedSyncs)
 }
 
-func getOrCreateContext[TToken, TNodeKind comparable](
-	terms []gTerminal[TToken, TNodeKind],
+func getOrCreateContext[TNodeKind comparable](
+	terms []gTerminal[TNodeKind],
 	ownerLabel syntaxa.GrammarLabel,
 	nameHint syntaxa.GrammarLabel,
 	isNullable bool,
-	tokenHash func(TToken) uint64,
+	tokenHash func(lexarch.TokenKind) uint64,
 	nodeKindHash func(TNodeKind) uint64,
 	hasher *hash.XXH3Hasher,
 	ctxByKey map[uint64]*Context,
 	metaByID map[string]ContextMeta,
-	queue *[]pendingEntry[TToken, TNodeKind],
-	inheritedSyncs []TToken,
+	queue *[]pendingEntry[TNodeKind],
+	inheritedSyncs []lexarch.TokenKind,
 ) *Context {
 	key := lookaheadKey(terms, tokenHash, nodeKindHash, hasher)
 	if c, ok := ctxByKey[key]; ok {
@@ -298,7 +292,7 @@ func getOrCreateContext[TToken, TNodeKind comparable](
 		}
 	}
 
-	*queue = append(*queue, pendingEntry[TToken, TNodeKind]{
+	*queue = append(*queue, pendingEntry[TNodeKind]{
 		ctxID: name, ctxKey: key, terms: terms, nameHint: effectiveLabel, inheritedSyncs: inheritedSyncs,
 	})
 	return c
@@ -318,19 +312,19 @@ func sanitizeForLabel(s string) string {
 	return strings.TrimRight(string(b), "_")
 }
 
-func getOrCreateNestBody[TToken, TNodeKind comparable](
-	nestNode *syntaxa.Grammar[TToken, TNodeKind],
-	rules map[syntaxa.GrammarLabel]*syntaxa.Grammar[TToken, TNodeKind],
-	analysis *syntaxa.GrammarAnalysis[TToken],
-	tokenHash func(TToken) uint64,
+func getOrCreateNestBody[TNodeKind comparable](
+	nestNode *syntaxa.Grammar[lexarch.TokenKind, TNodeKind],
+	rules map[syntaxa.GrammarLabel]*syntaxa.Grammar[lexarch.TokenKind, TNodeKind],
+	analysis *syntaxa.GrammarAnalysis,
+	tokenHash func(lexarch.TokenKind) uint64,
 	hasher *hash.XXH3Hasher,
 	ctxByKey map[uint64]*Context,
 	metaByID map[string]ContextMeta,
-	queue *[]pendingEntry[TToken, TNodeKind],
+	queue *[]pendingEntry[TNodeKind],
 	nestBodyIDs map[syntaxa.GrammarLabel]string,
 	nestContentParentNodeKind map[string]TNodeKind,
 	openingProductionNodeKind *TNodeKind,
-	inheritedSyncs []TToken,
+	inheritedSyncs []lexarch.TokenKind,
 ) *Context {
 	nestKeyBytes := []byte("NEST_BODY:" + string(nestNode.GrammarLabel))
 	nestKey := hash.XXH3HasherHash64(hasher, nestKeyBytes)
@@ -361,19 +355,19 @@ func getOrCreateNestBody[TToken, TNodeKind comparable](
 		ImmediatePushTargetID: contentName,
 	}
 
-	closeTokenNode := &syntaxa.Grammar[TToken, TNodeKind]{Kind: syntaxa.GToken, Token: *nestNode.CloseToken}
-	bodyAndClose := []*syntaxa.Grammar[TToken, TNodeKind]{nestNode.Children[0], closeTokenNode}
+	closeTokenNode := &syntaxa.Grammar[lexarch.TokenKind, TNodeKind]{Kind: syntaxa.GToken, Token: *nestNode.CloseToken}
+	bodyAndClose := []*syntaxa.Grammar[lexarch.TokenKind, TNodeKind]{nestNode.Children[0], closeTokenNode}
 	bodyTerminals, _ := lookaheadConcat(nil, bodyAndClose, rules, make(visiting), analysis)
 
 	propagatePopOffset(bodyTerminals, 1)
 
-	var newSyncs []TToken
+	var newSyncs []lexarch.TokenKind
 	if nestNode.CloseToken != nil {
 		newSyncs = append(newSyncs, *nestNode.CloseToken)
 	}
 
 	if len(bodyTerminals) > 0 {
-		*queue = append(*queue, pendingEntry[TToken, TNodeKind]{
+		*queue = append(*queue, pendingEntry[TNodeKind]{
 			ctxID:          contentName,
 			ctxKey:         contentKey,
 			terms:          bodyTerminals,
@@ -384,25 +378,25 @@ func getOrCreateNestBody[TToken, TNodeKind comparable](
 	return c
 }
 
-func buildNestTransition[TToken, TNodeKind comparable](
-	term gTerminal[TToken, TNodeKind],
-	rules map[syntaxa.GrammarLabel]*syntaxa.Grammar[TToken, TNodeKind],
-	analysis *syntaxa.GrammarAnalysis[TToken],
-	tokenHash func(TToken) uint64,
+func buildNestTransition[TNodeKind comparable](
+	term gTerminal[TNodeKind],
+	rules map[syntaxa.GrammarLabel]*syntaxa.Grammar[lexarch.TokenKind, TNodeKind],
+	analysis *syntaxa.GrammarAnalysis,
+	tokenHash func(lexarch.TokenKind) uint64,
 	nodeKindHash func(TNodeKind) uint64,
 	hasher *hash.XXH3Hasher,
 	ctxByKey map[uint64]*Context,
-	transitionsByID map[string][]Transition[TToken, TNodeKind],
+	transitionsByID map[string][]Transition[TNodeKind],
 	metaByID map[string]ContextMeta,
 	nestBodyIDs map[syntaxa.GrammarLabel]string,
 	nestContentParentNodeKind map[string]TNodeKind,
-	queue *[]pendingEntry[TToken, TNodeKind],
-	inheritedSyncs []TToken,
-) Transition[TToken, TNodeKind] {
+	queue *[]pendingEntry[TNodeKind],
+	inheritedSyncs []lexarch.TokenKind,
+) Transition[TNodeKind] {
 	bodyCtx := getOrCreateNestBody(term.nestNode, rules, analysis, tokenHash, hasher, ctxByKey, metaByID, queue, nestBodyIDs, nestContentParentNodeKind, term.nodeKind, inheritedSyncs)
 	ownerLabel := owningRule(term)
 	nestHint := term.nestNode.GrammarLabel
-	noNest := gTerminal[TToken, TNodeKind]{
+	noNest := gTerminal[TNodeKind]{
 		token:     term.token,
 		nodeKind:  term.nodeKind,
 		remaining: term.remaining,
@@ -414,7 +408,7 @@ func buildNestTransition[TToken, TNodeKind comparable](
 	propagatePopOffset(advTerminals, term.popOffset)
 
 	if advTerminals == nil {
-		return Transition[TToken, TNodeKind]{
+		return Transition[TNodeKind]{
 			Token:            term.token,
 			NodeKind:         term.nodeKind,
 			Operation:        OpSet,
@@ -424,7 +418,7 @@ func buildNestTransition[TToken, TNodeKind comparable](
 
 	afterCtx := getOrCreateContext(advTerminals, ownerLabel, nestHint, isNullable, tokenHash, nodeKindHash, hasher, ctxByKey, metaByID, queue, inheritedSyncs)
 
-	return Transition[TToken, TNodeKind]{
+	return Transition[TNodeKind]{
 		Token:            term.token,
 		NodeKind:         term.nodeKind,
 		Operation:        OpSet,
@@ -432,26 +426,26 @@ func buildNestTransition[TToken, TNodeKind comparable](
 	}
 }
 
-func buildStandardTransition[TToken, TNodeKind comparable](
-	term gTerminal[TToken, TNodeKind],
+func buildStandardTransition[TNodeKind comparable](
+	term gTerminal[TNodeKind],
 	nameHint syntaxa.GrammarLabel,
-	rules map[syntaxa.GrammarLabel]*syntaxa.Grammar[TToken, TNodeKind],
-	analysis *syntaxa.GrammarAnalysis[TToken],
-	tokenHash func(TToken) uint64,
+	rules map[syntaxa.GrammarLabel]*syntaxa.Grammar[lexarch.TokenKind, TNodeKind],
+	analysis *syntaxa.GrammarAnalysis,
+	tokenHash func(lexarch.TokenKind) uint64,
 	nodeKindHash func(TNodeKind) uint64,
 	hasher *hash.XXH3Hasher,
 	ctxByKey map[uint64]*Context,
 	metaByID map[string]ContextMeta,
-	queue *[]pendingEntry[TToken, TNodeKind],
-	inheritedSyncs []TToken,
-) Transition[TToken, TNodeKind] {
+	queue *[]pendingEntry[TNodeKind],
+	inheritedSyncs []lexarch.TokenKind,
+) Transition[TNodeKind] {
 	ownerLabel := owningRule(term)
 
 	advTerminals, isNullable := advanceTerminal(term, rules, analysis)
 	propagatePopOffset(advTerminals, term.popOffset)
 
 	if advTerminals == nil {
-		return Transition[TToken, TNodeKind]{
+		return Transition[TNodeKind]{
 			Token:     term.token,
 			NodeKind:  term.nodeKind,
 			Operation: OpPop,
@@ -461,7 +455,7 @@ func buildStandardTransition[TToken, TNodeKind comparable](
 
 	next := getOrCreateContext(advTerminals, ownerLabel, nameHint, isNullable, tokenHash, nodeKindHash, hasher, ctxByKey, metaByID, queue, inheritedSyncs)
 
-	return Transition[TToken, TNodeKind]{
+	return Transition[TNodeKind]{
 		Token:            term.token,
 		NodeKind:         term.nodeKind,
 		Operation:        OpSet,
@@ -469,13 +463,13 @@ func buildStandardTransition[TToken, TNodeKind comparable](
 	}
 }
 
-func propagatePopOffset[TToken, TNodeKind comparable](terminals []gTerminal[TToken, TNodeKind], offset int) {
+func propagatePopOffset[TNodeKind comparable](terminals []gTerminal[TNodeKind], offset int) {
 	for i := range terminals {
 		terminals[i].popOffset = offset
 	}
 }
 
-func owningRule[TToken, TNodeKind comparable](term gTerminal[TToken, TNodeKind]) syntaxa.GrammarLabel {
+func owningRule[TNodeKind comparable](term gTerminal[TNodeKind]) syntaxa.GrammarLabel {
 	// Priority 1: Named non-repetition references (Direct rule calls)
 	for i := 0; i < len(term.stack); i++ {
 		if !term.stack[i].isRepetition && term.stack[i].label != "" {
@@ -491,14 +485,14 @@ func owningRule[TToken, TNodeKind comparable](term gTerminal[TToken, TNodeKind])
 	return "anon"
 }
 
-func addRecoveryTransitions[TToken, TNodeKind comparable](
-	terms []gTerminal[TToken, TNodeKind],
+func addRecoveryTransitions[TNodeKind comparable](
+	terms []gTerminal[TNodeKind],
 	ctxID string,
-	transitionsByID map[string][]Transition[TToken, TNodeKind],
-	inheritedSyncs []TToken,
+	transitionsByID map[string][]Transition[TNodeKind],
+	inheritedSyncs []lexarch.TokenKind,
 ) {
 	// Merge all recovery tokens into a single lookahead set
-	noConsumeSet := make(map[TToken]struct{}, 4+len(inheritedSyncs))
+	noConsumeSet := make(map[lexarch.TokenKind]struct{}, 4+len(inheritedSyncs))
 
 	// 1. Inherited parent boundaries
 	for _, t := range inheritedSyncs {
@@ -523,7 +517,7 @@ func addRecoveryTransitions[TToken, TNodeKind comparable](
 
 	// Emit ALL recovery points strictly as lookahead pops
 	for t := range noConsumeSet {
-		transitionsByID[ctxID] = append(transitionsByID[ctxID], Transition[TToken, TNodeKind]{
+		transitionsByID[ctxID] = append(transitionsByID[ctxID], Transition[TNodeKind]{
 			Token:                t,
 			Operation:            OpSyncTokenNoConsume,
 			IsRecoveryTransition: true,

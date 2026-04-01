@@ -1,8 +1,8 @@
 package syntaxa
 
 import (
-	"cmp"
 	"fmt"
+	"lexarch"
 )
 
 /*
@@ -40,8 +40,8 @@ func (f FailureKind) String() string {
 }
 
 /* RuleResult encapsulates the return value of a parser rule. */
-type RuleResult[TObservation cmp.Ordered, TToken, TTokenRole, TKind comparable] struct {
-	Node      *SyntaxaLSTNode[TObservation, TToken, TTokenRole, TKind]
+type RuleResult[TKind comparable] struct {
+	Node      *SyntaxaLSTNode[TKind]
 	Succeeded bool
 
 	Kind FailureKind
@@ -60,11 +60,11 @@ type RuleResult[TObservation cmp.Ordered, TToken, TTokenRole, TKind comparable] 
 	ConsumeSyncToken bool
 }
 
-func (r *RuleResult[TObservation, TToken, TTokenRole, TKind]) Failed() bool {
+func (r *RuleResult[TKind]) Failed() bool {
 	return !r.Succeeded
 }
 
-func (r *RuleResult[TObservation, TToken, TTokenRole, TKind]) Format() string {
+func (r *RuleResult[TKind]) Format() string {
 	return fmt.Sprintf("node filled? %v, success? %v, kind? %s", r.Node != nil, r.Succeeded, r.Kind.String())
 }
 
@@ -153,12 +153,8 @@ const (
 ParserRuleExecutor is the functional body of a rule.
 */
 type ParserRuleExecutor[
-	TObservation cmp.Ordered,
-	TToken,
-	TTokenRole,
-	TLexerState,
 	TNodeKind comparable,
-] func(ctx *ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) RuleResult[TObservation, TToken, TTokenRole, TNodeKind]
+] func(ctx *ExecRuleContext[TNodeKind]) RuleResult[TNodeKind]
 
 type RuleIdentity struct {
 	RuleName      RuleLabel
@@ -173,19 +169,13 @@ On failure, consumption is automatically rolled back by the engine.
 
 The struct is deliberately opaque, such that all creation and execution goes through the engine.
 */
-type ParserRule[
-	TObservation cmp.Ordered,
-	TToken,
-	TTokenRole,
-	TLexerState,
-	TNodeKind comparable,
-] struct {
+type ParserRule[TNodeKind comparable] struct {
 	identity RuleIdentity
 
-	executionFn ParserRuleExecutor[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
+	executionFn ParserRuleExecutor[TNodeKind]
 
 	contract       RuleContract
-	recoveryTokens []TToken
+	recoveryTokens []lexarch.TokenKind
 
 	/*
 		noConsumeOnRecoveryTokens are sync tokens at which recovery should not consume.
@@ -193,65 +183,59 @@ type ParserRule[
 		When recovery lands on one of these, the engine sets result.ConsumeSyncToken = false so the
 		parent rule can consume the token (e.g. a nest consuming its closing brace).
 	*/
-	noConsumeOnRecoveryTokens []TToken
+	noConsumeOnRecoveryTokens []lexarch.TokenKind
 
-	grammar *Grammar[TToken, TNodeKind]
+	grammar *Grammar[lexarch.TokenKind, TNodeKind]
 
 	isRecoveryBarrier bool
 }
 
-func ParserRuleApplyRecoverySpec[
-	TObservation cmp.Ordered,
-	TToken,
-	TTokenRole,
-	TLexerState,
-	TNodeKind comparable,
-](
-	rule ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
-	spec RecoverySpec[TToken],
-) ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
-	rule.recoveryTokens = append([]TToken(nil), spec.Tokens...)
-	rule.noConsumeOnRecoveryTokens = append([]TToken(nil), spec.NoConsume...)
+func ParserRuleApplyRecoverySpec[TNodeKind comparable](
+	rule ParserRule[TNodeKind],
+	spec RecoverySpec,
+) ParserRule[TNodeKind] {
+	rule.recoveryTokens = append([]lexarch.TokenKind(nil), spec.Tokens...)
+	rule.noConsumeOnRecoveryTokens = append([]lexarch.TokenKind(nil), spec.NoConsume...)
 	return rule
 }
 
-func (p *ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) GetIdentity() RuleIdentity {
+func (p *ParserRule[TNodeKind]) GetIdentity() RuleIdentity {
 	return p.identity
 }
 
-func (p *ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) GetName() RuleLabel {
+func (p *ParserRule[TNodeKind]) GetName() RuleLabel {
 	return p.identity.RuleName
 }
 
-func (p *ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) GetRecoveryTokens() []TToken {
-	cp := make([]TToken, len(p.recoveryTokens))
+func (p *ParserRule[TNodeKind]) GetRecoveryTokens() []lexarch.TokenKind {
+	cp := make([]lexarch.TokenKind, len(p.recoveryTokens))
 	copy(cp, p.recoveryTokens)
 
 	return cp
 }
 
-func (p *ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) GetContract() RuleContract {
+func (p *ParserRule[TNodeKind]) GetContract() RuleContract {
 	return p.contract
 }
 
-func (p *ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) GetExpectedLabel() string {
+func (p *ParserRule[TNodeKind]) GetExpectedLabel() string {
 	return p.identity.ExpectedLabel
 }
 
-func (p *ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) GetGrammarLabel() GrammarLabel {
+func (p *ParserRule[TNodeKind]) GetGrammarLabel() GrammarLabel {
 	return p.identity.GrammarLabel
 }
 
-func (p *ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) GetGrammar() *Grammar[TToken, TNodeKind] {
+func (p *ParserRule[TNodeKind]) GetGrammar() *Grammar[lexarch.TokenKind, TNodeKind] {
 	return p.grammar
 }
 
-func (r ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) WithRecoveryBarrier() ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
+func (r ParserRule[TNodeKind]) WithRecoveryBarrier() ParserRule[TNodeKind] {
 	r.isRecoveryBarrier = true
 	return r
 }
 
-func (r ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) IsRecoveryBarrier() bool {
+func (r ParserRule[TNodeKind]) IsRecoveryBarrier() bool {
 	return r.isRecoveryBarrier
 }
 
@@ -260,7 +244,7 @@ IsNoConsumeRecoveryToken returns true if token is in the rule's noConsumeOnRecov
 
 Used by the engine after recovery to set result.ConsumeSyncToken so the sync token is left in the stream.
 */
-func (p *ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) IsNoConsumeRecoveryToken(token TToken) bool {
+func (p *ParserRule[TNodeKind]) IsNoConsumeRecoveryToken(token lexarch.TokenKind) bool {
 	for _, t := range p.noConsumeOnRecoveryTokens {
 		if t == token {
 			return true
@@ -275,7 +259,7 @@ IsSyncToken returns true if token is in the rule's recovery set (recoveryTokens 
 Used by the engine to avoid reporting spurious "unexpected X" errors when the current token is a sync
 token used for recovery (e.g. semicolon or closing brace).
 */
-func (p *ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) IsSyncToken(token TToken) bool {
+func (p *ParserRule[TNodeKind]) IsSyncToken(token lexarch.TokenKind) bool {
 	for _, t := range p.recoveryTokens {
 		if t == token {
 			return true
@@ -298,29 +282,23 @@ This is to keep the core clean and maintainable.
 For preset behaviour, use Syntaxa/rule.
 For advanced behaviour, construct rules manually through this function.
 */
-func ParserRuleCreate[
-	TObservation cmp.Ordered,
-	TToken,
-	TTokenRole,
-	TLexerState,
-	TNodeKind comparable,
-](
+func ParserRuleCreate[TNodeKind comparable](
 	identity RuleIdentity,
-	executionFn ParserRuleExecutor[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+	executionFn ParserRuleExecutor[TNodeKind],
 	contract RuleContract,
-	recoveryTokens []TToken,
-	grammar *Grammar[TToken, TNodeKind],
-	noConsumeOnRecovery []TToken,
-) ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
+	recoveryTokens []lexarch.TokenKind,
+	grammar *Grammar[lexarch.TokenKind, TNodeKind],
+	noConsumeOnRecovery []lexarch.TokenKind,
+) ParserRule[TNodeKind] {
 	noConsume := noConsumeOnRecovery
 	if noConsume == nil {
-		noConsume = []TToken{}
+		noConsume = []lexarch.TokenKind{}
 	}
 	if grammar != nil {
-		grammar.RecoveryTokens = append([]TToken(nil), recoveryTokens...)
-		grammar.NoConsumeOnRecoveryTokens = append([]TToken(nil), noConsume...)
+		grammar.RecoveryTokens = append([]lexarch.TokenKind(nil), recoveryTokens...)
+		grammar.NoConsumeOnRecoveryTokens = append([]lexarch.TokenKind(nil), noConsume...)
 	}
-	return ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]{
+	return ParserRule[TNodeKind]{
 		identity:                  identity,
 		executionFn:               executionFn,
 		contract:                  contract,

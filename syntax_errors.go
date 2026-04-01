@@ -1,10 +1,6 @@
 package syntaxa
 
-import (
-	"cmp"
-)
-
-type SyntaxError[TObservation cmp.Ordered] struct {
+type SyntaxError struct {
 	ProducedByLexer bool
 
 	Rule    string
@@ -19,12 +15,12 @@ type SyntaxError[TObservation cmp.Ordered] struct {
 	AbsoluteEnd      int
 	TokenNumber      int
 
-	Expected [][]TObservation
-	Found    *TObservation
+	Expected [][]rune
+	Found    *rune
 }
 
-type errorFrame[TObservation cmp.Ordered] struct {
-	best                 SyntaxError[TObservation]
+type errorFrame struct {
+	best                 SyntaxError
 	hasBest              bool
 	bestAbsolutePosition int
 
@@ -32,34 +28,34 @@ type errorFrame[TObservation cmp.Ordered] struct {
 	commitStartIndex int
 }
 
-type SyntaxErrors[TObservation cmp.Ordered] struct {
-	Errors []SyntaxError[TObservation]
-	stack  []errorFrame[TObservation]
+type SyntaxErrors struct {
+	Errors []SyntaxError
+	stack  []errorFrame
 
 	// A single flat buffer for all speculative errors across all active frames
-	flight []SyntaxError[TObservation]
+	flight []SyntaxError
 }
 
-func SyntaxErrorsCreate[TObservation cmp.Ordered]() *SyntaxErrors[TObservation] {
-	return &SyntaxErrors[TObservation]{
-		Errors: make([]SyntaxError[TObservation], 0, 16),
+func SyntaxErrorsCreate() *SyntaxErrors {
+	return &SyntaxErrors{
+		Errors: make([]SyntaxError, 0, 16),
 		// Pre-allocate generous capacities to prevent resize allocations during parsing
-		stack:  make([]errorFrame[TObservation], 0, 64),
-		flight: make([]SyntaxError[TObservation], 0, 64),
+		stack:  make([]errorFrame, 0, 64),
+		flight: make([]SyntaxError, 0, 64),
 	}
 }
 
-func (s *SyntaxErrors[_]) HasErrors() bool {
+func (s *SyntaxErrors) HasErrors() bool {
 	return len(s.Errors) > 0
 }
 
-func (s *SyntaxErrors[TObservation]) pushFrame() {
-	s.stack = append(s.stack, errorFrame[TObservation]{
+func (s *SyntaxErrors) pushFrame() {
+	s.stack = append(s.stack, errorFrame{
 		commitStartIndex: len(s.flight),
 	})
 }
 
-func (s *SyntaxErrors[TObservation]) popFrame(commit bool) {
+func (s *SyntaxErrors) popFrame(commit bool) {
 	if len(s.stack) == 0 {
 		panic("SyntaxErrors: PopFrame without PushFrame")
 	}
@@ -88,13 +84,13 @@ func (s *SyntaxErrors[TObservation]) popFrame(commit bool) {
 	// naturally retains these errors for the parent frame to claim.
 }
 
-func (s *SyntaxErrors[TObservation]) FlushFramesCommitAll() {
+func (s *SyntaxErrors) FlushFramesCommitAll() {
 	for len(s.stack) > 0 {
 		s.popFrame(true)
 	}
 }
 
-func (s *SyntaxErrors[TObservation]) replaceBest(err SyntaxError[TObservation]) bool {
+func (s *SyntaxErrors) replaceBest(err SyntaxError) bool {
 	if len(s.stack) == 0 {
 		return false
 	}
@@ -105,7 +101,7 @@ func (s *SyntaxErrors[TObservation]) replaceBest(err SyntaxError[TObservation]) 
 	return true
 }
 
-func (s *SyntaxErrors[TObservation]) currentBestPosition() (int, bool) {
+func (s *SyntaxErrors) currentBestPosition() (int, bool) {
 	if len(s.stack) == 0 {
 		return 0, false
 	}
@@ -116,7 +112,7 @@ func (s *SyntaxErrors[TObservation]) currentBestPosition() (int, bool) {
 	return top.bestAbsolutePosition, true
 }
 
-func (s *SyntaxErrors[TObservation]) currentFrameWouldBeEmptyOnPop() bool {
+func (s *SyntaxErrors) currentFrameWouldBeEmptyOnPop() bool {
 	if len(s.stack) == 0 {
 		return true
 	}
@@ -125,7 +121,7 @@ func (s *SyntaxErrors[TObservation]) currentFrameWouldBeEmptyOnPop() bool {
 	return !top.hasBest && len(s.flight) == top.commitStartIndex
 }
 
-func (s *SyntaxErrors[TObservation]) report(err SyntaxError[TObservation]) {
+func (s *SyntaxErrors) report(err SyntaxError) {
 	if len(s.stack) == 0 {
 		s.Errors = append(s.Errors, err)
 		return
@@ -139,9 +135,9 @@ func (s *SyntaxErrors[TObservation]) report(err SyntaxError[TObservation]) {
 	}
 }
 
-func betterError[TObservation cmp.Ordered](
-	cur *errorFrame[TObservation],
-	err SyntaxError[TObservation],
+func betterError(
+	cur *errorFrame,
+	err SyntaxError,
 ) bool {
 	if !cur.hasBest {
 		return true

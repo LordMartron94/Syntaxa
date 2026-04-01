@@ -1,8 +1,8 @@
 package rule
 
 import (
-	"cmp"
 	"fmt"
+	"lexarch"
 	"slices"
 	"strconv"
 	"syntaxa"
@@ -13,8 +13,8 @@ import (
 /*
 PrattPrefixOp describes a prefix operator for Pratt expression parsing.
 */
-type PrattPrefixOp[TToken, TNodeKind comparable] struct {
-	Token             TToken
+type PrattPrefixOp[TNodeKind comparable] struct {
+	Token             lexarch.TokenKind
 	RightBP           int
 	NodeKind          TNodeKind
 	TokenGrammarLabel syntaxa.GrammarLabel
@@ -23,17 +23,17 @@ type PrattPrefixOp[TToken, TNodeKind comparable] struct {
 /*
 PrattPrefixRuleOp describes a complex prefix rule. It dynamically binds to its FIRST set at runtime.
 */
-type PrattPrefixRuleOp[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable] struct {
+type PrattPrefixRuleOp[TNodeKind comparable] struct {
 	RightBP  int
 	NodeKind TNodeKind
-	Rule     Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
+	Rule     Rule[TNodeKind]
 }
 
 /*
 PrattInfixOp describes an infix (binary) operator for Pratt expression parsing.
 */
-type PrattInfixOp[TToken, TNodeKind comparable] struct {
-	Token             TToken
+type PrattInfixOp[TNodeKind comparable] struct {
+	Token             lexarch.TokenKind
 	LeftBP            int
 	RightBP           int
 	NodeKind          TNodeKind
@@ -43,21 +43,21 @@ type PrattInfixOp[TToken, TNodeKind comparable] struct {
 /*
 PrattInfixRuleOp describes a complex infix rule. It dynamically binds to its FIRST set at runtime.
 */
-type PrattInfixRuleOp[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable] struct {
+type PrattInfixRuleOp[TNodeKind comparable] struct {
 	LeftBP   int
 	RightBP  int
 	NodeKind TNodeKind
-	Rule     Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
+	Rule     Rule[TNodeKind]
 }
 
-type PrattImplicitInfix[TToken, TNodeKind comparable] struct {
+type PrattImplicitInfix[TNodeKind comparable] struct {
 	LeftBP   int
 	RightBP  int
 	NodeKind TNodeKind
 }
 
-type PrattPostfixOp[TToken, TNodeKind comparable] struct {
-	Token             TToken
+type PrattPostfixOp[TNodeKind comparable] struct {
+	Token             lexarch.TokenKind
 	LeftBP            int
 	NodeKind          TNodeKind
 	TokenGrammarLabel syntaxa.GrammarLabel
@@ -67,24 +67,24 @@ type PrattPostfixOp[TToken, TNodeKind comparable] struct {
 PrattPostfixRuleOp describes a postfix operator that requires executing a full rule.
 It dynamically binds to its FIRST set at runtime.
 */
-type PrattPostfixRuleOp[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable] struct {
+type PrattPostfixRuleOp[TNodeKind comparable] struct {
 	LeftBP   int
 	NodeKind TNodeKind
-	Rule     Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
+	Rule     Rule[TNodeKind]
 }
 
 /*
 PrattConfig holds the configuration for a Pratt-style expression rule.
 */
-type PrattConfig[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable] struct {
-	Primary        Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
-	PrefixOps      []PrattPrefixOp[TToken, TNodeKind]
-	PrefixRuleOps  []PrattPrefixRuleOp[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
-	PostfixOps     []PrattPostfixOp[TToken, TNodeKind]
-	PostfixRuleOps []PrattPostfixRuleOp[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
-	InfixOps       []PrattInfixOp[TToken, TNodeKind]
-	InfixRuleOps   []PrattInfixRuleOp[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
-	ImplicitInfix  *PrattImplicitInfix[TToken, TNodeKind]
+type PrattConfig[TNodeKind comparable] struct {
+	Primary        Rule[TNodeKind]
+	PrefixOps      []PrattPrefixOp[TNodeKind]
+	PrefixRuleOps  []PrattPrefixRuleOp[TNodeKind]
+	PostfixOps     []PrattPostfixOp[TNodeKind]
+	PostfixRuleOps []PrattPostfixRuleOp[TNodeKind]
+	InfixOps       []PrattInfixOp[TNodeKind]
+	InfixRuleOps   []PrattInfixRuleOp[TNodeKind]
+	ImplicitInfix  *PrattImplicitInfix[TNodeKind]
 }
 
 // ------------------------------------------------------------- INTERNAL STATE
@@ -94,10 +94,10 @@ type prefixInfo[TNodeKind comparable] struct {
 	nodeKind TNodeKind
 }
 
-type prefixRuleInfo[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable] struct {
+type prefixRuleInfo[TNodeKind comparable] struct {
 	rightBP  int
 	nodeKind TNodeKind
-	rule     Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
+	rule     Rule[TNodeKind]
 }
 
 type infixInfo[TNodeKind comparable] struct {
@@ -106,11 +106,11 @@ type infixInfo[TNodeKind comparable] struct {
 	nodeKind TNodeKind
 }
 
-type infixRuleInfo[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable] struct {
+type infixRuleInfo[TNodeKind comparable] struct {
 	leftBP   int
 	rightBP  int
 	nodeKind TNodeKind
-	rule     Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
+	rule     Rule[TNodeKind]
 }
 
 type postfixInfo[TNodeKind comparable] struct {
@@ -118,48 +118,48 @@ type postfixInfo[TNodeKind comparable] struct {
 	nodeKind TNodeKind
 }
 
-type postfixRuleInfo[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable] struct {
+type postfixRuleInfo[TNodeKind comparable] struct {
 	leftBP   int
 	nodeKind TNodeKind
-	rule     Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
+	rule     Rule[TNodeKind]
 }
 
 /*
 prattConfigMaps holds raw rule slices and pre-resolved token maps.
 */
-type prattConfigMaps[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable] struct {
-	primary Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
+type prattConfigMaps[TNodeKind comparable] struct {
+	primary Rule[TNodeKind]
 	name    syntaxa.RuleLabel
 
-	rawPrefixRuleOps  []PrattPrefixRuleOp[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
-	rawInfixRuleOps   []PrattInfixRuleOp[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
-	rawPostfixRuleOps []PrattPostfixRuleOp[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
+	rawPrefixRuleOps  []PrattPrefixRuleOp[TNodeKind]
+	rawInfixRuleOps   []PrattInfixRuleOp[TNodeKind]
+	rawPostfixRuleOps []PrattPostfixRuleOp[TNodeKind]
 
-	prefixMap      map[TToken]prefixInfo[TNodeKind]
-	prefixRuleMap  map[TToken]prefixRuleInfo[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
-	infixMap       map[TToken]infixInfo[TNodeKind]
-	infixRuleMap   map[TToken]infixRuleInfo[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
-	postfixMap     map[TToken]postfixInfo[TNodeKind]
-	postfixRuleMap map[TToken]postfixRuleInfo[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
-	implicitOp     *PrattImplicitInfix[TToken, TNodeKind]
-	predictMap     map[TToken]bool
+	prefixMap      map[lexarch.TokenKind]prefixInfo[TNodeKind]
+	prefixRuleMap  map[lexarch.TokenKind]prefixRuleInfo[TNodeKind]
+	infixMap       map[lexarch.TokenKind]infixInfo[TNodeKind]
+	infixRuleMap   map[lexarch.TokenKind]infixRuleInfo[TNodeKind]
+	postfixMap     map[lexarch.TokenKind]postfixInfo[TNodeKind]
+	postfixRuleMap map[lexarch.TokenKind]postfixRuleInfo[TNodeKind]
+	implicitOp     *PrattImplicitInfix[TNodeKind]
+	predictMap     map[lexarch.TokenKind]bool
 
 	isResolved bool
 }
 
 // ------------------------------------------------------------- PRATT ENDPOINT
 
-type prattEndpoint[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable] struct {
-	sharedCore *sharedCore[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
+type prattEndpoint[TNodeKind comparable] struct {
+	sharedCore *sharedCore[TNodeKind]
 }
 
 /*
 Expression builds a Pratt-style precedence-climbing expression rule.
 */
-func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) Expression(
+func (p *prattEndpoint[TNodeKind]) Expression(
 	grammarLabel syntaxa.GrammarLabel,
-	config PrattConfig[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
-) Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
+	config PrattConfig[TNodeKind],
+) Rule[TNodeKind] {
 
 	maps := p.buildConfigMaps(grammarLabel, config)
 	identity := p.sharedCore.createRuleIdentity(maps.name, grammarLabel, "expression")
@@ -172,7 +172,7 @@ func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 
 	hasImplicitInfix := config.ImplicitInfix != nil
 
-	exec := func(ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) Result[TObservation, TToken, TTokenRole, TNodeKind] {
+	exec := func(ctx *syntaxa.ExecRuleContext[TNodeKind]) Result[TNodeKind] {
 		// Late-bound resolution guarantees FIRST sets are available
 		if !maps.isResolved {
 			p.resolveRuleTriggers(ctx.GetAnalysis(), &maps)
@@ -194,20 +194,20 @@ func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 	)
 }
 
-func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) buildConfigMaps(
+func (p *prattEndpoint[TNodeKind]) buildConfigMaps(
 	grammarLabel syntaxa.GrammarLabel,
-	config PrattConfig[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
-) prattConfigMaps[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
+	config PrattConfig[TNodeKind],
+) prattConfigMaps[TNodeKind] {
 
-	maps := prattConfigMaps[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]{
+	maps := prattConfigMaps[TNodeKind]{
 		primary:           config.Primary,
 		name:              p.sharedCore.createRuleName("Expression", grammarLabel),
 		rawPrefixRuleOps:  config.PrefixRuleOps,
 		rawInfixRuleOps:   config.InfixRuleOps,
 		rawPostfixRuleOps: config.PostfixRuleOps,
-		prefixMap:         make(map[TToken]prefixInfo[TNodeKind]),
-		infixMap:          make(map[TToken]infixInfo[TNodeKind]),
-		postfixMap:        make(map[TToken]postfixInfo[TNodeKind]),
+		prefixMap:         make(map[lexarch.TokenKind]prefixInfo[TNodeKind]),
+		infixMap:          make(map[lexarch.TokenKind]infixInfo[TNodeKind]),
+		postfixMap:        make(map[lexarch.TokenKind]postfixInfo[TNodeKind]),
 		implicitOp:        config.ImplicitInfix,
 	}
 
@@ -225,13 +225,13 @@ func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 	return maps
 }
 
-func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) resolveRuleTriggers(
-	analysis *syntaxa.GrammarAnalysis[TToken],
-	maps *prattConfigMaps[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+func (p *prattEndpoint[TNodeKind]) resolveRuleTriggers(
+	analysis *syntaxa.GrammarAnalysis,
+	maps *prattConfigMaps[TNodeKind],
 ) {
-	maps.prefixRuleMap = make(map[TToken]prefixRuleInfo[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
-	maps.infixRuleMap = make(map[TToken]infixRuleInfo[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
-	maps.postfixRuleMap = make(map[TToken]postfixRuleInfo[TObservation, TToken, TTokenRole, TLexerState, TNodeKind])
+	maps.prefixRuleMap = make(map[lexarch.TokenKind]prefixRuleInfo[TNodeKind])
+	maps.infixRuleMap = make(map[lexarch.TokenKind]infixRuleInfo[TNodeKind])
+	maps.postfixRuleMap = make(map[lexarch.TokenKind]postfixRuleInfo[TNodeKind])
 
 	p.bindPrefixRuleOps(analysis, maps)
 	p.bindInfixRuleOps(analysis, maps)
@@ -240,9 +240,9 @@ func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 	maps.isResolved = true
 }
 
-func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) bindPrefixRuleOps(
-	analysis *syntaxa.GrammarAnalysis[TToken],
-	maps *prattConfigMaps[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+func (p *prattEndpoint[TNodeKind]) bindPrefixRuleOps(
+	analysis *syntaxa.GrammarAnalysis,
+	maps *prattConfigMaps[TNodeKind],
 ) {
 	for _, op := range maps.rawPrefixRuleOps {
 		ruleKey := syntaxa.NodeKeyFromPath(*op.Rule.GetGrammar().NodePath)
@@ -253,7 +253,7 @@ func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 			if _, exists := maps.prefixRuleMap[token]; exists {
 				panic(fmt.Sprintf("pratt engine error: ambiguity detected. Multiple prefix rules trigger on token '%v'", token))
 			}
-			maps.prefixRuleMap[token] = prefixRuleInfo[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]{
+			maps.prefixRuleMap[token] = prefixRuleInfo[TNodeKind]{
 				rightBP:  op.RightBP,
 				nodeKind: op.NodeKind,
 				rule:     op.Rule,
@@ -262,9 +262,9 @@ func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 	}
 }
 
-func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) bindInfixRuleOps(
-	analysis *syntaxa.GrammarAnalysis[TToken],
-	maps *prattConfigMaps[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+func (p *prattEndpoint[TNodeKind]) bindInfixRuleOps(
+	analysis *syntaxa.GrammarAnalysis,
+	maps *prattConfigMaps[TNodeKind],
 ) {
 	for _, op := range maps.rawInfixRuleOps {
 		ruleKey := syntaxa.NodeKeyFromPath(*op.Rule.GetGrammar().NodePath)
@@ -275,7 +275,7 @@ func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 			if _, exists := maps.infixRuleMap[token]; exists {
 				panic(fmt.Sprintf("pratt engine error: ambiguity detected. Multiple infix rules trigger on token '%v'", token))
 			}
-			maps.infixRuleMap[token] = infixRuleInfo[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]{
+			maps.infixRuleMap[token] = infixRuleInfo[TNodeKind]{
 				leftBP:   op.LeftBP,
 				rightBP:  op.RightBP,
 				nodeKind: op.NodeKind,
@@ -285,9 +285,9 @@ func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 	}
 }
 
-func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) bindPostfixRuleOps(
-	analysis *syntaxa.GrammarAnalysis[TToken],
-	maps *prattConfigMaps[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+func (p *prattEndpoint[TNodeKind]) bindPostfixRuleOps(
+	analysis *syntaxa.GrammarAnalysis,
+	maps *prattConfigMaps[TNodeKind],
 ) {
 	for _, op := range maps.rawPostfixRuleOps {
 		ruleKey := syntaxa.NodeKeyFromPath(*op.Rule.GetGrammar().NodePath)
@@ -298,7 +298,7 @@ func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 			if _, exists := maps.postfixRuleMap[token]; exists {
 				panic(fmt.Sprintf("pratt engine error: ambiguity detected. Multiple postfix rules trigger on token '%v'", token))
 			}
-			maps.postfixRuleMap[token] = postfixRuleInfo[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]{
+			maps.postfixRuleMap[token] = postfixRuleInfo[TNodeKind]{
 				leftBP:   op.LeftBP,
 				nodeKind: op.NodeKind,
 				rule:     op.Rule,
@@ -307,13 +307,13 @@ func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 	}
 }
 
-func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) buildPredictMap(
-	ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
-	primary Rule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
-	prefixMap map[TToken]prefixInfo[TNodeKind],
-	prefixRuleMap map[TToken]prefixRuleInfo[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
-) map[TToken]bool {
-	predictMap := make(map[TToken]bool)
+func (p *prattEndpoint[TNodeKind]) buildPredictMap(
+	ctx *syntaxa.ExecRuleContext[TNodeKind],
+	primary Rule[TNodeKind],
+	prefixMap map[lexarch.TokenKind]prefixInfo[TNodeKind],
+	prefixRuleMap map[lexarch.TokenKind]prefixRuleInfo[TNodeKind],
+) map[lexarch.TokenKind]bool {
+	predictMap := make(map[lexarch.TokenKind]bool)
 	analysis := ctx.GetAnalysis()
 	rootKey := syntaxa.NodeKeyFromPath(*primary.GetGrammar().NodePath)
 
@@ -329,18 +329,18 @@ func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 	return predictMap
 }
 
-type prattLevel[TToken, TNodeKind comparable] struct {
+type prattLevel[TNodeKind comparable] struct {
 	BP          int
-	Prefixes    []*syntaxa.Grammar[TToken, TNodeKind]
-	Postfixes   []*syntaxa.Grammar[TToken, TNodeKind]
-	Infixes     []*syntaxa.Grammar[TToken, TNodeKind]
+	Prefixes    []*syntaxa.Grammar[lexarch.TokenKind, TNodeKind]
+	Postfixes   []*syntaxa.Grammar[lexarch.TokenKind, TNodeKind]
+	Infixes     []*syntaxa.Grammar[lexarch.TokenKind, TNodeKind]
 	HasImplicit bool
 }
 
-func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) buildPrattGrammar(
+func (p *prattEndpoint[TNodeKind]) buildPrattGrammar(
 	grammarLabel syntaxa.GrammarLabel,
-	config PrattConfig[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
-) (root *syntaxa.Grammar[TToken, TNodeKind], levelRoots []*syntaxa.Grammar[TToken, TNodeKind]) {
+	config PrattConfig[TNodeKind],
+) (root *syntaxa.Grammar[lexarch.TokenKind, TNodeKind], levelRoots []*syntaxa.Grammar[lexarch.TokenKind, TNodeKind]) {
 
 	levelsMap := p.groupOperatorsByBP(config)
 	bps := p.getSortedBPsAscending(levelsMap)
@@ -352,37 +352,37 @@ func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 	levelRoots = p.buildPrecedenceChain(grammarLabel, config, levelsMap, bps)
 
 	// Root is the lowest BP (loosest binding)
-	root = syntaxa.Ref[TToken, TNodeKind](grammarLabel, p.levelLabel(grammarLabel, bps[0]))
+	root = syntaxa.Ref[lexarch.TokenKind, TNodeKind](grammarLabel, p.levelLabel(grammarLabel, bps[0]))
 
 	return root, levelRoots
 }
 
-func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) groupOperatorsByBP(
-	config PrattConfig[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
-) map[int]*prattLevel[TToken, TNodeKind] {
-	levelsMap := make(map[int]*prattLevel[TToken, TNodeKind])
+func (p *prattEndpoint[TNodeKind]) groupOperatorsByBP(
+	config PrattConfig[TNodeKind],
+) map[int]*prattLevel[TNodeKind] {
+	levelsMap := make(map[int]*prattLevel[TNodeKind])
 
-	getLvl := func(bp int) *prattLevel[TToken, TNodeKind] {
+	getLvl := func(bp int) *prattLevel[TNodeKind] {
 		if _, ok := levelsMap[bp]; !ok {
-			levelsMap[bp] = &prattLevel[TToken, TNodeKind]{BP: bp}
+			levelsMap[bp] = &prattLevel[TNodeKind]{BP: bp}
 		}
 		return levelsMap[bp]
 	}
 
 	for _, op := range config.PrefixOps {
-		getLvl(op.RightBP).Prefixes = append(getLvl(op.RightBP).Prefixes, syntaxa.Token[TToken, TNodeKind](op.TokenGrammarLabel, op.Token))
+		getLvl(op.RightBP).Prefixes = append(getLvl(op.RightBP).Prefixes, syntaxa.Token[lexarch.TokenKind, TNodeKind](op.TokenGrammarLabel, op.Token))
 	}
 	for _, op := range config.PrefixRuleOps {
 		getLvl(op.RightBP).Prefixes = append(getLvl(op.RightBP).Prefixes, op.Rule.GetGrammar())
 	}
 	for _, op := range config.PostfixOps {
-		getLvl(op.LeftBP).Postfixes = append(getLvl(op.LeftBP).Postfixes, syntaxa.Token[TToken, TNodeKind](op.TokenGrammarLabel, op.Token))
+		getLvl(op.LeftBP).Postfixes = append(getLvl(op.LeftBP).Postfixes, syntaxa.Token[lexarch.TokenKind, TNodeKind](op.TokenGrammarLabel, op.Token))
 	}
 	for _, op := range config.PostfixRuleOps {
 		getLvl(op.LeftBP).Postfixes = append(getLvl(op.LeftBP).Postfixes, op.Rule.GetGrammar())
 	}
 	for _, op := range config.InfixOps {
-		getLvl(op.LeftBP).Infixes = append(getLvl(op.LeftBP).Infixes, syntaxa.Token[TToken, TNodeKind](op.TokenGrammarLabel, op.Token))
+		getLvl(op.LeftBP).Infixes = append(getLvl(op.LeftBP).Infixes, syntaxa.Token[lexarch.TokenKind, TNodeKind](op.TokenGrammarLabel, op.Token))
 	}
 	for _, op := range config.InfixRuleOps {
 		getLvl(op.LeftBP).Infixes = append(getLvl(op.LeftBP).Infixes, op.Rule.GetGrammar())
@@ -395,7 +395,7 @@ func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 	return levelsMap
 }
 
-func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) getSortedBPsAscending(levelsMap map[int]*prattLevel[TToken, TNodeKind]) []int {
+func (p *prattEndpoint[TNodeKind]) getSortedBPsAscending(levelsMap map[int]*prattLevel[TNodeKind]) []int {
 	var bps []int
 	for bp := range levelsMap {
 		bps = append(bps, bp)
@@ -404,23 +404,23 @@ func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 	return bps
 }
 
-func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) buildPrecedenceChain(
+func (p *prattEndpoint[TNodeKind]) buildPrecedenceChain(
 	label syntaxa.GrammarLabel,
-	config PrattConfig[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
-	levelsMap map[int]*prattLevel[TToken, TNodeKind],
+	config PrattConfig[TNodeKind],
+	levelsMap map[int]*prattLevel[TNodeKind],
 	bps []int,
-) []*syntaxa.Grammar[TToken, TNodeKind] {
+) []*syntaxa.Grammar[lexarch.TokenKind, TNodeKind] {
 
-	levelRoots := make([]*syntaxa.Grammar[TToken, TNodeKind], 0, len(bps))
+	levelRoots := make([]*syntaxa.Grammar[lexarch.TokenKind, TNodeKind], 0, len(bps))
 
 	for i, bp := range bps {
 		lvl := levelsMap[bp]
 
-		var nextLevel *syntaxa.Grammar[TToken, TNodeKind]
+		var nextLevel *syntaxa.Grammar[lexarch.TokenKind, TNodeKind]
 		if i == len(bps)-1 {
 			nextLevel = config.Primary.GetGrammar() // Highest BP targets Primary
 		} else {
-			nextLevel = syntaxa.Ref[TToken, TNodeKind](label, p.levelLabel(label, bps[i+1])) // Lower BP targets Higher BP
+			nextLevel = syntaxa.Ref[lexarch.TokenKind, TNodeKind](label, p.levelLabel(label, bps[i+1])) // Lower BP targets Higher BP
 		}
 
 		levelRoot := p.buildSingleLevel(label, lvl, nextLevel)
@@ -442,11 +442,11 @@ func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 	return levelRoots
 }
 
-func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) buildSingleLevel(
+func (p *prattEndpoint[TNodeKind]) buildSingleLevel(
 	label syntaxa.GrammarLabel,
-	lvl *prattLevel[TToken, TNodeKind],
-	nextLevel *syntaxa.Grammar[TToken, TNodeKind],
-) *syntaxa.Grammar[TToken, TNodeKind] {
+	lvl *prattLevel[TNodeKind],
+	nextLevel *syntaxa.Grammar[lexarch.TokenKind, TNodeKind],
+) *syntaxa.Grammar[lexarch.TokenKind, TNodeKind] {
 	body := nextLevel
 
 	if len(lvl.Prefixes) > 0 {
@@ -454,7 +454,7 @@ func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 		body = p.prattConcat(label, prefixLoop, body)
 	}
 
-	var suffixChoices []*syntaxa.Grammar[TToken, TNodeKind]
+	var suffixChoices []*syntaxa.Grammar[lexarch.TokenKind, TNodeKind]
 	if len(lvl.Postfixes) > 0 {
 		suffixChoices = append(suffixChoices, p.safeChoice(label, lvl.Postfixes))
 	}
@@ -477,16 +477,16 @@ func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 // prattConcat builds Concat(label, left, right) with flattening and single-child collapse.
 // It ensures that sequences of the same precedence level are represented as a
 // flat list of children rather than a deeply nested binary tree.
-func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) prattConcat(
+func (p *prattEndpoint[TNodeKind]) prattConcat(
 	label syntaxa.GrammarLabel,
-	left, right *syntaxa.Grammar[TToken, TNodeKind],
-) *syntaxa.Grammar[TToken, TNodeKind] {
+	left, right *syntaxa.Grammar[lexarch.TokenKind, TNodeKind],
+) *syntaxa.Grammar[lexarch.TokenKind, TNodeKind] {
 
-	var children []*syntaxa.Grammar[TToken, TNodeKind]
+	var children []*syntaxa.Grammar[lexarch.TokenKind, TNodeKind]
 
 	// Case 1: Right side is a concat of the same type - pull children up
 	if right != nil && right.Kind == syntaxa.GConcat && right.GrammarLabel == label {
-		children = make([]*syntaxa.Grammar[TToken, TNodeKind], 0, 1+len(right.Children))
+		children = make([]*syntaxa.Grammar[lexarch.TokenKind, TNodeKind], 0, 1+len(right.Children))
 		children = append(children, left)
 		children = append(children, right.Children...)
 	} else if left != nil && left.Kind == syntaxa.GConcat && left.GrammarLabel == label {
@@ -494,7 +494,7 @@ func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 		children = append(slices.Clone(left.Children), right)
 	} else {
 		// Case 3: Simple binary pair
-		children = []*syntaxa.Grammar[TToken, TNodeKind]{left, right}
+		children = []*syntaxa.Grammar[lexarch.TokenKind, TNodeKind]{left, right}
 	}
 
 	// Optimization: If only one child remains after flattening, don't wrap it in a Concat node.
@@ -505,25 +505,25 @@ func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 	return syntaxa.Concat(label, children...)
 }
 
-func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) levelLabel(base syntaxa.GrammarLabel, bp int) syntaxa.GrammarLabel {
+func (p *prattEndpoint[TNodeKind]) levelLabel(base syntaxa.GrammarLabel, bp int) syntaxa.GrammarLabel {
 	return syntaxa.GrammarLabel(string(base) + "_BP_" + strconv.Itoa(bp))
 }
 
-func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) safeChoice(
+func (p *prattEndpoint[TNodeKind]) safeChoice(
 	label syntaxa.GrammarLabel,
-	options []*syntaxa.Grammar[TToken, TNodeKind],
-) *syntaxa.Grammar[TToken, TNodeKind] {
+	options []*syntaxa.Grammar[lexarch.TokenKind, TNodeKind],
+) *syntaxa.Grammar[lexarch.TokenKind, TNodeKind] {
 	if len(options) == 1 {
 		return options[0]
 	}
 	return syntaxa.Choice(label, options...)
 }
 
-func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) runPrattExpression(
-	ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
-	maps prattConfigMaps[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+func (p *prattEndpoint[TNodeKind]) runPrattExpression(
+	ctx *syntaxa.ExecRuleContext[TNodeKind],
+	maps prattConfigMaps[TNodeKind],
 	minBP int,
-) Result[TObservation, TToken, TTokenRole, TNodeKind] {
+) Result[TNodeKind] {
 
 	leftResult := p.parsePrattPrefix(ctx, maps)
 	if leftResult.Failed() {
@@ -573,10 +573,10 @@ func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 	return p.sharedCore.buildSuccessRuleResult(left)
 }
 
-func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) parsePrattPrefix(
-	ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
-	maps prattConfigMaps[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
-) Result[TObservation, TToken, TTokenRole, TNodeKind] {
+func (p *prattEndpoint[TNodeKind]) parsePrattPrefix(
+	ctx *syntaxa.ExecRuleContext[TNodeKind],
+	maps prattConfigMaps[TNodeKind],
+) Result[TNodeKind] {
 
 	peekToken := ctx.Token.Peek(0).Token
 
@@ -590,11 +590,11 @@ func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 	return p.parsePrimary(ctx, maps)
 }
 
-func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) tryPrefixOp(
-	ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
-	peekToken TToken,
-	maps prattConfigMaps[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
-) (bool, Result[TObservation, TToken, TTokenRole, TNodeKind]) {
+func (p *prattEndpoint[TNodeKind]) tryPrefixOp(
+	ctx *syntaxa.ExecRuleContext[TNodeKind],
+	peekToken lexarch.TokenKind,
+	maps prattConfigMaps[TNodeKind],
+) (bool, Result[TNodeKind]) {
 	info, ok := maps.prefixMap[peekToken]
 	if !ok {
 		return false, p.sharedCore.buildSuccessRuleResult(nil)
@@ -617,11 +617,11 @@ func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 	return true, p.sharedCore.buildSuccessRuleResult(opNode)
 }
 
-func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) tryPrefixRuleOp(
-	ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
-	peekToken TToken,
-	maps prattConfigMaps[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
-) (bool, Result[TObservation, TToken, TTokenRole, TNodeKind]) {
+func (p *prattEndpoint[TNodeKind]) tryPrefixRuleOp(
+	ctx *syntaxa.ExecRuleContext[TNodeKind],
+	peekToken lexarch.TokenKind,
+	maps prattConfigMaps[TNodeKind],
+) (bool, Result[TNodeKind]) {
 	info, ok := maps.prefixRuleMap[peekToken]
 	if !ok {
 		return false, p.sharedCore.buildSuccessRuleResult(nil)
@@ -647,10 +647,10 @@ func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 	return true, p.sharedCore.buildSuccessRuleResult(opNode)
 }
 
-func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) parsePrimary(
-	ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
-	maps prattConfigMaps[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
-) Result[TObservation, TToken, TTokenRole, TNodeKind] {
+func (p *prattEndpoint[TNodeKind]) parsePrimary(
+	ctx *syntaxa.ExecRuleContext[TNodeKind],
+	maps prattConfigMaps[TNodeKind],
+) Result[TNodeKind] {
 	result := ctx.ExecuteRule(maps.primary, syntaxa.ExecutionNormal)
 	if result.Failed() {
 		return result
@@ -664,13 +664,13 @@ func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 	return result
 }
 
-func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) tryPostfixOp(
-	ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
-	peekToken TToken,
-	left *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind],
-	maps prattConfigMaps[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+func (p *prattEndpoint[TNodeKind]) tryPostfixOp(
+	ctx *syntaxa.ExecRuleContext[TNodeKind],
+	peekToken lexarch.TokenKind,
+	left *syntaxa.SyntaxaLSTNode[TNodeKind],
+	maps prattConfigMaps[TNodeKind],
 	minBP int,
-) (bool, *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind]) {
+) (bool, *syntaxa.SyntaxaLSTNode[TNodeKind]) {
 	post, ok := maps.postfixMap[peekToken]
 	if !ok || post.leftBP < minBP {
 		return false, nil
@@ -683,13 +683,13 @@ func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 	return true, opNode
 }
 
-func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) tryPostfixRuleOp(
-	ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
-	peekToken TToken,
-	left *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind],
-	maps prattConfigMaps[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+func (p *prattEndpoint[TNodeKind]) tryPostfixRuleOp(
+	ctx *syntaxa.ExecRuleContext[TNodeKind],
+	peekToken lexarch.TokenKind,
+	left *syntaxa.SyntaxaLSTNode[TNodeKind],
+	maps prattConfigMaps[TNodeKind],
 	minBP int,
-) (bool, *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind], Result[TObservation, TToken, TTokenRole, TNodeKind]) {
+) (bool, *syntaxa.SyntaxaLSTNode[TNodeKind], Result[TNodeKind]) {
 	postRule, ok := maps.postfixRuleMap[peekToken]
 	if !ok || postRule.leftBP < minBP {
 		return false, nil, p.sharedCore.buildSuccessRuleResult(nil)
@@ -708,13 +708,13 @@ func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 	return true, opNode, p.sharedCore.buildSuccessRuleResult(opNode)
 }
 
-func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) tryInfixOp(
-	ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
-	peekToken TToken,
-	left *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind],
-	maps prattConfigMaps[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+func (p *prattEndpoint[TNodeKind]) tryInfixOp(
+	ctx *syntaxa.ExecRuleContext[TNodeKind],
+	peekToken lexarch.TokenKind,
+	left *syntaxa.SyntaxaLSTNode[TNodeKind],
+	maps prattConfigMaps[TNodeKind],
 	minBP int,
-) (bool, *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind], Result[TObservation, TToken, TTokenRole, TNodeKind]) {
+) (bool, *syntaxa.SyntaxaLSTNode[TNodeKind], Result[TNodeKind]) {
 	inf, ok := maps.infixMap[peekToken]
 	if !ok || inf.leftBP < minBP {
 		return false, nil, p.sharedCore.buildSuccessRuleResult(nil)
@@ -737,13 +737,13 @@ func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 	return true, opNode, p.sharedCore.buildSuccessRuleResult(opNode)
 }
 
-func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) tryInfixRuleOp(
-	ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
-	peekToken TToken,
-	left *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind],
-	maps prattConfigMaps[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+func (p *prattEndpoint[TNodeKind]) tryInfixRuleOp(
+	ctx *syntaxa.ExecRuleContext[TNodeKind],
+	peekToken lexarch.TokenKind,
+	left *syntaxa.SyntaxaLSTNode[TNodeKind],
+	maps prattConfigMaps[TNodeKind],
 	minBP int,
-) (bool, *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind], Result[TObservation, TToken, TTokenRole, TNodeKind]) {
+) (bool, *syntaxa.SyntaxaLSTNode[TNodeKind], Result[TNodeKind]) {
 	infRule, ok := maps.infixRuleMap[peekToken]
 	if !ok || infRule.leftBP < minBP {
 		return false, nil, p.sharedCore.buildSuccessRuleResult(nil)
@@ -772,13 +772,13 @@ func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 	return true, opNode, p.sharedCore.buildSuccessRuleResult(opNode)
 }
 
-func (p *prattEndpoint[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) tryImplicitInfix(
-	ctx *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
-	peekToken TToken,
-	left *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind],
-	maps prattConfigMaps[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+func (p *prattEndpoint[TNodeKind]) tryImplicitInfix(
+	ctx *syntaxa.ExecRuleContext[TNodeKind],
+	peekToken lexarch.TokenKind,
+	left *syntaxa.SyntaxaLSTNode[TNodeKind],
+	maps prattConfigMaps[TNodeKind],
 	minBP int,
-) (bool, *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind], Result[TObservation, TToken, TTokenRole, TNodeKind]) {
+) (bool, *syntaxa.SyntaxaLSTNode[TNodeKind], Result[TNodeKind]) {
 	if maps.implicitOp == nil || maps.implicitOp.LeftBP < minBP || !maps.predictMap[peekToken] {
 		return false, nil, p.sharedCore.buildSuccessRuleResult(nil)
 	}

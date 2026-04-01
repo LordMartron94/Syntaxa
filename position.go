@@ -1,7 +1,6 @@
 package syntaxa
 
 import (
-	"cmp"
 	"lexarch"
 )
 
@@ -28,8 +27,8 @@ func LineSpanFromByteOffsets(start, end int, source string, tabWidth int) (start
 	return pos.StartLine, pos.StartColumn, pos.EndLine, pos.EndColumn, true
 }
 
-func LSTNodeLineSpanFromSource[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind comparable](
-	node *SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind],
+func LSTNodeLineSpanFromSource[TNodeKind comparable](
+	node *SyntaxaLSTNode[TNodeKind],
 	source string,
 	tabWidth int,
 ) (startLine, startColumn, endLine, endColumn int, ok bool) {
