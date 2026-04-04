@@ -141,7 +141,13 @@ func (t *tokenEndpoint[TNodeKind]) expectCore(
 	} else {
 		children := make([]*syntaxa.Grammar[lexarch.TokenKind, TNodeKind], len(tokens))
 		for i, tok := range tokens {
-			children[i] = syntaxa.Token[lexarch.TokenKind, TNodeKind](grammarID, tok)
+			child := syntaxa.Token[lexarch.TokenKind, TNodeKind](grammarID, tok)
+			// Each GToken must carry OutputNodeKind: lowering lookahead reads terminals from
+			// choice arms; a kind only on the parent GChoice is invisible to editor IR.
+			if addNode {
+				child.OutputNodeKind = &outputNodeKind
+			}
+			children[i] = child
 		}
 		grammar = syntaxa.Choice(grammarID, children...)
 	}
