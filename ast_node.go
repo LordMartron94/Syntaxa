@@ -34,15 +34,23 @@ type SyntaxaLSTNode[TNodeKind comparable] struct {
 	// ---------------------------------------------------------
 	// SOURCE MAPPING
 	// ---------------------------------------------------------
+	// Byte offsets (start/end) are authoritative after span merge. Diagnostic line/column are
+	// optional cache filled by LSTNodeLineSpanFromSource / LSTNodeLineSpanForDiagnostics (or
+	// LSTEditor.SetCachedDiagnosticLineSpan); invalidated when the merged byte span changes.
 
-	start       int
-	end         int
-	startLine   int
-	startColumn int
-	endLine     int
-	endColumn   int
+	start int
+	end   int
 
 	spanValid bool
+
+	diagLineCacheValid  bool
+	diagLineCacheSL     int
+	diagLineCacheSC     int
+	diagLineCacheEL     int
+	diagLineCacheEC     int
+	diagLineCacheKeyS   int
+	diagLineCacheKeyE   int
+	diagLineCacheKeyTab int
 
 	// ---------------------------------------------------------
 	// STRUCTURAL RELATIONSHIPS
@@ -173,23 +181,41 @@ func (n *SyntaxaLSTNode[TKind]) Span() (int, int) {
 	return n.start, n.end
 }
 
-func (n *SyntaxaLSTNode[TKind]) LineSpan() (int, int, int, int) {
-	if !n.spanValid {
-		panic("LineSpan called without valid span!")
+/*
+CachedDiagnosticLineSpan returns the last diagnostic line/column cached for this node’s
+current byte span and tabWidth. ok is false if there is no cache, spanValid is false, or keys
+do not match (including tab width).
+*/
+func (n *SyntaxaLSTNode[TKind]) CachedDiagnosticLineSpan(tabWidth int) (sl, sc, el, ec int, ok bool) {
+	if n == nil || !n.spanValid || !n.diagLineCacheValid {
+		return 0, 0, 0, 0, false
 	}
-
-	return n.startLine, n.startColumn, n.endLine, n.endColumn
+	if tabWidth <= 0 {
+		tabWidth = 4
+	}
+	if n.start != n.diagLineCacheKeyS || n.end != n.diagLineCacheKeyE || tabWidth != n.diagLineCacheKeyTab {
+		return 0, 0, 0, 0, false
+	}
+	return n.diagLineCacheSL, n.diagLineCacheSC, n.diagLineCacheEL, n.diagLineCacheEC, true
 }
 
+/*
+FullSpan returns byte span always. StartLine/EndLine/StartColumn/EndColumn are filled only
+when a diagnostic line cache is present for the current start/end keys (see
+LSTNodeLineSpanFromSource or SetCachedDiagnosticLineSpan); otherwise they are zero.
+*/
 func (n *SyntaxaLSTNode[TNodeKind]) FullSpan() Span {
-	return Span{
-		Start:       n.start,
-		End:         n.end,
-		StartLine:   n.startLine,
-		EndLine:     n.endLine,
-		StartColumn: n.startColumn,
-		EndColumn:   n.endColumn,
+	s := Span{
+		Start: n.start,
+		End:   n.end,
 	}
+	if n.spanValid && n.diagLineCacheValid && n.start == n.diagLineCacheKeyS && n.end == n.diagLineCacheKeyE {
+		s.StartLine = n.diagLineCacheSL
+		s.StartColumn = n.diagLineCacheSC
+		s.EndLine = n.diagLineCacheEL
+		s.EndColumn = n.diagLineCacheEC
+	}
+	return s
 }
 
 type Span struct {

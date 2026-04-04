@@ -318,7 +318,10 @@ func (d *LSTDebugger[TKind]) writeNodeLine(
 	if f.ShowLineSpan && node.spanValid {
 		sl, sc, el, ec, ok := LSTNodeLineSpanFromSource(node, f.LineSpanSource, f.LineSpanTabWidth)
 		if !ok {
-			sl, sc, el, ec = node.LineSpan()
+			sl, sc, el, ec, ok = node.CachedDiagnosticLineSpan(f.LineSpanTabWidth)
+		}
+		if !ok {
+			sl, sc, el, ec = 0, 0, 0, 0
 		}
 		txt := fmt.Sprintf("(%d:%d → %d:%d)", sl, sc, el, ec)
 		txt = f.applyColor(txt, f.ColorSpan)

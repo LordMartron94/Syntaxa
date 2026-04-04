@@ -158,11 +158,8 @@ func lstNodeResetForPool[TKind comparable](n *SyntaxaLSTNode[TKind]) {
 
 	n.start = 0
 	n.end = 0
-	n.startLine = 0
-	n.startColumn = 0
-	n.endLine = 0
-	n.endColumn = 0
 	n.spanValid = false
+	lstNodeInvalidateDiagnosticLineCache(n)
 
 	n.revision = 0
 	n.postProcessed = false
@@ -360,18 +357,36 @@ func (e *LSTEditor[TKind]) SetSpan(
 	e.markDirtyNode(node)
 }
 
-func (e *LSTEditor[TKind]) SetLineSpan(
+/*
+SetCachedDiagnosticLineSpan stores line/column for the node’s current merged byte span without
+re-running the lexer/source mapping. tabWidth must match the value future
+CachedDiagnosticLineSpan / LSTNodeLineSpanFromSource calls use for cache hits.
+
+Requires spanValid. Does not mark the tree dirty.
+*/
+func (e *LSTEditor[TKind]) SetCachedDiagnosticLineSpan(
 	node *SyntaxaLSTNode[TKind],
 	sl, sc, el, ec int,
+	tabWidth int,
 ) {
 	e.ensureMutable()
-
-	node.startLine = sl
-	node.startColumn = sc
-	node.endLine = el
-	node.endColumn = ec
-
-	e.markDirtyNode(node)
+	if node == nil {
+		return
+	}
+	if !node.spanValid {
+		panic("SetCachedDiagnosticLineSpan: node has no merged byte span (spanValid is false)")
+	}
+	if tabWidth <= 0 {
+		tabWidth = 4
+	}
+	node.diagLineCacheSL = sl
+	node.diagLineCacheSC = sc
+	node.diagLineCacheEL = el
+	node.diagLineCacheEC = ec
+	node.diagLineCacheKeyS = node.start
+	node.diagLineCacheKeyE = node.end
+	node.diagLineCacheKeyTab = tabWidth
+	node.diagLineCacheValid = true
 }
 
 func (e *LSTEditor[TKind]) markDirtyNode(n *SyntaxaLSTNode[TKind]) {
@@ -380,6 +395,7 @@ func (e *LSTEditor[TKind]) markDirtyNode(n *SyntaxaLSTNode[TKind]) {
 	}
 	n.revision++
 	n.spanValid = false
+	lstNodeInvalidateDiagnosticLineCache(n)
 	e.treeDirty = true
 }
 
@@ -479,13 +495,15 @@ func (e *LSTEditor[TKind]) ensureSpanValid(
 	}
 
 	if !empty {
+		if !n.spanValid || n.start != acc.start || n.end != acc.end {
+			lstNodeInvalidateDiagnosticLineCache(n)
+		}
 		n.start, n.end = acc.start, acc.end
-		n.startLine, n.startColumn = 0, 0
-		n.endLine, n.endColumn = 0, 0
 		n.spanValid = true
 		return
 	}
 	n.spanValid = false
+	lstNodeInvalidateDiagnosticLineCache(n)
 }
 
 /* ComputeSpans should be called to ensure all spans inside the tree are valid. */

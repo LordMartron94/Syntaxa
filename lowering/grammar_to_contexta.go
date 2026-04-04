@@ -152,6 +152,29 @@ func grammarWalkChildren[TNodeKind comparable](g *syntaxa.Grammar[lexarch.TokenK
 	return out
 }
 
+func choiceArmGuardsToPattern[TNodeKind comparable](c *syntaxa.Grammar[lexarch.TokenKind, TNodeKind]) []pattern.LookaheadConstraint[lexarch.TokenKind] {
+	if c == nil {
+		return nil
+	}
+	var la []syntaxa.Lookahead[lexarch.TokenKind]
+	if len(c.Lookaheads) > 0 {
+		la = c.Lookaheads
+	} else if c.Kind == syntaxa.GReference && c.ResolvedReference != nil {
+		la = syntaxa.FirstLookaheadsInSubtreeBFS(c.ResolvedReference)
+	}
+	if len(la) == 0 {
+		return nil
+	}
+	out := make([]pattern.LookaheadConstraint[lexarch.TokenKind], len(la))
+	for i := range la {
+		out[i] = pattern.LookaheadConstraint[lexarch.TokenKind]{
+			Offset: la[i].Offset,
+			Token:  la[i].Expected,
+		}
+	}
+	return out
+}
+
 func syntaxaNodeToContextaRule[TNodeKind comparable](
 	g *syntaxa.Grammar[lexarch.TokenKind, TNodeKind],
 	rules map[syntaxa.GrammarLabel]*syntaxa.Grammar[lexarch.TokenKind, TNodeKind],
@@ -197,14 +220,8 @@ func syntaxaNodeToContextaRule[TNodeKind comparable](
 				prod := pattern.Production[lexarch.TokenKind, struct{}]{
 					Symbols: []pattern.Symbol[lexarch.TokenKind, struct{}]{{Type: pattern.SYMBOL_NON_TERMINAL, Name: pathToRuleName[*c.NodePath]}},
 				}
-				if len(c.Lookaheads) > 0 {
-					prod.Guard = make([]pattern.LookaheadConstraint[lexarch.TokenKind], len(c.Lookaheads))
-					for i, la := range c.Lookaheads {
-						prod.Guard[i] = pattern.LookaheadConstraint[lexarch.TokenKind]{
-							Offset: la.Offset,
-							Token:  la.Expected,
-						}
-					}
+				if guards := choiceArmGuardsToPattern(c); len(guards) > 0 {
+					prod.Guard = guards
 				}
 				prods = append(prods, prod)
 			}

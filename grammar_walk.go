@@ -171,3 +171,35 @@ func grammarWalkChildrenInto[TToken, TNodeKind comparable](
 func grammarWalkChildren[TToken, TNodeKind comparable](g *Grammar[TToken, TNodeKind]) []*Grammar[TToken, TNodeKind] {
 	return grammarWalkChildrenInto(g, nil)
 }
+
+/*
+FirstLookaheadsInSubtreeBFS returns a copy of the first non-empty Lookaheads slice
+encountered in a breadth-first walk from root.
+
+Cycle-safe via GrammarKey. Used for choice arms that are GReference nodes: predict
+constraints live on the referenced subtree, not on the reference node itself.
+*/
+func FirstLookaheadsInSubtreeBFS[TToken, TNodeKind comparable](root *Grammar[TToken, TNodeKind]) []Lookahead[TToken] {
+	if root == nil {
+		return nil
+	}
+	visited := make(map[GrammarKey]bool)
+	queue := []*Grammar[TToken, TNodeKind]{root}
+	for head := 0; head < len(queue); head++ {
+		g := queue[head]
+		if g == nil || g.NodePath == nil {
+			continue
+		}
+		if visited[g.GrammarKey] {
+			continue
+		}
+		visited[g.GrammarKey] = true
+		if len(g.Lookaheads) > 0 {
+			out := make([]Lookahead[TToken], len(g.Lookaheads))
+			copy(out, g.Lookaheads)
+			return out
+		}
+		queue = grammarWalkChildrenInto(g, queue)
+	}
+	return nil
+}

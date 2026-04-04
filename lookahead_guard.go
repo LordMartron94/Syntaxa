@@ -27,8 +27,8 @@ Mutually exclusive means: there exists an offset where both guards fix a token a
 tokens differ.
 */
 func GuardsMutuallyExclusive(a, b []Lookahead[lexarch.TokenKind]) bool {
-	ma, badA := guardConstrainedTokens(a)
-	mb, badB := guardConstrainedTokens(b)
+	ma, badA := GuardPeekConstraints(a)
+	mb, badB := GuardPeekConstraints(b)
 	if badA || badB {
 		return false
 	}
@@ -40,7 +40,13 @@ func GuardsMutuallyExclusive(a, b []Lookahead[lexarch.TokenKind]) bool {
 	return false
 }
 
-func guardConstrainedTokens(g []Lookahead[lexarch.TokenKind]) (map[int]lexarch.TokenKind, bool) {
+/*
+GuardPeekConstraints maps each peek offset in g to the single required token.
+
+If the same offset appears twice with different expected tokens, returns (nil, true)
+(self-contradictory guard). Empty g yields an empty map.
+*/
+func GuardPeekConstraints(g []Lookahead[lexarch.TokenKind]) (map[int]lexarch.TokenKind, bool) {
 	m := make(map[int]lexarch.TokenKind)
 	for _, x := range g {
 		if prev, ok := m[x.Offset]; ok && prev != x.Expected {
