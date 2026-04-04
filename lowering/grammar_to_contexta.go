@@ -194,9 +194,19 @@ func syntaxaNodeToContextaRule[TNodeKind comparable](
 		prods := make([]pattern.Production[lexarch.TokenKind, struct{}], 0, len(g.Children))
 		for _, c := range g.Children {
 			if c != nil && c.NodePath != nil {
-				prods = append(prods, pattern.Production[lexarch.TokenKind, struct{}]{
+				prod := pattern.Production[lexarch.TokenKind, struct{}]{
 					Symbols: []pattern.Symbol[lexarch.TokenKind, struct{}]{{Type: pattern.SYMBOL_NON_TERMINAL, Name: pathToRuleName[*c.NodePath]}},
-				})
+				}
+				if len(c.Lookaheads) > 0 {
+					prod.Guard = make([]pattern.LookaheadConstraint[lexarch.TokenKind], len(c.Lookaheads))
+					for i, la := range c.Lookaheads {
+						prod.Guard[i] = pattern.LookaheadConstraint[lexarch.TokenKind]{
+							Offset: la.Offset,
+							Token:  la.Expected,
+						}
+					}
+				}
+				prods = append(prods, prod)
 			}
 		}
 		rule.Productions = prods

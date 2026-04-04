@@ -676,12 +676,7 @@ func (r *ruleEndpoint[TNodeKind]) predictRule(
 	var pred func(ctx *syntaxa.SelectRuleContext) bool
 	if len(lookaheads) > 0 {
 		pred = func(ctx *syntaxa.SelectRuleContext) bool {
-			for _, l := range lookaheads {
-				if ctx.Peek(l.Offset).Token != l.Expected {
-					return false
-				}
-			}
-			return true
+			return syntaxa.GuardMatchesLookahead(ctx.Peek, lookaheads)
 		}
 	} else {
 		pred = predicate
@@ -2140,6 +2135,10 @@ func choiceCandidateIndicesFromAnalysis[TNodeKind comparable](
 		nodeKey := syntaxa.NodeKeyFromPath(*grammar.NodePath)
 		firstSet, hasFirst := analysis.First[nodeKey]
 		nullable, hasNullable := analysis.Nullable[nodeKey]
+		if arm, ok := analysis.ArmPredict[nodeKey]; ok && len(arm.First) > 0 {
+			firstSet = arm.First
+			hasFirst = true
+		}
 		if !hasFirst || !hasNullable {
 			candidateIndices = append(candidateIndices, idx)
 			continue
@@ -2149,9 +2148,19 @@ func choiceCandidateIndicesFromAnalysis[TNodeKind comparable](
 			candidateIndices = append(candidateIndices, idx)
 			continue
 		}
-		if _, exists := firstSet[peekToken]; exists {
-			candidateIndices = append(candidateIndices, idx)
+		if _, exists := firstSet[peekToken]; !exists {
+			continue
 		}
+		var guard []syntaxa.Lookahead[lexarch.TokenKind]
+		if arm, ok := analysis.ArmPredict[nodeKey]; ok && len(arm.Guard) > 0 {
+			guard = arm.Guard
+		} else if len(grammar.Lookaheads) > 0 {
+			guard = grammar.Lookaheads
+		}
+		if len(guard) > 0 && !syntaxa.GuardMatchesLookahead(ctx.Select.Peek, guard) {
+			continue
+		}
+		candidateIndices = append(candidateIndices, idx)
 	}
 
 	if len(candidateIndices) == 0 {

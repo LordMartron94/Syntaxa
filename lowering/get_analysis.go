@@ -23,5 +23,5 @@ func GetAnalysis[TNodeKind comparable](
 		return nil
 	}
 	pa := pattern.ComputeAnalysis(cfg)
-	return syntaxa.GrammarAnalysisFromPattern(pa, ruleNameToNodeKey)
+	return syntaxa.GrammarAnalysisFromPattern(cfg, pa, ruleNameToNodeKey)
 }

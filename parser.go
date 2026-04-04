@@ -128,8 +128,7 @@ type SyntaxaParser[TNodeKind comparable] struct {
 	nodePoolPrefill  int
 	nodePoolGrow     func(currentCap, needed int) int
 
-	tokenFormatter       func(token lexarch.TokenKind) string
-	observationFormatter ObservationFormatter
+	tokenFormatter func(token lexarch.TokenKind) string
 
 	eofToken lexarch.TokenKind
 
@@ -156,7 +155,6 @@ func SyntaxaParserCreate[TNodeKind comparable](
 	grammarPackage *GrammarPackage[TNodeKind],
 	registry RuleRegistry[TNodeKind],
 	tokenFormatter func(token lexarch.TokenKind) string,
-	observationFormatter ObservationFormatter,
 	nodePostProcessor NodePostProcessor[TNodeKind],
 	eofToken lexarch.TokenKind,
 	rootNodeKind, errorNodeKind TNodeKind,
@@ -169,18 +167,17 @@ func SyntaxaParserCreate[TNodeKind comparable](
 	boundRegistry := bindMergedRecoveryIntoRegistry(registry, grammarPackage.MergedRecoveryByGrammarLabel)
 	programRule := bindMergedRecoveryToRule(*grammarPackage.EntryRuleParserRule, grammarPackage.MergedRecoveryByGrammarLabel)
 	return &SyntaxaParser[TNodeKind]{
-		grammarPackage:       grammarPackage,
-		registry:             boundRegistry,
-		programRule:          programRule,
-		tokenFormatter:       tokenFormatter,
-		observationFormatter: observationFormatter,
-		postProcessor:        nodePostProcessor,
-		eofToken:             eofToken,
-		rootNodeKind:         rootNodeKind,
-		errorNodeKind:        errorNodeKind,
-		freezeAfterParse:     freezeAfterParse,
-		defaultSkipRoles:     nil,
-		getAnalysis:          getAnalysis,
+		grammarPackage:   grammarPackage,
+		registry:         boundRegistry,
+		programRule:      programRule,
+		tokenFormatter:   tokenFormatter,
+		postProcessor:    nodePostProcessor,
+		eofToken:         eofToken,
+		rootNodeKind:     rootNodeKind,
+		errorNodeKind:    errorNodeKind,
+		freezeAfterParse: freezeAfterParse,
+		defaultSkipRoles: nil,
+		getAnalysis:      getAnalysis,
 	}
 }
 

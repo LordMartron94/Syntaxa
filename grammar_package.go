@@ -81,14 +81,30 @@ type NestSpec[TNodeKind comparable] struct {
 }
 
 /*
+GuardedArm holds per-production predictive data for a grammar node that is the single
+non-terminal RHS of a Contexta rule production (e.g. one arm of a Syntaxa GChoice).
+
+ArmPredict maps that child node’s NodeKey to its clause FIRST (including FOLLOW of the
+parent when the arm is nullable) and the production guard (predict lookahead list).
+*/
+type GuardedArm struct {
+	First TokenSet
+	Guard []Lookahead[lexarch.TokenKind]
+}
+
+/*
 GrammarAnalysis holds the results of nullable, first, and follow computation for a grammar.
 
 Maps are keyed by NodeKey. Used by the parser for prediction and error reporting.
+
+ArmPredict is populated from pattern ProductionClauses when lowering provides the Contexta
+grammar; see GrammarAnalysisFromPattern.
 */
 type GrammarAnalysis struct {
-	Nullable map[NodeKey]bool
-	First    map[NodeKey]TokenSet
-	Follow   map[NodeKey]TokenSet
+	Nullable   map[NodeKey]bool
+	First      map[NodeKey]TokenSet
+	Follow     map[NodeKey]TokenSet
+	ArmPredict map[NodeKey]GuardedArm
 }
 
 /*
@@ -228,21 +244,35 @@ func ProducePackage[TNodeKind comparable](
 
 /*
 GrammarAnalysisFromPattern builds Syntaxa's GrammarAnalysis from pattern's analysis.
+
+grammar is the same Contexta grammar passed to ComputeAnalysis (required to attach
+per-production clauses to child rule names). It may be nil; ArmPredict is left empty.
+
 ruleNameToNodeKey maps pattern rule names (readable Label_hash) to NodeKey; when present
 each pattern key is copied to the corresponding NodeKey. When nil, pattern keys are
 used as NodeKey directly (backward compatibility). Exported for use by syntaxa/lowering.
 */
-func GrammarAnalysisFromPattern(pa *pattern.GrammarAnalysis[lexarch.TokenKind], ruleNameToNodeKey map[string]NodeKey) *GrammarAnalysis {
-	if pa == nil {
+func GrammarAnalysisFromPattern(
+	grammar *pattern.Grammar[lexarch.TokenKind, struct{}],
+	pa *pattern.GrammarAnalysis[lexarch.TokenKind],
+	ruleNameToNodeKey map[string]NodeKey,
+) *GrammarAnalysis {
+	empty := func() *GrammarAnalysis {
 		return &GrammarAnalysis{
-			Nullable: make(map[NodeKey]bool),
-			First:    make(map[NodeKey]TokenSet),
-			Follow:   make(map[NodeKey]TokenSet),
+			Nullable:   make(map[NodeKey]bool),
+			First:      make(map[NodeKey]TokenSet),
+			Follow:     make(map[NodeKey]TokenSet),
+			ArmPredict: make(map[NodeKey]GuardedArm),
 		}
+	}
+	if pa == nil {
+		return empty()
 	}
 	nullable := make(map[NodeKey]bool)
 	first := make(map[NodeKey]TokenSet)
 	follow := make(map[NodeKey]TokenSet)
+	armPredict := make(map[NodeKey]GuardedArm)
+
 	nodeKey := func(ruleName string) NodeKey {
 		if ruleNameToNodeKey != nil {
 			if k, ok := ruleNameToNodeKey[ruleName]; ok {
@@ -251,6 +281,7 @@ func GrammarAnalysisFromPattern(pa *pattern.GrammarAnalysis[lexarch.TokenKind], 
 		}
 		return NodeKey(ruleName)
 	}
+
 	for k, v := range pa.Nullable {
 		nullable[nodeKey(k)] = v
 	}
@@ -268,7 +299,44 @@ func GrammarAnalysisFromPattern(pa *pattern.GrammarAnalysis[lexarch.TokenKind], 
 		}
 		follow[nodeKey(k)] = dst
 	}
-	return &GrammarAnalysis{Nullable: nullable, First: first, Follow: follow}
+
+	if grammar != nil && pa.ProductionClauses != nil {
+		for _, rule := range grammar.Rules {
+			clauses := pa.ProductionClauses[rule.NonTerminal]
+			if len(clauses) == 0 {
+				continue
+			}
+			for i := range rule.Productions {
+				if i >= len(clauses) {
+					break
+				}
+				clause := clauses[i]
+				if clause.ChildRuleName == "" {
+					continue
+				}
+				childKey := nodeKey(clause.ChildRuleName)
+				dstFirst := make(TokenSet)
+				for t := range clause.First {
+					dstFirst[t] = struct{}{}
+				}
+				var dstGuard []Lookahead[lexarch.TokenKind]
+				if len(clause.Guard) > 0 {
+					dstGuard = make([]Lookahead[lexarch.TokenKind], len(clause.Guard))
+					for j, g := range clause.Guard {
+						dstGuard[j] = Lookahead[lexarch.TokenKind]{Offset: g.Offset, Expected: g.Token}
+					}
+				}
+				armPredict[childKey] = GuardedArm{First: dstFirst, Guard: dstGuard}
+			}
+		}
+	}
+
+	return &GrammarAnalysis{
+		Nullable:   nullable,
+		First:      first,
+		Follow:     follow,
+		ArmPredict: armPredict,
+	}
 }
 
 // ============================================================
