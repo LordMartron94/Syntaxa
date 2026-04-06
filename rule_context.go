@@ -351,6 +351,34 @@ func (ec *errorCore) reportLexerError(line, column int, description string) {
 type tokenSet map[lexarch.TokenRole]struct{}
 
 /*
+lexerStateCore holds lexer stack operations for the active LexingSession (when present).
+
+For slice-based contexts (no live session), all operations are no-ops and Current returns "".
+*/
+type lexerStateCore struct {
+	set     func(string)
+	push    func(...string)
+	pop     func(int)
+	current func() string
+}
+
+func (ls *lexerStateCore) Set(state string) {
+	ls.set(state)
+}
+
+func (ls *lexerStateCore) Push(states ...string) {
+	ls.push(states...)
+}
+
+func (ls *lexerStateCore) Pop(amount int) {
+	ls.pop(amount)
+}
+
+func (ls *lexerStateCore) Current() string {
+	return ls.current()
+}
+
+/*
 ExecRuleContext exposes transactional, mutating parsing operations.
 */
 type ExecRuleContext[TNodeKind comparable] struct {
@@ -366,6 +394,9 @@ type ExecRuleContext[TNodeKind comparable] struct {
 	/* The Error endpoint provides access to syntax error reporting functionality. */
 	Error *errorCore
 
+	/* LexerState is the endpoint for lexing state stack operations (set, push, pop, current). */
+	LexerState *lexerStateCore
+
 	/* ExecuteRule routes a rule through the parser for invariant detection. */
 	ExecuteRule func(rule ParserRule[TNodeKind], mode RuleExecutionMode) RuleResult[TNodeKind]
 
@@ -374,7 +405,7 @@ type ExecRuleContext[TNodeKind comparable] struct {
 	// Specific LST/State helpers
 	Editor *LSTEditor[TNodeKind]
 
-	/* SetLexerState alters the lexer state for languages with multiple lexer states. */
+	/* SetLexerState alters the lexer state for languages with multiple lexer states. Same as LexerState.Set. */
 	SetLexerState func(string)
 
 	Select       *SelectRuleContext
@@ -529,7 +560,7 @@ func BuildExecRuleContextFromSlice[TNodeKind comparable](
 
 	// Context specific overrides
 	ctx.lastLexingError = func() error { return nil }
-	ctx.SetLexerState = func(s string) {}
+	ctx.SetLexerState = func(s string) { ctx.LexerState.Set(s) }
 	ctx.GetLastConsumedLexeme = func() (Lexeme, bool) {
 		if *cursor > 0 {
 			return lexemes[*cursor-1], true
@@ -602,7 +633,8 @@ func BuildExecRuleContextFromLexerSession[TNodeKind comparable](
 	ctx := buildBaseContext(parser, errors, src, save, restore, streamStats, engineStats)
 
 	ctx.lastLexingError = func() error { return out.LexingError }
-	ctx.SetLexerState = func(state string) { lexarch.LexingSessionSet(session, state) }
+	ctx.LexerState = lexerStateFromSession(session)
+	ctx.SetLexerState = func(state string) { ctx.LexerState.Set(state) }
 	ctx.GetLastConsumedLexeme = func() (Lexeme, bool) {
 		return lastConsumed, hasConsumed
 	}
@@ -680,11 +712,12 @@ func buildBaseContext[TNodeKind comparable](
 
 	// Assemble Context
 	ctx := ExecRuleContext[TNodeKind]{
-		Token:    tStream,
-		Recovery: rCore,
-		Skip:     sCore,
-		Error:    eCore,
-		Editor:   editor,
+		Token:      tStream,
+		Recovery:   rCore,
+		Skip:       sCore,
+		Error:      eCore,
+		LexerState: lexerStateNoop(),
+		Editor:     editor,
 		createErrorNode: func(message string) *SyntaxaLSTNode[TNodeKind] {
 			n := editor.NewNode(parser.errorNodeKind)
 			editor.SetAttribute(n, "error", message)
@@ -744,4 +777,30 @@ func buildBaseContext[TNodeKind comparable](
 	}
 
 	return ctxPtr
+}
+
+func lexerStateNoop() *lexerStateCore {
+	return &lexerStateCore{
+		set:     func(string) {},
+		push:    func(...string) {},
+		pop:     func(int) {},
+		current: func() string { return "" },
+	}
+}
+
+func lexerStateFromSession(session *lexarch.LexingSession) *lexerStateCore {
+	return &lexerStateCore{
+		set: func(state string) {
+			lexarch.LexingSessionSet(session, state)
+		},
+		push: func(states ...string) {
+			lexarch.LexingSessionPushStates(session, states...)
+		},
+		pop: func(amount int) {
+			lexarch.LexingSessionPop(session, amount)
+		},
+		current: func() string {
+			return lexarch.LexingSessionStateCurrent(session)
+		},
+	}
 }

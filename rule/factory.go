@@ -541,6 +541,123 @@ type ruleEndpoint[TNodeKind comparable] struct {
 }
 
 /*
+LexerStateSet switches the parser-visible lexer frame to the given state (lexarch.LexingSessionSet).
+
+Does not consume tokens. Parser snapshots restore lexer state when a containing rule fails.
+
+Prerequisites:
+- grammarID identifies this production for tracing and IR.
+- state must be a registered lexing state descriptor when using a live LexingSession.
+*/
+func (r *ruleEndpoint[TNodeKind]) LexerStateSet(
+	grammarID syntaxa.GrammarLabel,
+	state string,
+) Rule[TNodeKind] {
+	name := r.sharedCore.createRuleName("LexerStateSet", grammarID)
+	identity := r.sharedCore.createRuleIdentity(name, grammarID, fmt.Sprintf("lexer state %q", state))
+	grammar := syntaxa.Epsilon[lexarch.TokenKind, TNodeKind](grammarID)
+
+	exec := func(ctx *syntaxa.ExecRuleContext[TNodeKind]) Result[TNodeKind] {
+		ctx.LexerState.Set(state)
+		return r.sharedCore.buildSuccessRuleResult(nil)
+	}
+
+	return r.sharedCore.constructOptionalRule(identity, exec, nil, grammar)
+}
+
+/*
+LexerStatePush pushes parser-owned lexer states onto the stack (lexarch.LexingSessionPushStates).
+
+Does not consume tokens. When a containing rule fails, snapshots restore the stack as before the push.
+
+Prerequisites:
+- Each state must be a registered descriptor when using a live LexingSession.
+- An empty states list is a no-op (matches lexarch).
+*/
+func (r *ruleEndpoint[TNodeKind]) LexerStatePush(
+	grammarID syntaxa.GrammarLabel,
+	states ...string,
+) Rule[TNodeKind] {
+	name := r.sharedCore.createRuleName("LexerStatePush", grammarID)
+	label := strings.Join(states, " ")
+	if label == "" {
+		label = "(noop)"
+	}
+	identity := r.sharedCore.createRuleIdentity(name, grammarID, fmt.Sprintf("push %s", label))
+	grammar := syntaxa.Epsilon[lexarch.TokenKind, TNodeKind](grammarID)
+
+	exec := func(ctx *syntaxa.ExecRuleContext[TNodeKind]) Result[TNodeKind] {
+		ctx.LexerState.Push(states...)
+		return r.sharedCore.buildSuccessRuleResult(nil)
+	}
+
+	return r.sharedCore.constructOptionalRule(identity, exec, nil, grammar)
+}
+
+/*
+LexerStatePop pops parser-owned lexer stack frames (lexarch.LexingSessionPop).
+
+Does not consume tokens. Parser snapshots restore lexer state when a containing rule fails.
+
+Prerequisites:
+- amount is passed to lexarch (clamped if it would cross lexer-owned frames).
+*/
+func (r *ruleEndpoint[TNodeKind]) LexerStatePop(
+	grammarID syntaxa.GrammarLabel,
+	amount int,
+) Rule[TNodeKind] {
+	name := r.sharedCore.createRuleName("LexerStatePop", grammarID)
+	identity := r.sharedCore.createRuleIdentity(name, grammarID, fmt.Sprintf("pop %d", amount))
+	grammar := syntaxa.Epsilon[lexarch.TokenKind, TNodeKind](grammarID)
+
+	exec := func(ctx *syntaxa.ExecRuleContext[TNodeKind]) Result[TNodeKind] {
+		ctx.LexerState.Pop(amount)
+		return r.sharedCore.buildSuccessRuleResult(nil)
+	}
+
+	return r.sharedCore.constructOptionalRule(identity, exec, nil, grammar)
+}
+
+/*
+LexerStateIn pushes the given states, runs inner, then pops the same number of frames on success.
+
+If inner fails, the rule engine restores the snapshot from before this rule, undoing the push.
+
+Prerequisites:
+- states must be valid descriptors when using a live LexingSession.
+- With no states, this is equivalent to executing inner alone.
+*/
+func (r *ruleEndpoint[TNodeKind]) LexerStateIn(
+	grammarID syntaxa.GrammarLabel,
+	inner Rule[TNodeKind],
+	states ...string,
+) Rule[TNodeKind] {
+	name := r.sharedCore.createRuleName("LexerStateIn", grammarID)
+	identity := r.sharedCore.createRuleIdentity(name, grammarID, inner.GetExpectedLabel())
+
+	innerContract := inner.GetContract()
+	exec := func(ctx *syntaxa.ExecRuleContext[TNodeKind]) Result[TNodeKind] {
+		if len(states) > 0 {
+			ctx.LexerState.Push(states...)
+		}
+		res := ctx.ExecuteRule(inner, syntaxa.ExecutionNormal)
+		if len(states) > 0 && res.Succeeded {
+			ctx.LexerState.Pop(len(states))
+		}
+		return res
+	}
+
+	return r.sharedCore.constructRule(
+		identity,
+		r.sharedCore.createContract(innerContract.MustConsume, innerContract.MustReturnNode),
+		exec,
+		inner.GetRecoveryTokens(),
+		nil,
+		inner.GetGrammar(),
+	)
+}
+
+/*
 Optional wraps a rule so that it may match zero or one time.
 
 The inner rule is executed in probe mode: if it fails, no diagnostic is reported and the optional succeeds with a nil node. If it succeeds, its result is returned.
