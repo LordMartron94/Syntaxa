@@ -1,9 +1,9 @@
 package lowering
 
 import (
-	"lexarch"
 	"fmt"
 	"foundation/hash"
+	"lexarch"
 	"strings"
 	"unicode"
 
@@ -119,6 +119,7 @@ type StateGraph[TNodeKind comparable] struct {
 	Transitions               map[string][]Transition[TNodeKind]
 	NestBodyContextIDs        map[syntaxa.GrammarLabel]string
 	NestContentParentNodeKind map[string]TNodeKind
+	ContextOwnerNodeKind      map[string]TNodeKind
 }
 
 const rootLabel = "root"
@@ -175,11 +176,15 @@ func BuildStateGraph[TNodeKind comparable](
 	metaByID := make(map[string]ContextMeta)
 	nestBodyIDs := make(map[syntaxa.GrammarLabel]string)
 	nestContentParentNodeKind := make(map[string]TNodeKind)
+	contextOwnerNodeKind := make(map[string]TNodeKind)
 
 	entryTerminals, isNullable := lookahead(entryRule, rules, make(visiting), analysis)
 	rootKey := lookaheadKey(entryTerminals, tokenHash, nodeKindHash, hasher)
 	rootCtx := &Context{ID: rootLabel, Label: rootLabel}
 	ctxByKey[rootKey] = rootCtx
+	if entryRule.OutputNodeKind != nil {
+		contextOwnerNodeKind[rootLabel] = *entryRule.OutputNodeKind
+	}
 
 	if isNullable {
 		metaByID[rootLabel] = ContextMeta{HasOptionalContinuation: true}
@@ -196,7 +201,7 @@ func BuildStateGraph[TNodeKind comparable](
 		for _, term := range p.terms {
 			tr := buildTransition(
 				term, p.nameHint, rules, analysis, tokenHash, nodeKindHash, hasher,
-				ctxByKey, transitionsByID, metaByID, nestBodyIDs, nestContentParentNodeKind, &queue, p.inheritedSyncs,
+				ctxByKey, transitionsByID, metaByID, nestBodyIDs, nestContentParentNodeKind, contextOwnerNodeKind, &queue, p.inheritedSyncs,
 			)
 			if tr.TargetContextIDs != nil || tr.Operation == OpPop || tr.Operation == OpMatch {
 				transitionsByID[p.ctxID] = append(transitionsByID[p.ctxID], tr)
@@ -222,6 +227,7 @@ func BuildStateGraph[TNodeKind comparable](
 		Transitions:               transitionsByID,
 		NestBodyContextIDs:        nestBodyIDs,
 		NestContentParentNodeKind: nestContentParentNodeKind,
+		ContextOwnerNodeKind:      contextOwnerNodeKind,
 	}, nil
 }
 
@@ -238,15 +244,16 @@ func buildTransition[TNodeKind comparable](
 	metaByID map[string]ContextMeta,
 	nestBodyIDs map[syntaxa.GrammarLabel]string,
 	nestContentParentNodeKind map[string]TNodeKind,
+	contextOwnerNodeKind map[string]TNodeKind,
 	queue *[]pendingEntry[TNodeKind],
 	inheritedSyncs []lexarch.TokenKind,
 ) Transition[TNodeKind] {
 
 	if term.nestNode != nil {
-		return buildNestTransition(term, rules, analysis, tokenHash, nodeKindHash, hasher, ctxByKey, transitionsByID, metaByID, nestBodyIDs, nestContentParentNodeKind, queue, inheritedSyncs)
+		return buildNestTransition(term, rules, analysis, tokenHash, nodeKindHash, hasher, ctxByKey, transitionsByID, metaByID, nestBodyIDs, nestContentParentNodeKind, contextOwnerNodeKind, queue, inheritedSyncs)
 	}
 
-	return buildStandardTransition(term, nameHint, rules, analysis, tokenHash, nodeKindHash, hasher, ctxByKey, metaByID, queue, inheritedSyncs)
+	return buildStandardTransition(term, nameHint, rules, analysis, tokenHash, nodeKindHash, hasher, ctxByKey, metaByID, contextOwnerNodeKind, queue, inheritedSyncs)
 }
 
 func getOrCreateContext[TNodeKind comparable](
@@ -259,6 +266,8 @@ func getOrCreateContext[TNodeKind comparable](
 	hasher *hash.XXH3Hasher,
 	ctxByKey map[uint64]*Context,
 	metaByID map[string]ContextMeta,
+	contextOwnerNodeKind map[string]TNodeKind,
+	ownerNodeKind *TNodeKind,
 	queue *[]pendingEntry[TNodeKind],
 	inheritedSyncs []lexarch.TokenKind,
 ) *Context {
@@ -280,6 +289,9 @@ func getOrCreateContext[TNodeKind comparable](
 
 	c := &Context{ID: name, Label: name}
 	ctxByKey[key] = c
+	if ownerNodeKind != nil {
+		contextOwnerNodeKind[name] = *ownerNodeKind
+	}
 
 	if isNullable {
 		popAmt := 1
@@ -390,6 +402,7 @@ func buildNestTransition[TNodeKind comparable](
 	metaByID map[string]ContextMeta,
 	nestBodyIDs map[syntaxa.GrammarLabel]string,
 	nestContentParentNodeKind map[string]TNodeKind,
+	contextOwnerNodeKind map[string]TNodeKind,
 	queue *[]pendingEntry[TNodeKind],
 	inheritedSyncs []lexarch.TokenKind,
 ) Transition[TNodeKind] {
@@ -416,7 +429,8 @@ func buildNestTransition[TNodeKind comparable](
 		}
 	}
 
-	afterCtx := getOrCreateContext(advTerminals, ownerLabel, nestHint, isNullable, tokenHash, nodeKindHash, hasher, ctxByKey, metaByID, queue, inheritedSyncs)
+	ownerNodeKind := resolveOwnerNodeKind(ownerLabel, rules)
+	afterCtx := getOrCreateContext(advTerminals, ownerLabel, nestHint, isNullable, tokenHash, nodeKindHash, hasher, ctxByKey, metaByID, contextOwnerNodeKind, ownerNodeKind, queue, inheritedSyncs)
 
 	return Transition[TNodeKind]{
 		Token:            term.token,
@@ -436,6 +450,7 @@ func buildStandardTransition[TNodeKind comparable](
 	hasher *hash.XXH3Hasher,
 	ctxByKey map[uint64]*Context,
 	metaByID map[string]ContextMeta,
+	contextOwnerNodeKind map[string]TNodeKind,
 	queue *[]pendingEntry[TNodeKind],
 	inheritedSyncs []lexarch.TokenKind,
 ) Transition[TNodeKind] {
@@ -453,7 +468,8 @@ func buildStandardTransition[TNodeKind comparable](
 		}
 	}
 
-	next := getOrCreateContext(advTerminals, ownerLabel, nameHint, isNullable, tokenHash, nodeKindHash, hasher, ctxByKey, metaByID, queue, inheritedSyncs)
+	ownerNodeKind := resolveOwnerNodeKind(ownerLabel, rules)
+	next := getOrCreateContext(advTerminals, ownerLabel, nameHint, isNullable, tokenHash, nodeKindHash, hasher, ctxByKey, metaByID, contextOwnerNodeKind, ownerNodeKind, queue, inheritedSyncs)
 
 	return Transition[TNodeKind]{
 		Token:            term.token,
@@ -461,6 +477,20 @@ func buildStandardTransition[TNodeKind comparable](
 		Operation:        OpSet,
 		TargetContextIDs: []string{next.ID},
 	}
+}
+
+func resolveOwnerNodeKind[TNodeKind comparable](
+	ownerLabel syntaxa.GrammarLabel,
+	rules map[syntaxa.GrammarLabel]*syntaxa.Grammar[lexarch.TokenKind, TNodeKind],
+) *TNodeKind {
+	if ownerLabel == "" || ownerLabel == "anon" {
+		return nil
+	}
+	ownerRule := rules[ownerLabel]
+	if ownerRule == nil || ownerRule.OutputNodeKind == nil {
+		return nil
+	}
+	return ownerRule.OutputNodeKind
 }
 
 func propagatePopOffset[TNodeKind comparable](terminals []gTerminal[TNodeKind], offset int) {
