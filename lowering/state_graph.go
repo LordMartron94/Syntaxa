@@ -359,7 +359,10 @@ func getOrCreateNestBody[TNodeKind comparable](
 	contentCtx := &Context{ID: contentName, Label: contentName}
 	ctxByKey[contentKey] = contentCtx
 
-	if openingProductionNodeKind != nil {
+	bodyNodeKind := resolveNestBodyNodeKind(nestNode, rules)
+	if bodyNodeKind != nil {
+		nestContentParentNodeKind[contentName] = *bodyNodeKind
+	} else if openingProductionNodeKind != nil {
 		nestContentParentNodeKind[contentName] = *openingProductionNodeKind
 	}
 
@@ -388,6 +391,48 @@ func getOrCreateNestBody[TNodeKind comparable](
 		})
 	}
 	return c
+}
+
+func resolveNestBodyNodeKind[TNodeKind comparable](
+	nestNode *syntaxa.Grammar[lexarch.TokenKind, TNodeKind],
+	rules map[syntaxa.GrammarLabel]*syntaxa.Grammar[lexarch.TokenKind, TNodeKind],
+) *TNodeKind {
+	if nestNode == nil || len(nestNode.Children) == 0 || rules == nil {
+		return nil
+	}
+	return resolveNodeKindFromGrammarNode(nestNode.Children[0], rules)
+}
+
+func resolveNodeKindFromGrammarNode[TNodeKind comparable](
+	node *syntaxa.Grammar[lexarch.TokenKind, TNodeKind],
+	rules map[syntaxa.GrammarLabel]*syntaxa.Grammar[lexarch.TokenKind, TNodeKind],
+) *TNodeKind {
+	if node == nil {
+		return nil
+	}
+	if node.OutputNodeKind != nil {
+		return node.OutputNodeKind
+	}
+	if node.Kind == syntaxa.GReference {
+		if node.ResolvedReference != nil {
+			if node.ResolvedReference.OutputNodeKind != nil {
+				return node.ResolvedReference.OutputNodeKind
+			}
+			return resolveNodeKindFromGrammarNode(node.ResolvedReference, rules)
+		}
+		if target := rules[node.ReferenceTarget]; target != nil {
+			if target.OutputNodeKind != nil {
+				return target.OutputNodeKind
+			}
+			return resolveNodeKindFromGrammarNode(target, rules)
+		}
+	}
+	for _, child := range node.Children {
+		if nk := resolveNodeKindFromGrammarNode(child, rules); nk != nil {
+			return nk
+		}
+	}
+	return nil
 }
 
 func buildNestTransition[TNodeKind comparable](
