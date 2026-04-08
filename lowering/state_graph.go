@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"foundation/hash"
 	"lexarch"
+	"sort"
 	"strings"
 	"unicode"
 
@@ -219,6 +220,9 @@ func BuildStateGraph[TNodeKind comparable](
 			contexts = append(contexts, *c)
 		}
 	}
+	if err := validateRecoveryBoundaryOwnership(transitionsByID); err != nil {
+		return nil, err
+	}
 
 	return &StateGraph[TNodeKind]{
 		Contexts:                  contexts,
@@ -229,6 +233,30 @@ func BuildStateGraph[TNodeKind comparable](
 		NestContentParentNodeKind: nestContentParentNodeKind,
 		ContextOwnerNodeKind:      contextOwnerNodeKind,
 	}, nil
+}
+
+func validateRecoveryBoundaryOwnership[TNodeKind comparable](
+	transitionsByID map[string][]Transition[TNodeKind],
+) error {
+	for ctxID, transitions := range transitionsByID {
+		consuming := make(map[lexarch.TokenKind]struct{}, len(transitions))
+		recovery := make(map[lexarch.TokenKind]struct{}, len(transitions))
+		for _, tr := range transitions {
+			if tr.IsRecoveryTransition {
+				recovery[tr.Token] = struct{}{}
+				continue
+			}
+			if tr.Operation == OpMatch || tr.Operation == OpSet || tr.Operation == OpPush || tr.Operation == OpPop {
+				consuming[tr.Token] = struct{}{}
+			}
+		}
+		for tok := range recovery {
+			if _, exists := consuming[tok]; exists {
+				return fmt.Errorf("BuildStateGraph: context %q has competing recovery and consuming transitions for token %d", ctxID, tok)
+			}
+		}
+	}
+	return nil
 }
 
 func buildTransition[TNodeKind comparable](
@@ -271,7 +299,7 @@ func getOrCreateContext[TNodeKind comparable](
 	queue *[]pendingEntry[TNodeKind],
 	inheritedSyncs []lexarch.TokenKind,
 ) *Context {
-	key := lookaheadKey(terms, tokenHash, nodeKindHash, hasher)
+	key := buildContextKeyWithInheritedSyncs(terms, inheritedSyncs, tokenHash, nodeKindHash, hasher)
 	if c, ok := ctxByKey[key]; ok {
 		return c
 	}
@@ -310,6 +338,42 @@ func getOrCreateContext[TNodeKind comparable](
 	return c
 }
 
+func buildContextKeyWithInheritedSyncs[TNodeKind comparable](
+	terms []gTerminal[TNodeKind],
+	inheritedSyncs []lexarch.TokenKind,
+	tokenHash func(lexarch.TokenKind) uint64,
+	nodeKindHash func(TNodeKind) uint64,
+	hasher *hash.XXH3Hasher,
+) uint64 {
+	base := lookaheadKey(terms, tokenHash, nodeKindHash, hasher)
+	if len(inheritedSyncs) == 0 {
+		return base
+	}
+
+	normalized := append([]lexarch.TokenKind(nil), inheritedSyncs...)
+	sort.Slice(normalized, func(i, j int) bool { return normalized[i] < normalized[j] })
+
+	buf := make([]byte, 0, 16+len(normalized)*8)
+	buf = appendUint64LE(buf, base)
+	for _, tok := range normalized {
+		buf = appendUint64LE(buf, uint64(tok))
+	}
+	return hash.XXH3HasherHash64(hasher, buf)
+}
+
+func appendUint64LE(dst []byte, v uint64) []byte {
+	return append(dst,
+		byte(v),
+		byte(v>>8),
+		byte(v>>16),
+		byte(v>>24),
+		byte(v>>32),
+		byte(v>>40),
+		byte(v>>48),
+		byte(v>>56),
+	)
+}
+
 func sanitizeForLabel(s string) string {
 	var b []byte
 	for _, r := range s {
@@ -331,6 +395,7 @@ func getOrCreateNestBody[TNodeKind comparable](
 	tokenHash func(lexarch.TokenKind) uint64,
 	hasher *hash.XXH3Hasher,
 	ctxByKey map[uint64]*Context,
+	transitionsByID map[string][]Transition[TNodeKind],
 	metaByID map[string]ContextMeta,
 	queue *[]pendingEntry[TNodeKind],
 	nestBodyIDs map[syntaxa.GrammarLabel]string,
@@ -376,11 +441,28 @@ func getOrCreateNestBody[TNodeKind comparable](
 
 	propagatePopOffset(bodyTerminals, 1)
 
-	var newSyncs []lexarch.TokenKind
+	// A wrapper context with ImmediatePushTarget must still be able to unwind on
+	// structural sync boundaries before the push rule re-enters content.
+	// Emit no-consume sync pops on the wrapper itself from inferred grammar boundaries.
+	wrapperSyncSet := make(map[lexarch.TokenKind]struct{}, len(inheritedSyncs)+1)
+	for _, tok := range inheritedSyncs {
+		wrapperSyncSet[tok] = struct{}{}
+	}
 	if nestNode.CloseToken != nil {
-		newSyncs = append(newSyncs, *nestNode.CloseToken)
+		wrapperSyncSet[*nestNode.CloseToken] = struct{}{}
+	}
+	for tok := range wrapperSyncSet {
+		transitionsByID[name] = append(transitionsByID[name], Transition[TNodeKind]{
+			Token:                tok,
+			Operation:            OpSyncTokenNoConsume,
+			IsRecoveryTransition: true,
+		})
 	}
 
+	newSyncs := make([]lexarch.TokenKind, 0, len(wrapperSyncSet))
+	for tok := range wrapperSyncSet {
+		newSyncs = append(newSyncs, tok)
+	}
 	if len(bodyTerminals) > 0 {
 		*queue = append(*queue, pendingEntry[TNodeKind]{
 			ctxID:          contentName,
@@ -451,7 +533,7 @@ func buildNestTransition[TNodeKind comparable](
 	queue *[]pendingEntry[TNodeKind],
 	inheritedSyncs []lexarch.TokenKind,
 ) Transition[TNodeKind] {
-	bodyCtx := getOrCreateNestBody(term.nestNode, rules, analysis, tokenHash, hasher, ctxByKey, metaByID, queue, nestBodyIDs, nestContentParentNodeKind, term.nodeKind, inheritedSyncs)
+	bodyCtx := getOrCreateNestBody(term.nestNode, rules, analysis, tokenHash, hasher, ctxByKey, transitionsByID, metaByID, queue, nestBodyIDs, nestContentParentNodeKind, term.nodeKind, inheritedSyncs)
 	ownerLabel := owningRule(term)
 	nestHint := term.nestNode.GrammarLabel
 	noNest := gTerminal[TNodeKind]{
@@ -476,7 +558,6 @@ func buildNestTransition[TNodeKind comparable](
 
 	ownerNodeKind := resolveOwnerNodeKind(ownerLabel, rules)
 	afterCtx := getOrCreateContext(advTerminals, ownerLabel, nestHint, isNullable, tokenHash, nodeKindHash, hasher, ctxByKey, metaByID, contextOwnerNodeKind, ownerNodeKind, queue, inheritedSyncs)
-
 	return Transition[TNodeKind]{
 		Token:            term.token,
 		NodeKind:         term.nodeKind,
@@ -590,8 +671,22 @@ func addRecoveryTransitions[TNodeKind comparable](
 		return
 	}
 
+	// If this context already has a normal consuming transition for a token,
+	// do not emit a competing no-consume recovery pop for that same token.
+	consumedHere := make(map[lexarch.TokenKind]struct{}, len(transitionsByID[ctxID]))
+	for _, existing := range transitionsByID[ctxID] {
+		if existing.IsRecoveryTransition {
+			continue
+		}
+		if existing.Operation == OpMatch || existing.Operation == OpSet || existing.Operation == OpPush || existing.Operation == OpPop {
+			consumedHere[existing.Token] = struct{}{}
+		}
+	}
 	// Emit ALL recovery points strictly as lookahead pops
 	for t := range noConsumeSet {
+		if _, exists := consumedHere[t]; exists {
+			continue
+		}
 		transitionsByID[ctxID] = append(transitionsByID[ctxID], Transition[TNodeKind]{
 			Token:                t,
 			Operation:            OpSyncTokenNoConsume,
