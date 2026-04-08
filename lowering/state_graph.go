@@ -442,14 +442,13 @@ func getOrCreateNestBody[TNodeKind comparable](
 	propagatePopOffset(bodyTerminals, 1)
 
 	// A wrapper context with ImmediatePushTarget must still be able to unwind on
-	// structural sync boundaries before the push rule re-enters content.
-	// Emit no-consume sync pops on the wrapper itself from inferred grammar boundaries.
-	wrapperSyncSet := make(map[lexarch.TokenKind]struct{}, len(inheritedSyncs)+1)
+	// inherited structural sync boundaries before the push rule re-enters content.
+	// Do NOT include the nest's own close token here: for empty nested bodies (e.g. [])
+	// the close token must be consumed by content/continuation states, not peeled by
+	// wrapper lookahead pops.
+	wrapperSyncSet := make(map[lexarch.TokenKind]struct{}, len(inheritedSyncs))
 	for _, tok := range inheritedSyncs {
 		wrapperSyncSet[tok] = struct{}{}
-	}
-	if nestNode.CloseToken != nil {
-		wrapperSyncSet[*nestNode.CloseToken] = struct{}{}
 	}
 	for tok := range wrapperSyncSet {
 		transitionsByID[name] = append(transitionsByID[name], Transition[TNodeKind]{
@@ -459,8 +458,16 @@ func getOrCreateNestBody[TNodeKind comparable](
 		})
 	}
 
-	newSyncs := make([]lexarch.TokenKind, 0, len(wrapperSyncSet))
-	for tok := range wrapperSyncSet {
+	contentSyncSet := make(map[lexarch.TokenKind]struct{}, len(inheritedSyncs)+1)
+	for _, tok := range inheritedSyncs {
+		contentSyncSet[tok] = struct{}{}
+	}
+	if nestNode.CloseToken != nil {
+		contentSyncSet[*nestNode.CloseToken] = struct{}{}
+	}
+
+	newSyncs := make([]lexarch.TokenKind, 0, len(contentSyncSet))
+	for tok := range contentSyncSet {
 		newSyncs = append(newSyncs, tok)
 	}
 	if len(bodyTerminals) > 0 {
