@@ -22,7 +22,7 @@ func advanceTerminal[TNodeKind comparable](
 		}
 
 		la, nullable := computeLookaheadForFrame(remaining, isRep, repNode, rules, analysis)
-		result = appendLookaheadWithStack(la, term.stack[i:], result)
+		result = appendLookaheadWithStack(la, term.token, term.choiceGuard, term.stack[i:], result)
 
 		if !nullable {
 			isNullable = false
@@ -81,14 +81,18 @@ func computeLookaheadForFrame[TNodeKind comparable](
 
 func appendLookaheadWithStack[TNodeKind comparable](
 	la []gTerminal[TNodeKind],
+	consumedTok lexarch.TokenKind,
+	parentGuard []syntaxa.Lookahead[lexarch.TokenKind],
 	outerStack []gStackEntry[TNodeKind],
 	result []gTerminal[TNodeKind],
 ) []gTerminal[TNodeKind] {
+	shifted := shiftChoiceGuardAfterConsume(parentGuard, consumedTok)
 	for j := range la {
 		newStack := make([]gStackEntry[TNodeKind], len(la[j].stack)+len(outerStack))
 		copy(newStack, la[j].stack)
 		copy(newStack[len(la[j].stack):], outerStack)
 		la[j].stack = newStack
+		la[j].choiceGuard = mergeLookaheads(shifted, la[j].choiceGuard)
 	}
 	return append(result, la...)
 }

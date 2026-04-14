@@ -48,11 +48,36 @@ func terminalKey[TNodeKind comparable](
 	b = appendRemaining(b, t.remaining, tokenHash, hasher)
 	b = appendStackData(b, t.stack, tokenHash, hasher)
 	b = append(b, uint64(t.popOffset))
+	b = appendChoiceGuardLookaheads(b, t.choiceGuard, tokenHash)
 
 	byteLen := len(b) * 8
 	byteData := unsafe.Slice((*byte)(unsafe.Pointer(&b[0])), byteLen)
 
 	return hash.XXH3HasherHash64(hasher, byteData)
+}
+
+func appendChoiceGuardLookaheads(
+	b []uint64,
+	g []syntaxa.Lookahead[lexarch.TokenKind],
+	tokenHash func(lexarch.TokenKind) uint64,
+) []uint64 {
+	if len(g) == 0 {
+		return append(b, 0)
+	}
+	cp := append([]syntaxa.Lookahead[lexarch.TokenKind](nil), g...)
+	sort.Slice(cp, func(i, j int) bool {
+		if cp[i].Offset != cp[j].Offset {
+			return cp[i].Offset < cp[j].Offset
+		}
+		return cp[i].Expected < cp[j].Expected
+	})
+	b = append(b, 1)
+	b = append(b, uint64(len(cp)))
+	for _, l := range cp {
+		b = append(b, uint64(l.Offset))
+		b = append(b, tokenHash(l.Expected))
+	}
+	return b
 }
 
 func appendNodeKind[TNodeKind comparable](

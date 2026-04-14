@@ -2,6 +2,7 @@ package lowering
 
 import (
 	"lexarch"
+	"sort"
 	"syntaxa"
 )
 
@@ -22,6 +23,10 @@ type gTerminal[TNodeKind comparable] struct {
 	stack     []gStackEntry[TNodeKind]
 	nestNode  *syntaxa.Grammar[lexarch.TokenKind, TNodeKind]
 	popOffset int
+	// choiceGuard is the predict / Lookaheads conjunction for the GChoice arm that
+	// produced this terminal (relative peek offsets). It is shifted when consuming
+	// tokens in advanceTerminal so overlapping FIRST sets stay in distinct contexts.
+	choiceGuard []syntaxa.Lookahead[lexarch.TokenKind]
 }
 
 func (t *gTerminal[TNodeKind]) getLastRemaining() *[]*syntaxa.Grammar[lexarch.TokenKind, TNodeKind] {
@@ -29,6 +34,140 @@ func (t *gTerminal[TNodeKind]) getLastRemaining() *[]*syntaxa.Grammar[lexarch.To
 		return &t.remaining
 	}
 	return &t.stack[len(t.stack)-1].remaining
+}
+
+func copyLookaheads(g []syntaxa.Lookahead[lexarch.TokenKind]) []syntaxa.Lookahead[lexarch.TokenKind] {
+	if len(g) == 0 {
+		return nil
+	}
+	out := make([]syntaxa.Lookahead[lexarch.TokenKind], len(g))
+	copy(out, g)
+	return out
+}
+
+func mergeLookaheads(
+	a, b []syntaxa.Lookahead[lexarch.TokenKind],
+) []syntaxa.Lookahead[lexarch.TokenKind] {
+	if len(a) == 0 {
+		return normalizeLookaheadSlice(b)
+	}
+	if len(b) == 0 {
+		return normalizeLookaheadSlice(a)
+	}
+	out := make([]syntaxa.Lookahead[lexarch.TokenKind], 0, len(a)+len(b))
+	out = append(out, a...)
+	out = append(out, b...)
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Offset != out[j].Offset {
+			return out[i].Offset < out[j].Offset
+		}
+		return out[i].Expected < out[j].Expected
+	})
+	return dedupeSortedLookaheads(out)
+}
+
+func normalizeLookaheadSlice(g []syntaxa.Lookahead[lexarch.TokenKind]) []syntaxa.Lookahead[lexarch.TokenKind] {
+	if len(g) == 0 {
+		return nil
+	}
+	if len(g) == 1 {
+		return copyLookaheads(g)
+	}
+	cp := append([]syntaxa.Lookahead[lexarch.TokenKind](nil), g...)
+	sort.Slice(cp, func(i, j int) bool {
+		if cp[i].Offset != cp[j].Offset {
+			return cp[i].Offset < cp[j].Offset
+		}
+		return cp[i].Expected < cp[j].Expected
+	})
+	return dedupeSortedLookaheads(cp)
+}
+
+func dedupeSortedLookaheads(g []syntaxa.Lookahead[lexarch.TokenKind]) []syntaxa.Lookahead[lexarch.TokenKind] {
+	if len(g) <= 1 {
+		return g
+	}
+	dst := g[:0]
+	for i := 0; i < len(g); i++ {
+		if len(dst) > 0 && dst[len(dst)-1].Offset == g[i].Offset && dst[len(dst)-1].Expected == g[i].Expected {
+			continue
+		}
+		dst = append(dst, g[i])
+	}
+	return dst
+}
+
+// shiftChoiceGuardAfterConsume removes satisfied peek(0) constraints and decrements
+// remaining offsets after consuming consumedTok on the outgoing transition.
+func shiftChoiceGuardAfterConsume(
+	g []syntaxa.Lookahead[lexarch.TokenKind],
+	consumedTok lexarch.TokenKind,
+) []syntaxa.Lookahead[lexarch.TokenKind] {
+	if len(g) == 0 {
+		return nil
+	}
+	var out []syntaxa.Lookahead[lexarch.TokenKind]
+	for _, l := range g {
+		if l.Offset > 0 {
+			out = append(out, syntaxa.Lookahead[lexarch.TokenKind]{
+				Offset:   l.Offset - 1,
+				Expected: l.Expected,
+			})
+			continue
+		}
+		if l.Expected != consumedTok {
+			out = append(out, l)
+			continue
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Offset != out[j].Offset {
+			return out[i].Offset < out[j].Offset
+		}
+		return out[i].Expected < out[j].Expected
+	})
+	return dedupeSortedLookaheads(out)
+}
+
+func armGuardForChild[TNodeKind comparable](
+	analysis *syntaxa.GrammarAnalysis,
+	child *syntaxa.Grammar[lexarch.TokenKind, TNodeKind],
+) []syntaxa.Lookahead[lexarch.TokenKind] {
+	if child == nil {
+		return nil
+	}
+	if analysis != nil && child.NodePath != nil {
+		key := syntaxa.NodeKeyFromPath(*child.NodePath)
+		if arm, ok := analysis.ArmPredict[key]; ok && len(arm.Guard) > 0 {
+			return copyLookaheads(arm.Guard)
+		}
+	}
+	if len(child.Lookaheads) > 0 {
+		return copyLookaheads(child.Lookaheads)
+	}
+	return nil
+}
+
+func filterTermsByArmFirst[TNodeKind comparable](
+	ts []gTerminal[TNodeKind],
+	first syntaxa.TokenSet,
+) []gTerminal[TNodeKind] {
+	if len(first) == 0 || len(ts) == 0 {
+		return ts
+	}
+	out := ts[:0]
+	for _, t := range ts {
+		if _, ok := first[t.token]; ok {
+			out = append(out, t)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 type visiting map[syntaxa.GrammarLabel]bool
@@ -92,7 +231,25 @@ func lookaheadChoice[TNodeKind comparable](
 	var all []gTerminal[TNodeKind]
 	anyNull := false
 	for _, child := range node.Children {
+		if child == nil {
+			continue
+		}
 		ts, n := lookahead(child, rules, visiting, analysis)
+		if analysis != nil && child.NodePath != nil {
+			key := syntaxa.NodeKeyFromPath(*child.NodePath)
+			if arm, ok := analysis.ArmPredict[key]; ok && len(arm.First) > 0 {
+				if !syntaxa.GrammarAnalysisNullable(analysis, child) {
+					ts = filterTermsByArmFirst(ts, arm.First)
+				}
+			}
+		}
+		guard := armGuardForChild(analysis, child)
+		if len(guard) > 0 {
+			gc := copyLookaheads(guard)
+			for j := range ts {
+				ts[j].choiceGuard = mergeLookaheads(gc, ts[j].choiceGuard)
+			}
+		}
 		all = append(all, ts...)
 		anyNull = anyNull || n
 	}

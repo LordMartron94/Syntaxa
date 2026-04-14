@@ -94,6 +94,12 @@ type Transition[TNodeKind comparable] struct {
 	TargetContextIDs     []string
 	PopAmount            int
 	IsRecoveryTransition bool
+	// PeekAfterMatch holds shifted choice-guard lookahead constraints after this edge
+	// consumes Token. BuildStateGraph sets it only when this pending batch emits more
+	// than one transition with the same Token (a lexer-level fork); otherwise it stays
+	// nil — the guard is only for disambiguating competing edges, not for constraining
+	// a uniquely-determined transition.
+	PeekAfterMatch []syntaxa.Lookahead[lexarch.TokenKind]
 }
 
 /*
@@ -199,10 +205,14 @@ func BuildStateGraph[TNodeKind comparable](
 		p := queue[0]
 		queue = queue[1:]
 
+		forkByToken := countTermsPerToken(p.terms)
+
 		for _, term := range p.terms {
+			peekFork := forkByToken[term.token] > 1
 			tr := buildTransition(
 				term, p.nameHint, rules, analysis, tokenHash, nodeKindHash, hasher,
 				ctxByKey, transitionsByID, metaByID, nestBodyIDs, nestContentParentNodeKind, contextOwnerNodeKind, &queue, p.inheritedSyncs,
+				peekFork,
 			)
 			if tr.TargetContextIDs != nil || tr.Operation == OpPop || tr.Operation == OpMatch {
 				transitionsByID[p.ctxID] = append(transitionsByID[p.ctxID], tr)
@@ -233,6 +243,17 @@ func BuildStateGraph[TNodeKind comparable](
 		NestContentParentNodeKind: nestContentParentNodeKind,
 		ContextOwnerNodeKind:      contextOwnerNodeKind,
 	}, nil
+}
+
+// countTermsPerToken counts how many lookahead terminals in one pending batch share
+// each lexer token. peekFork (count > 1) means multiple outgoing edges consume the same
+// token from this state — PeekAfterMatch is only meaningful there (choice disambiguation).
+func countTermsPerToken[TNodeKind comparable](terms []gTerminal[TNodeKind]) map[lexarch.TokenKind]int {
+	out := make(map[lexarch.TokenKind]int, len(terms))
+	for i := range terms {
+		out[terms[i].token]++
+	}
+	return out
 }
 
 func validateRecoveryBoundaryOwnership[TNodeKind comparable](
@@ -275,13 +296,14 @@ func buildTransition[TNodeKind comparable](
 	contextOwnerNodeKind map[string]TNodeKind,
 	queue *[]pendingEntry[TNodeKind],
 	inheritedSyncs []lexarch.TokenKind,
+	peekFork bool,
 ) Transition[TNodeKind] {
 
 	if term.nestNode != nil {
-		return buildNestTransition(term, rules, analysis, tokenHash, nodeKindHash, hasher, ctxByKey, transitionsByID, metaByID, nestBodyIDs, nestContentParentNodeKind, contextOwnerNodeKind, queue, inheritedSyncs)
+		return buildNestTransition(term, rules, analysis, tokenHash, nodeKindHash, hasher, ctxByKey, transitionsByID, metaByID, nestBodyIDs, nestContentParentNodeKind, contextOwnerNodeKind, queue, inheritedSyncs, peekFork)
 	}
 
-	return buildStandardTransition(term, nameHint, rules, analysis, tokenHash, nodeKindHash, hasher, ctxByKey, metaByID, contextOwnerNodeKind, queue, inheritedSyncs)
+	return buildStandardTransition(term, nameHint, rules, analysis, tokenHash, nodeKindHash, hasher, ctxByKey, metaByID, contextOwnerNodeKind, queue, inheritedSyncs, peekFork)
 }
 
 func getOrCreateContext[TNodeKind comparable](
@@ -539,16 +561,18 @@ func buildNestTransition[TNodeKind comparable](
 	contextOwnerNodeKind map[string]TNodeKind,
 	queue *[]pendingEntry[TNodeKind],
 	inheritedSyncs []lexarch.TokenKind,
+	peekFork bool,
 ) Transition[TNodeKind] {
 	bodyCtx := getOrCreateNestBody(term.nestNode, rules, analysis, tokenHash, hasher, ctxByKey, transitionsByID, metaByID, queue, nestBodyIDs, nestContentParentNodeKind, term.nodeKind, inheritedSyncs)
 	ownerLabel := owningRule(term)
 	nestHint := term.nestNode.GrammarLabel
 	noNest := gTerminal[TNodeKind]{
-		token:     term.token,
-		nodeKind:  term.nodeKind,
-		remaining: term.remaining,
-		stack:     term.stack,
-		popOffset: term.popOffset,
+		token:       term.token,
+		nodeKind:    term.nodeKind,
+		remaining:   term.remaining,
+		stack:       term.stack,
+		popOffset:   term.popOffset,
+		choiceGuard: term.choiceGuard,
 	}
 
 	advTerminals, isNullable := advanceTerminal(noNest, rules, analysis)
@@ -565,11 +589,16 @@ func buildNestTransition[TNodeKind comparable](
 
 	ownerNodeKind := resolveOwnerNodeKind(ownerLabel, rules)
 	afterCtx := getOrCreateContext(advTerminals, ownerLabel, nestHint, isNullable, tokenHash, nodeKindHash, hasher, ctxByKey, metaByID, contextOwnerNodeKind, ownerNodeKind, queue, inheritedSyncs)
+	var peek []syntaxa.Lookahead[lexarch.TokenKind]
+	if peekFork {
+		peek = peekAfterMatchFromAdvTerminals(advTerminals)
+	}
 	return Transition[TNodeKind]{
 		Token:            term.token,
 		NodeKind:         term.nodeKind,
 		Operation:        OpSet,
 		TargetContextIDs: []string{afterCtx.ID, bodyCtx.ID},
+		PeekAfterMatch:   peek,
 	}
 }
 
@@ -586,6 +615,7 @@ func buildStandardTransition[TNodeKind comparable](
 	contextOwnerNodeKind map[string]TNodeKind,
 	queue *[]pendingEntry[TNodeKind],
 	inheritedSyncs []lexarch.TokenKind,
+	peekFork bool,
 ) Transition[TNodeKind] {
 	ownerLabel := owningRule(term)
 
@@ -604,11 +634,16 @@ func buildStandardTransition[TNodeKind comparable](
 	ownerNodeKind := resolveOwnerNodeKind(ownerLabel, rules)
 	next := getOrCreateContext(advTerminals, ownerLabel, nameHint, isNullable, tokenHash, nodeKindHash, hasher, ctxByKey, metaByID, contextOwnerNodeKind, ownerNodeKind, queue, inheritedSyncs)
 
+	var peek []syntaxa.Lookahead[lexarch.TokenKind]
+	if peekFork {
+		peek = peekAfterMatchFromAdvTerminals(advTerminals)
+	}
 	return Transition[TNodeKind]{
 		Token:            term.token,
 		NodeKind:         term.nodeKind,
 		Operation:        OpSet,
 		TargetContextIDs: []string{next.ID},
+		PeekAfterMatch:   peek,
 	}
 }
 
@@ -630,6 +665,39 @@ func propagatePopOffset[TNodeKind comparable](terminals []gTerminal[TNodeKind], 
 	for i := range terminals {
 		terminals[i].popOffset = offset
 	}
+}
+
+// peekAfterMatchFromAdvTerminals returns the shifted choice-guard lookahead constraints
+// carried on advanced terminals after a consume (all offsets). Callers attach it to
+// Transition.PeekAfterMatch only for lexer forks (same Token, multiple edges).
+// When multiple advanced terminals disagree on the full guard, the first terminal's
+// guard is used (conservative merge for split lookahead states).
+func peekAfterMatchFromAdvTerminals[TNodeKind comparable](adv []gTerminal[TNodeKind]) []syntaxa.Lookahead[lexarch.TokenKind] {
+	if len(adv) == 0 {
+		return nil
+	}
+	first := normalizeLookaheadSlice(adv[0].choiceGuard)
+	for i := 1; i < len(adv); i++ {
+		other := normalizeLookaheadSlice(adv[i].choiceGuard)
+		if !peekConstraintsEqual(first, other) {
+			return first
+		}
+	}
+	return first
+}
+
+func peekConstraintsEqual(a, b []syntaxa.Lookahead[lexarch.TokenKind]) bool {
+	ca := normalizeLookaheadSlice(a)
+	cb := normalizeLookaheadSlice(b)
+	if len(ca) != len(cb) {
+		return false
+	}
+	for i := range ca {
+		if ca[i].Offset != cb[i].Offset || ca[i].Expected != cb[i].Expected {
+			return false
+		}
+	}
+	return true
 }
 
 func owningRule[TNodeKind comparable](term gTerminal[TNodeKind]) syntaxa.GrammarLabel {

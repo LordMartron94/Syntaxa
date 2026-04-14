@@ -2047,14 +2047,22 @@ func (r *ruleEndpoint[TNodeKind]) executeChoiceLoop(
 	ctx *syntaxa.ExecRuleContext[TNodeKind],
 	rules []Rule[TNodeKind],
 ) Result[TNodeKind] {
-	candidateIndices, dispatchMode := choiceCandidateIndicesFromAnalysis(ctx, rules)
-	if dispatchMode == choiceDispatchNoMatch {
+	arms := make([]*syntaxa.Grammar[lexarch.TokenKind, TNodeKind], len(rules))
+	for i := range rules {
+		arms[i] = rules[i].GetGrammar()
+	}
+	candidateIndices, dispatchMode := syntaxa.ChoiceCandidateIndicesFromAnalysis(
+		ctx.GetAnalysis(),
+		arms,
+		ctx.Select.Peek,
+	)
+	if dispatchMode == syntaxa.ChoiceDispatchNoMatch {
 		if st := ctx.EngineStats; st != nil {
 			st.ChoiceDispatchNoMatch++
 		}
 		return r.sharedCore.buildFailureRuleResult(nil, syntaxa.FailureNoMatch)
 	}
-	if dispatchMode == choiceDispatchCandidates {
+	if dispatchMode == syntaxa.ChoiceDispatchCandidates {
 		if st := ctx.EngineStats; st != nil {
 			st.ChoiceDispatchCandidates++
 		}
@@ -2109,70 +2117,6 @@ func (r *ruleEndpoint[TNodeKind]) executeChoiceCandidateLoop(
 	}
 
 	return r.sharedCore.buildFailureRuleResult(nil, syntaxa.FailureNoMatch)
-}
-
-type choiceDispatchMode uint8
-
-const (
-	choiceDispatchFallback choiceDispatchMode = iota
-	choiceDispatchCandidates
-	choiceDispatchNoMatch
-)
-
-func choiceCandidateIndicesFromAnalysis[TNodeKind comparable](
-	ctx *syntaxa.ExecRuleContext[TNodeKind],
-	rules []Rule[TNodeKind],
-) ([]int, choiceDispatchMode) {
-	analysis := ctx.GetAnalysis()
-	if analysis == nil {
-		return nil, choiceDispatchFallback
-	}
-
-	peekToken := ctx.Token.Peek(0).Token
-	candidateIndices := make([]int, 0, len(rules))
-
-	for idx, rule := range rules {
-		grammar := rule.GetGrammar()
-		if grammar == nil || grammar.NodePath == nil {
-			candidateIndices = append(candidateIndices, idx)
-			continue
-		}
-
-		nodeKey := syntaxa.NodeKeyFromPath(*grammar.NodePath)
-		firstSet, hasFirst := analysis.First[nodeKey]
-		nullable, hasNullable := analysis.Nullable[nodeKey]
-		if arm, ok := analysis.ArmPredict[nodeKey]; ok && len(arm.First) > 0 {
-			firstSet = arm.First
-			hasFirst = true
-		}
-		if !hasFirst || !hasNullable {
-			candidateIndices = append(candidateIndices, idx)
-			continue
-		}
-
-		if nullable {
-			candidateIndices = append(candidateIndices, idx)
-			continue
-		}
-		if _, exists := firstSet[peekToken]; !exists {
-			continue
-		}
-		var guard []syntaxa.Lookahead[lexarch.TokenKind]
-		if arm, ok := analysis.ArmPredict[nodeKey]; ok && len(arm.Guard) > 0 {
-			guard = arm.Guard
-		} else if len(grammar.Lookaheads) > 0 {
-			guard = grammar.Lookaheads
-		}
-		if len(guard) > 0 && !syntaxa.GuardMatchesLookahead(ctx.Select.Peek, guard) {
-			continue
-		}
-		candidateIndices = append(candidateIndices, idx)
-	}
-
-	if len(candidateIndices) == 0 {
-		return nil, choiceDispatchNoMatch
-	}
-	return candidateIndices, choiceDispatchCandidates
 }
 
 /*
