@@ -370,19 +370,28 @@ func (p *prattEndpoint[TNodeKind]) groupOperatorsByBP(
 	}
 
 	for _, op := range config.PrefixOps {
-		getLvl(op.RightBP).Prefixes = append(getLvl(op.RightBP).Prefixes, syntaxa.Token[lexarch.TokenKind, TNodeKind](op.TokenGrammarLabel, op.Token))
+		tokenNode := syntaxa.Token[lexarch.TokenKind, TNodeKind](op.TokenGrammarLabel, op.Token)
+		nodeKind := op.NodeKind
+		tokenNode.OutputNodeKind = &nodeKind
+		getLvl(op.RightBP).Prefixes = append(getLvl(op.RightBP).Prefixes, tokenNode)
 	}
 	for _, op := range config.PrefixRuleOps {
 		getLvl(op.RightBP).Prefixes = append(getLvl(op.RightBP).Prefixes, op.Rule.GetGrammar())
 	}
 	for _, op := range config.PostfixOps {
-		getLvl(op.LeftBP).Postfixes = append(getLvl(op.LeftBP).Postfixes, syntaxa.Token[lexarch.TokenKind, TNodeKind](op.TokenGrammarLabel, op.Token))
+		tokenNode := syntaxa.Token[lexarch.TokenKind, TNodeKind](op.TokenGrammarLabel, op.Token)
+		nodeKind := op.NodeKind
+		tokenNode.OutputNodeKind = &nodeKind
+		getLvl(op.LeftBP).Postfixes = append(getLvl(op.LeftBP).Postfixes, tokenNode)
 	}
 	for _, op := range config.PostfixRuleOps {
 		getLvl(op.LeftBP).Postfixes = append(getLvl(op.LeftBP).Postfixes, op.Rule.GetGrammar())
 	}
 	for _, op := range config.InfixOps {
-		getLvl(op.LeftBP).Infixes = append(getLvl(op.LeftBP).Infixes, syntaxa.Token[lexarch.TokenKind, TNodeKind](op.TokenGrammarLabel, op.Token))
+		tokenNode := syntaxa.Token[lexarch.TokenKind, TNodeKind](op.TokenGrammarLabel, op.Token)
+		nodeKind := op.NodeKind
+		tokenNode.OutputNodeKind = &nodeKind
+		getLvl(op.LeftBP).Infixes = append(getLvl(op.LeftBP).Infixes, tokenNode)
 	}
 	for _, op := range config.InfixRuleOps {
 		getLvl(op.LeftBP).Infixes = append(getLvl(op.LeftBP).Infixes, op.Rule.GetGrammar())
