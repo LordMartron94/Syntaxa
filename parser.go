@@ -449,7 +449,9 @@ func handleFailureState[TNodeKind comparable](
 		}
 	}
 
-	ctx.restore(startSnap)
+	if !result.Succeeded {
+		ctx.restore(startSnap)
+	}
 
 	return result, recoveryAttempted, recovered, landedOnOurs, recoveryTokenSet
 }

@@ -1662,7 +1662,7 @@ Prerequisites:
 - innerRule is the rule for the content between the delimiters.
 
 Edge cases:
-- openToken mismatch: FailureNoMatch (no diagnostic).
+- openToken mismatch: syntax error at the current token expecting the open delimiter.
 - closeToken mismatch after inner success: syntax error and FailureError.
 */
 func (r *ruleEndpoint[TNodeKind]) Nest(
@@ -1673,11 +1673,11 @@ func (r *ruleEndpoint[TNodeKind]) Nest(
 ) Rule[TNodeKind] {
 
 	name := r.sharedCore.createRuleName("Nest", grammarID)
-	expectedLabel := r.sharedCore.tokenFormatter(closeToken)
-	if expectedLabel == "" {
-		expectedLabel = string(grammarID)
+	openLabel := r.sharedCore.tokenFormatter(openToken)
+	if openLabel == "" {
+		openLabel = string(grammarID)
 	}
-	identity := r.sharedCore.createRuleIdentity(name, grammarID, expectedLabel)
+	identity := r.sharedCore.createRuleIdentity(name, grammarID, openLabel)
 
 	// ---------------------------
 	// Build grammar IR
@@ -1748,11 +1748,11 @@ func (r *ruleEndpoint[TNodeKind]) TransparentNest(
 	innerRule Rule[TNodeKind],
 ) Rule[TNodeKind] {
 	name := r.sharedCore.createRuleName("TransparentNest", grammarID)
-	expectedLabel := r.sharedCore.tokenFormatter(closeToken)
-	if expectedLabel == "" {
-		expectedLabel = string(grammarID)
+	openLabel := r.sharedCore.tokenFormatter(openToken)
+	if openLabel == "" {
+		openLabel = string(grammarID)
 	}
-	identity := r.sharedCore.createRuleIdentity(name, grammarID, expectedLabel)
+	identity := r.sharedCore.createRuleIdentity(name, grammarID, openLabel)
 
 	grammar := syntaxa.Nest(grammarID, openToken, closeToken, innerRule.GetGrammar())
 	syntaxa.MarkAsContextBoundary(grammar)
