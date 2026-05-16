@@ -331,7 +331,8 @@ func syntaxaParserExecuteRule[TNodeKind comparable](
 	if mode == ExecutionNormal {
 		ctx.Recovery.pushRecovery(
 			rule.IsRecoveryBarrier(),
-			append(rule.recoveryTokens, rule.noConsumeOnRecoveryTokens...)...,
+			rule.recoveryTokens,
+			rule.noConsumeOnRecoveryTokens,
 		)
 		defer ctx.Recovery.popRecovery()
 	}
@@ -411,6 +412,13 @@ func handleFailureState[TNodeKind comparable](
 		return result, false, false, false, nil
 	}
 
+	// A descendant already ran recovery and left a no-consume sync token for an ancestor.
+	// Do not performRecovery again (would re-scan and skip valid later input).
+	if !result.ConsumeSyncToken && ctx.save().tokenIndex != startSnap.tokenIndex {
+		ctx.Error.sink.popFrame(true)
+		return result, false, true, false, nil
+	}
+
 	recoveryAttempted := true
 	isProgramRule := rule.GetGrammarLabel() == parser.programRule.GetGrammarLabel()
 
@@ -418,10 +426,14 @@ func handleFailureState[TNodeKind comparable](
 		wouldBeEmpty := ctx.Error.sink.currentFrameWouldBeEmptyOnPop()
 		bestPos, ok := ctx.Error.sink.currentBestPosition()
 		if wouldBeEmpty || (ok && bestPos == startSnap.tokenIndex) {
+			errorLex := lexemePreRule
+			if ctx.save().tokenIndex != startSnap.tokenIndex {
+				errorLex = ctx.Token.Peek(0)
+			}
 			ctx.Error.replaceBestErrorAt(
 				string(rule.GetName()),
-				lexemePreRule,
-				fmt.Sprintf("unexpected %v, expected '%s'", lexemePreRule.Token, rule.identity.ExpectedLabel),
+				errorLex,
+				fmt.Sprintf("unexpected %v, expected '%s'", errorLex.Token, rule.identity.ExpectedLabel),
 			)
 		}
 	}
@@ -433,7 +445,9 @@ func handleFailureState[TNodeKind comparable](
 	ctx.Error.sink.popFrame(false)
 
 	if recovered {
-		result.ConsumeSyncToken = landedOnOurs && !rule.IsNoConsumeRecoveryToken(ctx.Token.PeekRaw(0).Token)
+		syncToken := ctx.Token.PeekRaw(0).Token
+		_, noConsume := ctx.Recovery.recoveryTokenOwnership(syncToken)
+		result.ConsumeSyncToken = !noConsume
 		if result.ConsumeSyncToken {
 			ctx.Token.ConsumeRaw()
 			if st := ctx.EngineStats; st != nil {
@@ -449,7 +463,7 @@ func handleFailureState[TNodeKind comparable](
 		}
 	}
 
-	if !result.Succeeded {
+	if !result.Succeeded && !recovered {
 		ctx.restore(startSnap)
 	}
 
@@ -483,17 +497,39 @@ func performRecovery[TNodeKind comparable](
 ) (recovered bool, landedOnCurrentRule bool, recoveryTokenSet []lexarch.TokenKind) {
 	recoveryTokenSet = ctx.Recovery.CollectAllRecoveryTokens()
 
+	if recovered, landedOnOurs, set := performRecoveryDiscardPhase(
+		ctx, eof, recoveryFromRule, recoveryTokenSet, true,
+	); recovered {
+		return true, landedOnOurs, set
+	}
+
+	return performRecoveryDiscardPhase(ctx, eof, recoveryFromRule, recoveryTokenSet, false)
+}
+
+func performRecoveryDiscardPhase[TNodeKind comparable](
+	ctx *ExecRuleContext[TNodeKind],
+	eof lexarch.TokenKind,
+	recoveryFromRule ParserRule[TNodeKind],
+	tokenSet []lexarch.TokenKind,
+	consumeOnly bool,
+) (recovered bool, landedOnCurrentRule bool, outTokenSet []lexarch.TokenKind) {
 	for {
 		cur := ctx.Token.PeekRaw(0)
 
 		if cur.Token == eof {
-			return false, false, recoveryTokenSet
+			return false, false, tokenSet
 		}
 
-		// Query the engine directly. No local map allocations.
-		if ctx.Recovery.IsInAllFrames(cur.Token) {
+		var isSync bool
+		if consumeOnly {
+			isSync = ctx.Recovery.IsActiveConsumeRecoveryToken(cur.Token)
+		} else {
+			isSync = ctx.Recovery.IsActiveRecoveryToken(cur.Token)
+		}
+
+		if isSync {
 			landedOnCurrentRule = recoveryFromRule.IsSyncToken(cur.Token)
-			return true, landedOnCurrentRule, recoveryTokenSet
+			return true, landedOnCurrentRule, tokenSet
 		}
 
 		ctx.Token.ConsumeRaw()

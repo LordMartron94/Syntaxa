@@ -51,11 +51,12 @@ type RuleResult[TKind comparable] struct {
 	/*
 		ConsumeSyncToken controls whether the parser consumes the recovery sync token after a failed rule.
 
-		When true (default), the engine consumes the token at which recovery landed. When false, the sync
-		token is left in the stream for the parent (e.g. so a TransparentNest can consume its closing
-		delimiter). Set by the engine on FailureError after recovery when the rule has noConsumeOnRecoveryTokens
-		and recovery landed on one of them. Repetition loops (NOrMore, TransparentZeroOrMore) use this to
-		decide whether to retry or propagate: if false, they propagate the error instead of retrying.
+		When true, the engine consumes the token at which recovery landed. When false, the sync token is
+		left in the stream for the parent (e.g. so a TransparentNest can consume its closing delimiter).
+		Set by the engine on FailureError after recovery when the landed token is a noConsumeOnRecovery
+		boundary. Repetition loops continue only when ConsumeSyncToken is true and the cursor advanced;
+		otherwise they propagate the error. Parent handleFailureState skips a second performRecovery when
+		ConsumeSyncToken is false and the cursor already moved (descendant already resynced).
 	*/
 	ConsumeSyncToken bool
 }

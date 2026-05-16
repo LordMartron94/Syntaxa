@@ -1342,10 +1342,11 @@ func (r *ruleEndpoint[TNodeKind]) runRepetitionLoop(
 			return count, errResult, false
 
 		case syntaxa.FailureError:
+			if !result.ConsumeSyncToken {
+				return count, result, true
+			}
 			after := ctx.Token.PeekRaw(0)
-			noProgress := before.Start == after.Start
-			leaveSyncForParent := !result.ConsumeSyncToken
-			if noProgress || leaveSyncForParent {
+			if before.Start == after.Start {
 				return count, result, true
 			}
 			continue
@@ -1435,11 +1436,12 @@ func (r *ruleEndpoint[TNodeKind]) handleRepetitionFailure(
 		return count, result, false
 	}
 
-	after := ctx.Token.PeekRaw(0)
-	noProgress := before.Start == after.Start
-	leaveSyncForParent := !result.ConsumeSyncToken
+	if !result.ConsumeSyncToken {
+		return count, result, true
+	}
 
-	if noProgress || leaveSyncForParent {
+	after := ctx.Token.PeekRaw(0)
+	if before.Start == after.Start {
 		return count, result, true
 	}
 
@@ -1715,13 +1717,9 @@ func (r *ruleEndpoint[TNodeKind]) Nest(
 			return innerResult
 		}
 
-		// ---- Expect CLOSE token ----
-
-		if !r.enforceToken(ctx, name, closeToken) {
+		if !r.enforceNestClose(ctx, name, closeToken) {
 			return r.sharedCore.buildFailureRuleResult(nil, syntaxa.FailureError)
 		}
-
-		// ---- Construct wrapping node ----
 
 		node := ctx.Editor.NewNode(nodeKind)
 
@@ -1772,7 +1770,7 @@ func (r *ruleEndpoint[TNodeKind]) TransparentNest(
 			return innerResult
 		}
 
-		if !r.enforceToken(ctx, name, closeToken) {
+		if !r.enforceNestClose(ctx, name, closeToken) {
 			return r.sharedCore.buildFailureRuleResult(nil, syntaxa.FailureError)
 		}
 
@@ -1935,6 +1933,30 @@ func (r *ruleEndpoint[TNodeKind]) enforceToken(
 
 	msg := r.sharedCore.formatUnexpectedExpected(found.Token, expected)
 	ctx.Error.ReportAtEnd(string(ruleName), found, msg)
+	return false
+}
+
+/*
+enforceNestClose verifies the inner rule left the cursor on closeToken.
+Reports at the current token when the body ended before the closing delimiter.
+*/
+func (r *ruleEndpoint[TNodeKind]) enforceNestClose(
+	ctx *syntaxa.ExecRuleContext[TNodeKind],
+	ruleName syntaxa.RuleLabel,
+	closeToken lexarch.TokenKind,
+) bool {
+	peek := ctx.Token.Peek(0)
+	if peek.Token == closeToken {
+		ctx.Token.Consume()
+		return true
+	}
+
+	if ctx.Error.SuppressDelimiterCompletionDiagnostic() {
+		return false
+	}
+
+	msg := r.sharedCore.formatUnexpectedExpected(peek.Token, closeToken)
+	ctx.Error.ReportAt(string(ruleName), peek, msg)
 	return false
 }
 

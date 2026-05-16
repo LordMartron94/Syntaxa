@@ -113,9 +113,11 @@ func (ts *tokenStream) ConsumeRaw() Lexeme {
 // -------------------------------------------------------------
 
 type recoveryFrame struct {
-	startIndex int
-	endIndex   int
-	barrier    bool
+	consumeStart   int
+	consumeEnd     int
+	noConsumeStart int
+	noConsumeEnd   int
+	barrier        bool
 }
 
 type recoveryCore struct {
@@ -123,7 +125,8 @@ type recoveryCore struct {
 
 	defaultRecovery []lexarch.TokenKind
 	stack           []recoveryFrame
-	tokensFlight    []lexarch.TokenKind
+	consumeFlight   []lexarch.TokenKind
+	noConsumeFlight []lexarch.TokenKind
 }
 
 func (rc *recoveryCore) setDefaultRecovery(tokens ...lexarch.TokenKind) {
@@ -131,14 +134,23 @@ func (rc *recoveryCore) setDefaultRecovery(tokens ...lexarch.TokenKind) {
 	rc.defaultRecovery = append([]lexarch.TokenKind(nil), tokens...)
 }
 
-func (rc *recoveryCore) pushRecovery(barrier bool, tokens ...lexarch.TokenKind) {
-	start := len(rc.tokensFlight)
-	rc.tokensFlight = append(rc.tokensFlight, tokens...)
+func (rc *recoveryCore) pushRecovery(
+	barrier bool,
+	consumeTokens []lexarch.TokenKind,
+	noConsumeTokens []lexarch.TokenKind,
+) {
+	consumeStart := len(rc.consumeFlight)
+	rc.consumeFlight = append(rc.consumeFlight, consumeTokens...)
+
+	noConsumeStart := len(rc.noConsumeFlight)
+	rc.noConsumeFlight = append(rc.noConsumeFlight, noConsumeTokens...)
 
 	rc.stack = append(rc.stack, recoveryFrame{
-		startIndex: start,
-		endIndex:   len(rc.tokensFlight),
-		barrier:    barrier,
+		consumeStart:   consumeStart,
+		consumeEnd:     len(rc.consumeFlight),
+		noConsumeStart: noConsumeStart,
+		noConsumeEnd:   len(rc.noConsumeFlight),
+		barrier:        barrier,
 	})
 }
 
@@ -148,8 +160,8 @@ func (rc *recoveryCore) popRecovery() {
 	}
 
 	top := rc.stack[len(rc.stack)-1]
-	// Truncate the flight buffer to instantly discard this frame's tokens
-	rc.tokensFlight = rc.tokensFlight[:top.startIndex]
+	rc.consumeFlight = rc.consumeFlight[:top.consumeStart]
+	rc.noConsumeFlight = rc.noConsumeFlight[:top.noConsumeStart]
 	rc.stack = rc.stack[:len(rc.stack)-1]
 }
 
@@ -160,7 +172,7 @@ Zero allocations. Zero map hashing. Returns immediately on match.
 func (rc *recoveryCore) IsRecoveryToken(token lexarch.TokenKind) bool {
 	if len(rc.stack) > 0 {
 		top := rc.stack[len(rc.stack)-1]
-		if containsToken(rc.tokensFlight[top.startIndex:top.endIndex], token) {
+		if rc.frameContainsToken(top, token) {
 			return true
 		}
 		if top.barrier {
@@ -171,27 +183,74 @@ func (rc *recoveryCore) IsRecoveryToken(token lexarch.TokenKind) bool {
 	return containsToken(rc.defaultRecovery, token)
 }
 
+func (rc *recoveryCore) frameContainsToken(frame recoveryFrame, token lexarch.TokenKind) bool {
+	if containsToken(rc.consumeFlight[frame.consumeStart:frame.consumeEnd], token) {
+		return true
+	}
+	return containsToken(rc.noConsumeFlight[frame.noConsumeStart:frame.noConsumeEnd], token)
+}
+
 /*
-IsInAllFrames answers the question without building a merged set.
-Used by performRecovery to determine if a token is safe to consume.
-Zero allocations.
+IsActiveRecoveryToken reports whether token is a resync point in the union of all active recovery frames.
+
+Barriers scope error ownership, not which tokens may halt recovery discard. This mirrors editor state-graph
+recovery, which merges inherited sync sets from every enclosing grammar frame.
 */
-func (rc *recoveryCore) IsInAllFrames(token lexarch.TokenKind) bool {
+func (rc *recoveryCore) IsActiveRecoveryToken(token lexarch.TokenKind) bool {
+	if containsToken(rc.defaultRecovery, token) {
+		return true
+	}
+
+	for i := len(rc.stack) - 1; i >= 0; i-- {
+		if rc.frameContainsToken(rc.stack[i], token) {
+			return true
+		}
+	}
+
+	return false
+}
+
+/*
+IsActiveConsumeRecoveryToken reports whether token is a resync point that may be consumed during recovery.
+
+Statement-level boundaries (newlines, semicolons) take precedence over ancestor no-consume delimiters
+during the first recovery discard phase.
+*/
+func (rc *recoveryCore) IsActiveConsumeRecoveryToken(token lexarch.TokenKind) bool {
 	if containsToken(rc.defaultRecovery, token) {
 		return true
 	}
 
 	for i := len(rc.stack) - 1; i >= 0; i-- {
 		frame := rc.stack[i]
-		if containsToken(rc.tokensFlight[frame.startIndex:frame.endIndex], token) {
+		if containsToken(rc.consumeFlight[frame.consumeStart:frame.consumeEnd], token) {
 			return true
-		}
-		if frame.barrier {
-			break
 		}
 	}
 
 	return false
+}
+
+/*
+recoveryTokenOwnership returns whether token is an active recovery point and, if so, whether the
+innermost owning frame treats it as a no-consume boundary (left for an ancestor to match).
+*/
+func (rc *recoveryCore) recoveryTokenOwnership(token lexarch.TokenKind) (active bool, noConsume bool) {
+	for i := len(rc.stack) - 1; i >= 0; i-- {
+		frame := rc.stack[i]
+		if containsToken(rc.noConsumeFlight[frame.noConsumeStart:frame.noConsumeEnd], token) {
+			return true, true
+		}
+		if containsToken(rc.consumeFlight[frame.consumeStart:frame.consumeEnd], token) {
+			return true, false
+		}
+	}
+
+	if containsToken(rc.defaultRecovery, token) {
+		return true, false
+	}
+
+	return false, false
 }
 
 // Helper method keeping functions small and single-responsibility.
@@ -214,10 +273,8 @@ func (rc *recoveryCore) CollectAllRecoveryTokens() []lexarch.TokenKind {
 
 	for i := len(rc.stack) - 1; i >= 0; i-- {
 		frame := rc.stack[i]
-		result = append(result, rc.tokensFlight[frame.startIndex:frame.endIndex]...)
-		if frame.barrier {
-			break
-		}
+		result = append(result, rc.consumeFlight[frame.consumeStart:frame.consumeEnd]...)
+		result = append(result, rc.noConsumeFlight[frame.noConsumeStart:frame.noConsumeEnd]...)
 	}
 
 	return deduplicateTokens(result)
@@ -797,10 +854,19 @@ func buildBaseContext[TNodeKind comparable](
 			panic(fmt.Errorf("runtime engine error: unresolved target rule '%s'", targetRule))
 		}
 
-		// Deliberately bypass syntaxaParserExecuteRule.
-		// No snapshots, no error frames, no recovery pushing.
-		// The proxy's syntaxaParserExecuteRule has already inherited
-		// and hoisted all necessary state for this target.
+		// Deliberately bypass syntaxaParserExecuteRule for snapshots, error frames, and
+		// handleFailureState on the target. The proxy Reference has already entered the
+		// engine envelope. Hoist the target's recovery set so sync tokens (e.g. RecoverSync)
+		// are visible while the definition runs.
+		if mode == ExecutionNormal {
+			ctxPtr.Recovery.pushRecovery(
+				resolvedRule.IsRecoveryBarrier(),
+				resolvedRule.recoveryTokens,
+				resolvedRule.noConsumeOnRecoveryTokens,
+			)
+			defer ctxPtr.Recovery.popRecovery()
+		}
+
 		return resolvedRule.executionFn(ctxPtr)
 	}
 
