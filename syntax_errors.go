@@ -28,12 +28,21 @@ type errorFrame struct {
 	commitStartIndex int
 }
 
+type delimiterBoundary struct {
+	regionStart  int
+	flightAtOpen int
+}
+
 type SyntaxErrors struct {
 	Errors []SyntaxError
 	stack  []errorFrame
 
 	// A single flat buffer for all speculative errors across all active frames
 	flight []SyntaxError
+
+	delimiterBoundaries     []delimiterBoundary
+	entryRuleScopeDepth     int
+	entryRuleFlightBaseline int
 }
 
 func SyntaxErrorsCreate() *SyntaxErrors {
@@ -133,6 +142,75 @@ func (s *SyntaxErrors) report(err SyntaxError) {
 		f.hasBest = true
 		f.bestAbsolutePosition = err.AbsolutePosition
 	}
+}
+
+/*
+PushDelimiterBoundary marks the start of a nest/open-delimited region.
+
+Completion diagnostics for the matching close must not be reported once a syntax
+error has already been committed inside this region.
+*/
+func (s *SyntaxErrors) PushDelimiterBoundary(regionStart int) {
+	s.delimiterBoundaries = append(s.delimiterBoundaries, delimiterBoundary{
+		regionStart:  regionStart,
+		flightAtOpen: len(s.flight),
+	})
+}
+
+func (s *SyntaxErrors) PopDelimiterBoundary() {
+	if len(s.delimiterBoundaries) == 0 {
+		panic("SyntaxErrors: PopDelimiterBoundary without PushDelimiterBoundary")
+	}
+	s.delimiterBoundaries = s.delimiterBoundaries[:len(s.delimiterBoundaries)-1]
+}
+
+func (s *SyntaxErrors) HasCommittedErrorInsideCurrentDelimiterBoundary() bool {
+	if len(s.delimiterBoundaries) == 0 {
+		return false
+	}
+
+	boundary := s.delimiterBoundaries[len(s.delimiterBoundaries)-1]
+	for i := boundary.flightAtOpen; i < len(s.flight); i++ {
+		if s.flight[i].AbsolutePosition >= boundary.regionStart {
+			return true
+		}
+	}
+	for i := range s.stack {
+		if s.stack[i].hasBest && s.stack[i].bestAbsolutePosition >= boundary.regionStart {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *SyntaxErrors) BeginEntryRuleScope() {
+	if s.entryRuleScopeDepth == 0 {
+		s.entryRuleFlightBaseline = len(s.flight)
+	}
+	s.entryRuleScopeDepth++
+}
+
+func (s *SyntaxErrors) EndEntryRuleScope() {
+	if s.entryRuleScopeDepth == 0 {
+		panic("SyntaxErrors: EndEntryRuleScope without BeginEntryRuleScope")
+	}
+	s.entryRuleScopeDepth--
+}
+
+func (s *SyntaxErrors) HasCommittedErrorSinceEntryRuleScope() bool {
+	return len(s.flight) > s.entryRuleFlightBaseline
+}
+
+func (s *SyntaxErrors) HasCommittedSyntaxErrors() bool {
+	if len(s.Errors) > 0 || len(s.flight) > 0 {
+		return true
+	}
+	for i := range s.stack {
+		if s.stack[i].hasBest {
+			return true
+		}
+	}
+	return false
 }
 
 func betterError(

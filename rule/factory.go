@@ -863,7 +863,8 @@ func (r *ruleEndpoint[TNodeKind]) Root(
 			result := ctx.ExecuteRule(rule, syntaxa.ExecutionNormal)
 
 			if result.Failed() {
-				if isCommitted && result.Kind == syntaxa.FailureNoMatch {
+				if isCommitted && result.Kind == syntaxa.FailureNoMatch &&
+					!ctx.Error.SuppressEntryRuleTrailingDiagnostic() {
 					peeked := ctx.Token.Peek(0)
 					msg := fmt.Sprintf("expected %s", rule.GetExpectedLabel())
 
@@ -1704,6 +1705,8 @@ func (r *ruleEndpoint[TNodeKind]) Nest(
 			return r.sharedCore.buildFailureRuleResult(nil, syntaxa.FailureNoMatch)
 		}
 		ctx.Token.Consume()
+		ctx.Error.PushDelimiterBoundary(open.Start)
+		defer ctx.Error.PopDelimiterBoundary()
 
 		// ---- Execute inner rule ----
 
@@ -1714,19 +1717,9 @@ func (r *ruleEndpoint[TNodeKind]) Nest(
 
 		// ---- Expect CLOSE token ----
 
-		closeLex := ctx.Token.Peek(0)
-		if closeLex.Token != closeToken {
-			msg := r.sharedCore.formatUnexpectedExpected(closeLex.Token, closeToken)
-
-			if lastLex, ok := ctx.GetLastConsumedLexeme(); ok {
-				ctx.Error.ReportAtEnd(string(name), lastLex, msg)
-			} else {
-				ctx.Error.ReportAt(string(name), closeLex, msg)
-			}
-
+		if !r.enforceToken(ctx, name, closeToken) {
 			return r.sharedCore.buildFailureRuleResult(nil, syntaxa.FailureError)
 		}
-		ctx.Token.Consume()
 
 		// ---- Construct wrapping node ----
 
@@ -1743,8 +1736,8 @@ func (r *ruleEndpoint[TNodeKind]) Nest(
 		identity,
 		r.sharedCore.createContract(mustConsume, true),
 		exec,
-		[]lexarch.TokenKind{closeToken}, // recovery boundary
 		nil,
+		[]lexarch.TokenKind{closeToken}, // recovery boundary
 		grammar,
 	).WithRecoveryBarrier()
 }
@@ -1766,9 +1759,13 @@ func (r *ruleEndpoint[TNodeKind]) TransparentNest(
 
 	exec := func(ctx *syntaxa.ExecRuleContext[TNodeKind]) Result[TNodeKind] {
 
-		if !r.consumeIfMatch(ctx, openToken) {
+		open := ctx.Token.Peek(0)
+		if open.Token != openToken {
 			return r.sharedCore.buildFailureRuleResult(nil, syntaxa.FailureNoMatch)
 		}
+		ctx.Token.Consume()
+		ctx.Error.PushDelimiterBoundary(open.Start)
+		defer ctx.Error.PopDelimiterBoundary()
 
 		innerResult := r.executeInnerWithCommitmentFailure(ctx, innerRule)
 		if innerResult.Failed() {
@@ -1786,8 +1783,8 @@ func (r *ruleEndpoint[TNodeKind]) TransparentNest(
 		identity,
 		r.sharedCore.createContract(innerRule.GetContract().MustConsume, innerRule.GetContract().MustReturnNode),
 		exec,
-		[]lexarch.TokenKind{closeToken},
 		nil,
+		[]lexarch.TokenKind{closeToken},
 		grammar,
 	).WithRecoveryBarrier()
 }
@@ -1930,6 +1927,10 @@ func (r *ruleEndpoint[TNodeKind]) enforceToken(
 	if found.Token == expected {
 		ctx.Token.Consume()
 		return true
+	}
+
+	if ctx.Error.SuppressDelimiterCompletionDiagnostic() {
+		return false
 	}
 
 	msg := r.sharedCore.formatUnexpectedExpected(found.Token, expected)

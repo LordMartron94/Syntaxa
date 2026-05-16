@@ -348,6 +348,34 @@ func (ec *errorCore) reportLexerError(line, column int, description string) {
 	})
 }
 
+func (ec *errorCore) PushDelimiterBoundary(regionStart int) {
+	ec.sink.PushDelimiterBoundary(regionStart)
+}
+
+func (ec *errorCore) PopDelimiterBoundary() {
+	ec.sink.PopDelimiterBoundary()
+}
+
+func (ec *errorCore) SuppressDelimiterCompletionDiagnostic() bool {
+	return ec.sink.HasCommittedErrorInsideCurrentDelimiterBoundary()
+}
+
+func (ec *errorCore) BeginEntryRuleScope() {
+	ec.sink.BeginEntryRuleScope()
+}
+
+func (ec *errorCore) EndEntryRuleScope() {
+	ec.sink.EndEntryRuleScope()
+}
+
+func (ec *errorCore) SuppressEntryRuleTrailingDiagnostic() bool {
+	return ec.sink.HasCommittedErrorSinceEntryRuleScope()
+}
+
+func (ec *errorCore) HasCommittedSyntaxErrors() bool {
+	return ec.sink.HasCommittedSyntaxErrors()
+}
+
 type tokenSet map[lexarch.TokenRole]struct{}
 
 /*

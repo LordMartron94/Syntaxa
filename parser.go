@@ -288,7 +288,7 @@ func parseWithContext[TNodeKind comparable](
 	// 4. Check for EOF ONLY if the program parse succeeded
 	if programResult.Succeeded {
 		peeked := ctx.Token.Peek(0)
-		if peeked.Token != parser.eofToken {
+		if peeked.Token != parser.eofToken && !ctx.Error.HasCommittedSyntaxErrors() {
 			ctx.Error.ReportAt(
 				"SYNTAXA ENGINE",
 				peeked,
@@ -329,8 +329,17 @@ func syntaxaParserExecuteRule[TNodeKind comparable](
 	lexemePreRuleRaw := ctx.Token.PeekRaw(0)
 
 	if mode == ExecutionNormal {
-		ctx.Recovery.pushRecovery(rule.IsRecoveryBarrier(), rule.recoveryTokens...)
+		ctx.Recovery.pushRecovery(
+			rule.IsRecoveryBarrier(),
+			append(rule.recoveryTokens, rule.noConsumeOnRecoveryTokens...)...,
+		)
 		defer ctx.Recovery.popRecovery()
+	}
+
+	isProgramRule := rule.GetGrammarLabel() == parser.programRule.GetGrammarLabel()
+	if mode == ExecutionNormal && isProgramRule {
+		ctx.Error.BeginEntryRuleScope()
+		defer ctx.Error.EndEntryRuleScope()
 	}
 
 	ctx.Error.sink.pushFrame()
@@ -439,6 +448,8 @@ func handleFailureState[TNodeKind comparable](
 			result.Node = errorNode
 		}
 	}
+
+	ctx.restore(startSnap)
 
 	return result, recoveryAttempted, recovered, landedOnOurs, recoveryTokenSet
 }
